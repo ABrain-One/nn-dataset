@@ -1,0 +1,57 @@
+{
+  "experiment": "Experiment A",
+  "campaign": "barracuda_completion_aware_v5",
+  "timing_protocol": "completion_aware_v1",
+  "model_name": "rag-8b59462a4f3e11345caf6e3e0eca1c93",
+  "valid": false,
+  "stages": {
+    "acquisition": "success",
+    "export": "success",
+    "validation": "failed",
+    "unity": "not_started",
+    "cleanup": "success"
+  },
+  "environment": {
+    "unity_version_expected": "2022.3.62f3",
+    "barracuda_version_expected": "3.0.2",
+    "cpu_backend_expected": "CSharpBurst",
+    "gpu_backend_expected": "ComputePrecompiled"
+  },
+  "export_configuration": {
+    "population_configuration_source": "process_models._discover_models_from_arch_hf(dataset='cifar-10')",
+    "dataset": "cifar-10",
+    "checkpoint_source": "NN-Dataset/checkpoints-epoch-50",
+    "precision": "fp32",
+    "opset_version": 12,
+    "onnx_ir_version": 7,
+    "exporter": "torch.onnx.export(dynamo=False)",
+    "dynamic_axes": {
+      "input": {
+        "0": "batch_size"
+      },
+      "output": {
+        "0": "batch_size"
+      }
+    },
+    "input_shape_source": "existing model-specific infer_in_out_shapes",
+    "target_height": 32
+  },
+  "onnx_size_mb": 0.01,
+  "onnx_exported": {
+    "main_opsets": [
+      12
+    ],
+    "ir_version": 7
+  },
+  "failure_type": "onnx_validation_failure",
+  "error": "[ONNXRuntimeError] : 1 : FAIL : Load model from /home/syedalihaider/Desktop/nn-vr/_work/onnx_temp/rag-8b59462a4f3e11345caf6e3e0eca1c93.onnx failed:Node (/If) Op (If) [TypeInferenceError] Graph attribute inferencing failed: Node (/Squeeze) Op (Squeeze) [ShapeInferenceError] Dimension of input 1 must be 1 instead of 50",
+  "traceback": "Traceback (most recent call last):\n  File \"/home/syedalihaider/Desktop/nn-vr/ab/vr/experiment_a.py\", line 173, in run_model\n    onnx_accuracy = eval_onnx_accuracy(onnx_path, target_h, work_dir / \"data\")\n  File \"/home/syedalihaider/Desktop/nn-vr/ab/vr/onnx_validator.py\", line 11, in eval_onnx_accuracy\n    session = ort.InferenceSession(str(onnx_path))\n  File \"/home/syedalihaider/Desktop/nn-vr/.venv/lib/python3.10/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py\", line 485, in __init__\n    self._create_inference_session(providers, provider_options, disabled_optimizers)\n  File \"/home/syedalihaider/Desktop/nn-vr/.venv/lib/python3.10/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py\", line 573, in _create_inference_session\n    sess = C.InferenceSession(session_options, self._model_path, True, self._read_config_from_model)\nonnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Load model from /home/syedalihaider/Desktop/nn-vr/_work/onnx_temp/rag-8b59462a4f3e11345caf6e3e0eca1c93.onnx failed:Node (/If) Op (If) [TypeInferenceError] Graph attribute inferencing failed: Node (/Squeeze) Op (Squeeze) [ShapeInferenceError] Dimension of input 1 must be 1 instead of 50\n",
+  "benchmark_duration_sec": 1.18,
+  "host": {
+    "device_type": "guest-MS-7E27",
+    "os_version": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35",
+    "python_version": "3.10.12",
+    "cpu": "x86_64",
+    "logical_cpu_count": 16
+  }
+}

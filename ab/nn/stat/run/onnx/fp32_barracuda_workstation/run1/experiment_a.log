@@ -1,0 +1,123 @@
+Processing model AirNet in barracuda_completion_aware_v1
+Processing model AirNext in barracuda_completion_aware_v1
+AirNext failed during unity
+Traceback (most recent call last):
+  File "/home/syedalihaider/Desktop/nn-vr/ab/vr/experiment_a.py", line 160, in run_model
+    raise RuntimeError(unity.get("error", "Unity returned success=false"))
+RuntimeError: System.NotImplementedException: DepthwiseConv2D only support number of groups == number of input channels at the moment.
+  at Unity.Barracuda.ReferenceCPUOps.DepthwiseConv2D (Unity.Barracuda.Tensor X, Unity.Barracuda.Tensor K, Unity.Barracuda.Tensor B, System.Int32[] stride, System.Int32[] pad, Unity.Barracuda.Layer+FusedActivation fusedActivation) [0x001ae] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaReferenceCPU.cs:994 
+  at Unity.Barracuda.UnsafeArrayCPUOps.DepthwiseConv2D (Unity.Barracuda.Tensor X, Unity.Barracuda.Tensor K, Unity.Barracuda.Tensor B, System.Int32[] stride, System.Int32[] pad, Unity.Barracuda.Layer+FusedActivation fusedActivation) [0x00015] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaUnsafeArrayCPU.cs:2286 
+  at Unity.Barracuda.BurstCPUOps.DepthwiseConv2D (Unity.Barracuda.Tensor X, Unity.Barracuda.Tensor K, Unity.Barracuda.Tensor B, System.Int32[] stride, System.Int32[] pad, Unity.Barracuda.Layer+FusedActivation fusedActivation) [0x00009] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaBurstCPU.Ops.cs:678 
+  at Unity.Barracuda.StatsOps.Unity.Barracuda.IOps.DepthwiseConv2D (Unity.Barracuda.Tensor X, Unity.Barracuda.Tensor K, Unity.Barracuda.Tensor B, System.Int32[] stride, System.Int32[] pad, Unity.Barracuda.Layer+FusedActivation fusedActivation) [0x00000] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/StatsOps.cs:160 
+  at Unity.Barracuda.GenericWorker+<StartManualSchedule>d__36.MoveNext () [0x0036c] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:325 
+  at Unity.Barracuda.GenericWorker.Execute () [0x00011] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:187 
+  at Unity.Barracuda.GenericWorker.Execute (Unity.Barracuda.Tensor input) [0x00007] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:179 
+  at BenchmarkCLI.BenchmarkBackend (Unity.Barracuda.Model model, Unity.Barracuda.WorkerFactory+Type backend, System.String& actualBackendName, System.Int32 warmupIterations, System.Int32 measuredIterations) [0x00077] in /home/syedalihaider/Desktop/nn-vr/NNVRBenchmark/Assets/Editor/BenchmarkCLI.cs:316 
+  at BenchmarkCLI.RunBenchmark () [0x001af] in /home/syedalihaider/Desktop/nn-vr/NNVRBenchmark/Assets/Editor/BenchmarkCLI.cs:176 
+Processing model AlexNet in barracuda_completion_aware_v1
+AlexNet failed during export
+Traceback (most recent call last):
+  File "/home/syedalihaider/Desktop/nn-vr/ab/vr/experiment_a.py", line 139, in run_model
+    export_onnx(row, onnx_path, timeout_sec=120.0)
+  File "/home/syedalihaider/Desktop/nn-vr/ab/vr/onnx_exporter.py", line 143, in export_onnx
+    raise RuntimeError(err)
+RuntimeError: SymbolicValueError("Unsupported: ONNX export of operator adaptive_avg_pool2d, output size that are not factor of input size. Please feel free to request support or submit a pull request on PyTorch GitHub: https://github.com/pytorch/pytorch/issues  [Caused by the value '47 defined in (%47 : Long(2, strides=[1], device=cpu) = onnx::Constant[value= 6  6 [ CPULongType{2} ]]()\n)' (type 'Tensor') in the TorchScript graph. The containing node has kind 'onnx::Constant'.] \n\n    Inputs:\n        Empty\n    Outputs:\n        #0: 47 defined in (%47 : Long(2, strides=[1], device=cpu) = onnx::Constant[value= 6  6 [ CPULongType{2} ]]()\n    )  (type 'Tensor')")
+Processing model BagNet in barracuda_completion_aware_v1
+BagNet failed during unity
+Traceback (most recent call last):
+  File "/home/syedalihaider/Desktop/nn-vr/ab/vr/experiment_a.py", line 160, in run_model
+    raise RuntimeError(unity.get("error", "Unity returned success=false"))
+RuntimeError: UnityEngine.Assertions.AssertionException: Assertion failure. Values are not equal.
+Expected: 0 == -1
+  at UnityEngine.Assertions.Assert.Fail (System.String message, System.String userMessage) [0x0003c] in /home/bokken/build/output/unity/unity/Runtime/Export/Assertions/Assert/AssertBase.cs:29 
+  at UnityEngine.Assertions.Assert.AreEqual[T] (T expected, T actual, System.String message, System.Collections.Generic.IEqualityComparer`1[T] comparer) [0x0004d] in /home/bokken/build/output/unity/unity/Runtime/Export/Assertions/Assert/AssertGeneric.cs:31 
+  at UnityEngine.Assertions.Assert.AreEqual[T] (T expected, T actual, System.String message) [0x00001] in /home/bokken/build/output/unity/unity/Runtime/Export/Assertions/Assert/AssertGeneric.cs:19 
+  at UnityEngine.Assertions.Assert.AreEqual (System.Int32 expected, System.Int32 actual) [0x0000c] in /home/bokken/build/output/unity/unity/Runtime/Export/Assertions/Assert/AssertPrimitiveTypes.cs:176 
+  at Unity.Barracuda.BurstCPUOps.Conv2DUsingIm2ColSliced (Unity.Barracuda.Tensor X, Unity.Barracuda.Tensor K, Unity.Barracuda.Tensor B, System.Int32[] stride, System.Int32[] pad, Unity.Barracuda.Layer+FusedActivation fusedActivation) [0x002e4] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaBurstCPU.Ops.cs:531 
+  at Unity.Barracuda.BurstCPUOps.Conv2D (Unity.Barracuda.Tensor X, Unity.Barracuda.Tensor K, Unity.Barracuda.Tensor B, System.Int32[] stride, System.Int32[] pad, Unity.Barracuda.Layer+FusedActivation fusedActivation) [0x00000] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaBurstCPU.Ops.cs:406 
+  at Unity.Barracuda.StatsOps.Unity.Barracuda.IOps.Conv2D (Unity.Barracuda.Tensor X, Unity.Barracuda.Tensor K, Unity.Barracuda.Tensor B, System.Int32[] stride, System.Int32[] pad, Unity.Barracuda.Layer+FusedActivation fusedActivation) [0x00000] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/StatsOps.cs:134 
+  at Unity.Barracuda.GenericWorker+<StartManualSchedule>d__36.MoveNext () [0x0030b] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:318 
+  at Unity.Barracuda.GenericWorker.Execute () [0x00011] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:187 
+  at Unity.Barracuda.GenericWorker.Execute (Unity.Barracuda.Tensor input) [0x00007] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:179 
+  at BenchmarkCLI.BenchmarkBackend (Unity.Barracuda.Model model, Unity.Barracuda.WorkerFactory+Type backend, System.String& actualBackendName, System.Int32 warmupIterations, System.Int32 measuredIterations) [0x00077] in /home/syedalihaider/Desktop/nn-vr/NNVRBenchmark/Assets/Editor/BenchmarkCLI.cs:316 
+  at BenchmarkCLI.RunBenchmark () [0x001af] in /home/syedalihaider/Desktop/nn-vr/NNVRBenchmark/Assets/Editor/BenchmarkCLI.cs:176 
+Processing model BayesianNet-1 in barracuda_completion_aware_v1
+BayesianNet-1 failed during export
+Traceback (most recent call last):
+  File "/home/syedalihaider/Desktop/nn-vr/ab/vr/experiment_a.py", line 139, in run_model
+    export_onnx(row, onnx_path, timeout_sec=120.0)
+  File "/home/syedalihaider/Desktop/nn-vr/ab/vr/onnx_exporter.py", line 143, in export_onnx
+    raise RuntimeError(err)
+RuntimeError: RuntimeError('Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!')
+Processing model ComplexNet in barracuda_completion_aware_v1
+ComplexNet failed during export
+Traceback (most recent call last):
+  File "/home/syedalihaider/Desktop/nn-vr/ab/vr/experiment_a.py", line 139, in run_model
+    export_onnx(row, onnx_path, timeout_sec=120.0)
+  File "/home/syedalihaider/Desktop/nn-vr/ab/vr/onnx_exporter.py", line 143, in export_onnx
+    raise RuntimeError(err)
+RuntimeError: RuntimeError('Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!')
+Processing model ConvNeXt in barracuda_completion_aware_v1
+ConvNeXt failed during unity
+Traceback (most recent call last):
+  File "/home/syedalihaider/Desktop/nn-vr/ab/vr/experiment_a.py", line 160, in run_model
+    raise RuntimeError(unity.get("error", "Unity returned success=false"))
+RuntimeError: UnityEngine.Assertions.AssertionException: Assertion failure. Values are not equal.
+Expected: 96 == 36864
+  at UnityEngine.Assertions.Assert.Fail (System.String message, System.String userMessage) [0x0003c] in /home/bokken/build/output/unity/unity/Runtime/Export/Assertions/Assert/AssertBase.cs:29 
+  at UnityEngine.Assertions.Assert.AreEqual[T] (T expected, T actual, System.String message, System.Collections.Generic.IEqualityComparer`1[T] comparer) [0x0004d] in /home/bokken/build/output/unity/unity/Runtime/Export/Assertions/Assert/AssertGeneric.cs:31 
+  at UnityEngine.Assertions.Assert.AreEqual[T] (T expected, T actual, System.String message) [0x00001] in /home/bokken/build/output/unity/unity/Runtime/Export/Assertions/Assert/AssertGeneric.cs:19 
+  at UnityEngine.Assertions.Assert.AreEqual (System.Int32 expected, System.Int32 actual) [0x0000c] in /home/bokken/build/output/unity/unity/Runtime/Export/Assertions/Assert/AssertPrimitiveTypes.cs:176 
+  at Unity.Barracuda.BurstCPUOps.CopyAndReshape (Unity.Barracuda.Tensor X, Unity.Barracuda.TensorShape shape) [0x00000] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaBurstCPU.Ops.cs:1614 
+  at Unity.Barracuda.BurstCPUOps.Reshape (Unity.Barracuda.Tensor X, Unity.Barracuda.TensorShape newShape) [0x00017] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaBurstCPU.Ops.cs:1629 
+  at Unity.Barracuda.ReferenceCPUOps.MatMul (Unity.Barracuda.Tensor X, System.Int32 rankX, Unity.Barracuda.Tensor Y, System.Int32 rankY) [0x001d4] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaReferenceCPU.cs:722 
+  at Unity.Barracuda.BurstCPUOps.MatMul (Unity.Barracuda.Tensor X, System.Int32 rankX, Unity.Barracuda.Tensor Y, System.Int32 rankY) [0x00038] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaBurstCPU.Ops.cs:158 
+  at Unity.Barracuda.StatsOps.Unity.Barracuda.IOps.MatMul (Unity.Barracuda.Tensor X, System.Int32 rankX, Unity.Barracuda.Tensor Y, System.Int32 rankY) [0x00000] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/StatsOps.cs:92 
+  at Unity.Barracuda.GenericWorker+<StartManualSchedule>d__36.MoveNext () [0x002ac] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:310 
+  at Unity.Barracuda.GenericWorker.Execute () [0x00011] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:187 
+  at Unity.Barracuda.GenericWorker.Execute (Unity.Barracuda.Tensor input) [0x00007] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:179 
+  at BenchmarkCLI.BenchmarkBackend (Unity.Barracuda.Model model, Unity.Barracuda.WorkerFactory+Type backend, System.String& actualBackendName, System.Int32 warmupIterations, System.Int32 measuredIterations) [0x00077] in /home/syedalihaider/Desktop/nn-vr/NNVRBenchmark/Assets/Editor/BenchmarkCLI.cs:316 
+  at BenchmarkCLI.RunBenchmark () [0x001af] in /home/syedalihaider/Desktop/nn-vr/NNVRBenchmark/Assets/Editor/BenchmarkCLI.cs:176 
+Processing model DPN107 in barracuda_completion_aware_v1
+DPN107 failed during unity
+Traceback (most recent call last):
+  File "/home/syedalihaider/Desktop/nn-vr/ab/vr/experiment_a.py", line 160, in run_model
+    raise RuntimeError(unity.get("error", "Unity returned success=false"))
+RuntimeError: System.NotImplementedException: DepthwiseConv2D only support number of groups == number of input channels at the moment.
+  at Unity.Barracuda.ReferenceCPUOps.DepthwiseConv2D (Unity.Barracuda.Tensor X, Unity.Barracuda.Tensor K, Unity.Barracuda.Tensor B, System.Int32[] stride, System.Int32[] pad, Unity.Barracuda.Layer+FusedActivation fusedActivation) [0x001ae] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaReferenceCPU.cs:994 
+  at Unity.Barracuda.UnsafeArrayCPUOps.DepthwiseConv2D (Unity.Barracuda.Tensor X, Unity.Barracuda.Tensor K, Unity.Barracuda.Tensor B, System.Int32[] stride, System.Int32[] pad, Unity.Barracuda.Layer+FusedActivation fusedActivation) [0x00015] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaUnsafeArrayCPU.cs:2286 
+  at Unity.Barracuda.BurstCPUOps.DepthwiseConv2D (Unity.Barracuda.Tensor X, Unity.Barracuda.Tensor K, Unity.Barracuda.Tensor B, System.Int32[] stride, System.Int32[] pad, Unity.Barracuda.Layer+FusedActivation fusedActivation) [0x00009] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaBurstCPU.Ops.cs:678 
+  at Unity.Barracuda.StatsOps.Unity.Barracuda.IOps.DepthwiseConv2D (Unity.Barracuda.Tensor X, Unity.Barracuda.Tensor K, Unity.Barracuda.Tensor B, System.Int32[] stride, System.Int32[] pad, Unity.Barracuda.Layer+FusedActivation fusedActivation) [0x00000] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/StatsOps.cs:160 
+  at Unity.Barracuda.GenericWorker+<StartManualSchedule>d__36.MoveNext () [0x0036c] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:325 
+  at Unity.Barracuda.GenericWorker.Execute () [0x00011] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:187 
+  at Unity.Barracuda.GenericWorker.Execute (Unity.Barracuda.Tensor input) [0x00007] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:179 
+  at BenchmarkCLI.BenchmarkBackend (Unity.Barracuda.Model model, Unity.Barracuda.WorkerFactory+Type backend, System.String& actualBackendName, System.Int32 warmupIterations, System.Int32 measuredIterations) [0x00077] in /home/syedalihaider/Desktop/nn-vr/NNVRBenchmark/Assets/Editor/BenchmarkCLI.cs:316 
+  at BenchmarkCLI.RunBenchmark () [0x001af] in /home/syedalihaider/Desktop/nn-vr/NNVRBenchmark/Assets/Editor/BenchmarkCLI.cs:176 
+Processing model DPN131 in barracuda_completion_aware_v1
+Processing model DPN68 in barracuda_completion_aware_v1
+Processing model DarkNet in barracuda_completion_aware_v1
+Processing model DenseNet in barracuda_completion_aware_v1
+Skipping completed model AirNet in barracuda_completion_aware_v1
+Skipping completed model AirNext in barracuda_completion_aware_v1
+Skipping completed model AlexNet in barracuda_completion_aware_v1
+Skipping completed model BagNet in barracuda_completion_aware_v1
+Skipping completed model BayesianNet-1 in barracuda_completion_aware_v1
+Skipping completed model ComplexNet in barracuda_completion_aware_v1
+Skipping completed model ConvNeXt in barracuda_completion_aware_v1
+Skipping completed model DPN107 in barracuda_completion_aware_v1
+Skipping completed model DPN131 in barracuda_completion_aware_v1
+Skipping completed model DPN68 in barracuda_completion_aware_v1
+Skipping completed model DarkNet in barracuda_completion_aware_v1
+Processing model DenseNet in barracuda_completion_aware_v1
+DenseNet failed during unity
+Traceback (most recent call last):
+  File "/home/syedalihaider/Desktop/nn-vr/ab/vr/experiment_a.py", line 160, in run_model
+RuntimeError: System.Exception: No NNModel assets found in Assets/Models
+  at BenchmarkCLI.RunBenchmark () [0x00027] in /home/syedalihaider/Desktop/nn-vr/NNVRBenchmark/Assets/Editor/BenchmarkCLI.cs:93 
+Processing model Diffuser in barracuda_completion_aware_v1
+Diffuser failed during unity
+Traceback (most recent call last):
+  File "/home/syedalihaider/Desktop/nn-vr/ab/vr/experiment_a.py", line 160, in run_model
+RuntimeError: System.Exception: No NNModel assets found in Assets/Models
+  at BenchmarkCLI.RunBenchmark () [0x00027] in /home/syedalihaider/Desktop/nn-vr/NNVRBenchmark/Assets/Editor/BenchmarkCLI.cs:93 
+Processing model EfficientNet in barracuda_completion_aware_v1

@@ -1,0 +1,58 @@
+{
+  "experiment": "Experiment A",
+  "campaign": "barracuda_completion_aware_v5",
+  "timing_protocol": "completion_aware_v1",
+  "model_name": "rag-e7cfe3469378ffc243fe4a1cc9219af1",
+  "valid": false,
+  "stages": {
+    "acquisition": "success",
+    "export": "success",
+    "validation": "success",
+    "unity": "failed",
+    "cleanup": "success"
+  },
+  "environment": {
+    "unity_version_expected": "2022.3.62f3",
+    "barracuda_version_expected": "3.0.2",
+    "cpu_backend_expected": "CSharpBurst",
+    "gpu_backend_expected": "ComputePrecompiled"
+  },
+  "export_configuration": {
+    "population_configuration_source": "process_models._discover_models_from_arch_hf(dataset='cifar-10')",
+    "dataset": "cifar-10",
+    "checkpoint_source": "NN-Dataset/checkpoints-epoch-50",
+    "precision": "fp32",
+    "opset_version": 12,
+    "onnx_ir_version": 7,
+    "exporter": "torch.onnx.export(dynamo=False)",
+    "dynamic_axes": {
+      "input": {
+        "0": "batch_size"
+      },
+      "output": {
+        "0": "batch_size"
+      }
+    },
+    "input_shape_source": "existing model-specific infer_in_out_shapes",
+    "target_height": 512
+  },
+  "onnx_size_mb": 2.2,
+  "onnx_exported": {
+    "main_opsets": [
+      12
+    ],
+    "ir_version": 7
+  },
+  "onnx_accuracy": 0.08,
+  "failure_type": "unity_barracuda_load_or_execution_failure",
+  "error": "System.Exception: No NNModel assets found in Assets/Models\n  at BenchmarkCLI.RunBenchmark () [0x00027] in /home/syedalihaider/Desktop/nn-vr/NNVRBenchmark/Assets/Editor/BenchmarkCLI.cs:93 ",
+  "traceback": "Traceback (most recent call last):\n  File \"/home/syedalihaider/Desktop/nn-vr/ab/vr/experiment_a.py\", line 186, in run_model\n    raise RuntimeError(unity.get(\"error\", \"Unity returned success=false\"))\nRuntimeError: System.Exception: No NNModel assets found in Assets/Models\n  at BenchmarkCLI.RunBenchmark () [0x00027] in /home/syedalihaider/Desktop/nn-vr/NNVRBenchmark/Assets/Editor/BenchmarkCLI.cs:93 \n",
+  "benchmark_duration_sec": 63.28,
+  "host": {
+    "device_type": "guest-MS-7E27",
+    "os_version": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35",
+    "python_version": "3.10.12",
+    "cpu": "x86_64",
+    "logical_cpu_count": 16
+  }
+}

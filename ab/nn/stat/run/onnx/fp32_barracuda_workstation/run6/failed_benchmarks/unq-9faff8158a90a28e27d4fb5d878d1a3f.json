@@ -1,0 +1,50 @@
+{
+  "experiment": "Experiment A",
+  "campaign": "barracuda_completion_aware_v6",
+  "timing_protocol": "completion_aware_v1",
+  "model_name": "unq-9faff8158a90a28e27d4fb5d878d1a3f",
+  "valid": false,
+  "stages": {
+    "acquisition": "success",
+    "export": "failed",
+    "validation": "not_started",
+    "unity": "not_started",
+    "cleanup": "success"
+  },
+  "environment": {
+    "unity_version_expected": "2022.3.62f3",
+    "barracuda_version_expected": "3.0.2",
+    "cpu_backend_expected": "CSharpBurst",
+    "gpu_backend_expected": "ComputePrecompiled"
+  },
+  "export_configuration": {
+    "population_configuration_source": "process_models._discover_models_from_arch_hf(dataset='cifar-10')",
+    "dataset": "cifar-10",
+    "checkpoint_source": "NN-Dataset/checkpoints-epoch-50",
+    "precision": "fp32",
+    "opset_version": 12,
+    "onnx_ir_version": 7,
+    "exporter": "torch.onnx.export(dynamo=False)",
+    "dynamic_axes": {
+      "input": {
+        "0": "batch_size"
+      },
+      "output": {
+        "0": "batch_size"
+      }
+    },
+    "input_shape_source": "existing model-specific infer_in_out_shapes",
+    "target_height": 32
+  },
+  "failure_type": "onnx_export_failure",
+  "error": "SymbolicValueError(\"Unsupported: ONNX export of operator adaptive_avg_pool2d, output size that are not factor of input size. Please feel free to request support or submit a pull request on PyTorch GitHub: https://github.com/pytorch/pytorch/issues  [Caused by the value '348 defined in (%348 : Long(2, strides=[1], device=cpu) = onnx::Constant[value= 6  6 [ CPULongType{2} ]]()\\n)' (type 'Tensor') in the TorchScript graph. The containing node has kind 'onnx::Constant'.] \\n\\n    Inputs:\\n        Empty\\n    Outputs:\\n        #0: 348 defined in (%348 : Long(2, strides=[1], device=cpu) = onnx::Constant[value= 6  6 [ CPULongType{2} ]]()\\n    )  (type 'Tensor')\")",
+  "traceback": "Traceback (most recent call last):\n  File \"/home/syedalihaider/Desktop/nn-vr/ab/vr/experiment_a.py\", line 155, in run_model\n    export_onnx(row, onnx_path, timeout_sec=120.0)\n  File \"/home/syedalihaider/Desktop/nn-vr/ab/vr/onnx_exporter.py\", line 143, in export_onnx\n    raise RuntimeError(err)\nRuntimeError: SymbolicValueError(\"Unsupported: ONNX export of operator adaptive_avg_pool2d, output size that are not factor of input size. Please feel free to request support or submit a pull request on PyTorch GitHub: https://github.com/pytorch/pytorch/issues  [Caused by the value '348 defined in (%348 : Long(2, strides=[1], device=cpu) = onnx::Constant[value= 6  6 [ CPULongType{2} ]]()\\n)' (type 'Tensor') in the TorchScript graph. The containing node has kind 'onnx::Constant'.] \\n\\n    Inputs:\\n        Empty\\n    Outputs:\\n        #0: 348 defined in (%348 : Long(2, strides=[1], device=cpu) = onnx::Constant[value= 6  6 [ CPULongType{2} ]]()\\n    )  (type 'Tensor')\")\n",
+  "benchmark_duration_sec": 1.92,
+  "host": {
+    "device_type": "guest-MS-7E27",
+    "os_version": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35",
+    "python_version": "3.10.12",
+    "cpu": "x86_64",
+    "logical_cpu_count": 16
+  }
+}

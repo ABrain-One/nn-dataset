@@ -1,0 +1,58 @@
+{
+  "experiment": "Experiment A",
+  "campaign": "barracuda_completion_aware_v5",
+  "timing_protocol": "completion_aware_v1",
+  "model_name": "ConvNeXt",
+  "valid": false,
+  "stages": {
+    "acquisition": "success",
+    "export": "success",
+    "validation": "success",
+    "unity": "failed",
+    "cleanup": "success"
+  },
+  "environment": {
+    "unity_version_expected": "2022.3.62f3",
+    "barracuda_version_expected": "3.0.2",
+    "cpu_backend_expected": "CSharpBurst",
+    "gpu_backend_expected": "ComputePrecompiled"
+  },
+  "export_configuration": {
+    "population_configuration_source": "process_models._discover_models_from_arch_hf(dataset='cifar-10')",
+    "dataset": "cifar-10",
+    "checkpoint_source": "NN-Dataset/checkpoints-epoch-50",
+    "precision": "fp32",
+    "opset_version": 12,
+    "onnx_ir_version": 7,
+    "exporter": "torch.onnx.export(dynamo=False)",
+    "dynamic_axes": {
+      "input": {
+        "0": "batch_size"
+      },
+      "output": {
+        "0": "batch_size"
+      }
+    },
+    "input_shape_source": "existing model-specific infer_in_out_shapes",
+    "target_height": 128
+  },
+  "onnx_size_mb": 188.92,
+  "onnx_exported": {
+    "main_opsets": [
+      12
+    ],
+    "ir_version": 7
+  },
+  "onnx_accuracy": 0.78,
+  "failure_type": "unity_barracuda_load_or_execution_failure",
+  "error": "UnityEngine.Assertions.AssertionException: Assertion failure. Values are not equal.\nExpected: 96 == 36864\n  at UnityEngine.Assertions.Assert.Fail (System.String message, System.String userMessage) [0x0003c] in /home/bokken/build/output/unity/unity/Runtime/Export/Assertions/Assert/AssertBase.cs:29 \n  at UnityEngine.Assertions.Assert.AreEqual[T] (T expected, T actual, System.String message, System.Collections.Generic.IEqualityComparer`1[T] comparer) [0x0004d] in /home/bokken/build/output/unity/unity/Runtime/Export/Assertions/Assert/AssertGeneric.cs:31 \n  at UnityEngine.Assertions.Assert.AreEqual[T] (T expected, T actual, System.String message) [0x00001] in /home/bokken/build/output/unity/unity/Runtime/Export/Assertions/Assert/AssertGeneric.cs:19 \n  at UnityEngine.Assertions.Assert.AreEqual (System.Int32 expected, System.Int32 actual) [0x0000c] in /home/bokken/build/output/unity/unity/Runtime/Export/Assertions/Assert/AssertPrimitiveTypes.cs:176 \n  at Unity.Barracuda.BurstCPUOps.CopyAndReshape (Unity.Barracuda.Tensor X, Unity.Barracuda.TensorShape shape) [0x00000] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaBurstCPU.Ops.cs:1614 \n  at Unity.Barracuda.BurstCPUOps.Reshape (Unity.Barracuda.Tensor X, Unity.Barracuda.TensorShape newShape) [0x00017] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaBurstCPU.Ops.cs:1629 \n  at Unity.Barracuda.ReferenceCPUOps.MatMul (Unity.Barracuda.Tensor X, System.Int32 rankX, Unity.Barracuda.Tensor Y, System.Int32 rankY) [0x001d4] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaReferenceCPU.cs:722 \n  at Unity.Barracuda.BurstCPUOps.MatMul (Unity.Barracuda.Tensor X, System.Int32 rankX, Unity.Barracuda.Tensor Y, System.Int32 rankY) [0x00038] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaBurstCPU.Ops.cs:158 \n  at Unity.Barracuda.StatsOps.Unity.Barracuda.IOps.MatMul (Unity.Barracuda.Tensor X, System.Int32 rankX, Unity.Barracuda.Tensor Y, System.Int32 rankY) [0x00000] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/StatsOps.cs:92 \n  at Unity.Barracuda.GenericWorker+<StartManualSchedule>d__36.MoveNext () [0x002ac] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:310 \n  at Unity.Barracuda.GenericWorker.Execute () [0x00011] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:187 \n  at Unity.Barracuda.GenericWorker.Execute (Unity.Barracuda.Tensor input) [0x00007] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:179 \n  at BenchmarkCLI.BenchmarkBackend (Unity.Barracuda.Model model, Unity.Barracuda.WorkerFactory+Type backend, System.String& actualBackendName, System.Int32 warmupIterations, System.Int32 measuredIterations) [0x00077] in /home/syedalihaider/Desktop/nn-vr/NNVRBenchmark/Assets/Editor/BenchmarkCLI.cs:316 \n  at BenchmarkCLI.RunBenchmark () [0x001af] in /home/syedalihaider/Desktop/nn-vr/NNVRBenchmark/Assets/Editor/BenchmarkCLI.cs:176 ",
+  "traceback": "Traceback (most recent call last):\n  File \"/home/syedalihaider/Desktop/nn-vr/ab/vr/experiment_a.py\", line 186, in run_model\n    raise RuntimeError(unity.get(\"error\", \"Unity returned success=false\"))\nRuntimeError: UnityEngine.Assertions.AssertionException: Assertion failure. Values are not equal.\nExpected: 96 == 36864\n  at UnityEngine.Assertions.Assert.Fail (System.String message, System.String userMessage) [0x0003c] in /home/bokken/build/output/unity/unity/Runtime/Export/Assertions/Assert/AssertBase.cs:29 \n  at UnityEngine.Assertions.Assert.AreEqual[T] (T expected, T actual, System.String message, System.Collections.Generic.IEqualityComparer`1[T] comparer) [0x0004d] in /home/bokken/build/output/unity/unity/Runtime/Export/Assertions/Assert/AssertGeneric.cs:31 \n  at UnityEngine.Assertions.Assert.AreEqual[T] (T expected, T actual, System.String message) [0x00001] in /home/bokken/build/output/unity/unity/Runtime/Export/Assertions/Assert/AssertGeneric.cs:19 \n  at UnityEngine.Assertions.Assert.AreEqual (System.Int32 expected, System.Int32 actual) [0x0000c] in /home/bokken/build/output/unity/unity/Runtime/Export/Assertions/Assert/AssertPrimitiveTypes.cs:176 \n  at Unity.Barracuda.BurstCPUOps.CopyAndReshape (Unity.Barracuda.Tensor X, Unity.Barracuda.TensorShape shape) [0x00000] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaBurstCPU.Ops.cs:1614 \n  at Unity.Barracuda.BurstCPUOps.Reshape (Unity.Barracuda.Tensor X, Unity.Barracuda.TensorShape newShape) [0x00017] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaBurstCPU.Ops.cs:1629 \n  at Unity.Barracuda.ReferenceCPUOps.MatMul (Unity.Barracuda.Tensor X, System.Int32 rankX, Unity.Barracuda.Tensor Y, System.Int32 rankY) [0x001d4] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaReferenceCPU.cs:722 \n  at Unity.Barracuda.BurstCPUOps.MatMul (Unity.Barracuda.Tensor X, System.Int32 rankX, Unity.Barracuda.Tensor Y, System.Int32 rankY) [0x00038] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/BarracudaBurstCPU.Ops.cs:158 \n  at Unity.Barracuda.StatsOps.Unity.Barracuda.IOps.MatMul (Unity.Barracuda.Tensor X, System.Int32 rankX, Unity.Barracuda.Tensor Y, System.Int32 rankY) [0x00000] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/StatsOps.cs:92 \n  at Unity.Barracuda.GenericWorker+<StartManualSchedule>d__36.MoveNext () [0x002ac] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:310 \n  at Unity.Barracuda.GenericWorker.Execute () [0x00011] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:187 \n  at Unity.Barracuda.GenericWorker.Execute (Unity.Barracuda.Tensor input) [0x00007] in ./Library/PackageCache/com.unity.barracuda@3.0.2/Barracuda/Runtime/Core/Backends/GenericWorker.cs:179 \n  at BenchmarkCLI.BenchmarkBackend (Unity.Barracuda.Model model, Unity.Barracuda.WorkerFactory+Type backend, System.String& actualBackendName, System.Int32 warmupIterations, System.Int32 measuredIterations) [0x00077] in /home/syedalihaider/Desktop/nn-vr/NNVRBenchmark/Assets/Editor/BenchmarkCLI.cs:316 \n  at BenchmarkCLI.RunBenchmark () [0x001af] in /home/syedalihaider/Desktop/nn-vr/NNVRBenchmark/Assets/Editor/BenchmarkCLI.cs:176 \n",
+  "benchmark_duration_sec": 160.14,
+  "host": {
+    "device_type": "guest-MS-7E27",
+    "os_version": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35",
+    "python_version": "3.10.12",
+    "cpu": "x86_64",
+    "logical_cpu_count": 16
+  }
+}

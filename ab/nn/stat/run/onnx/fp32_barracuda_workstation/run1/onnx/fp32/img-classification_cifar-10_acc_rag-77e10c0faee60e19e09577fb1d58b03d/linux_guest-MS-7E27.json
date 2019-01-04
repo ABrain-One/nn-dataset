@@ -1,0 +1,189 @@
+{
+  "experiment": "Experiment A",
+  "campaign": "barracuda_completion_aware_v1",
+  "timing_protocol": "completion_aware_v1",
+  "model_name": "rag-77e10c0faee60e19e09577fb1d58b03d",
+  "valid": true,
+  "stages": {
+    "acquisition": "success",
+    "export": "success",
+    "validation": "success",
+    "unity": "success",
+    "cleanup": "success"
+  },
+  "environment": {
+    "unity_version_expected": "2022.3.62f3",
+    "barracuda_version_expected": "3.0.2",
+    "cpu_backend_expected": "CSharpBurst",
+    "gpu_backend_expected": "ComputePrecompiled"
+  },
+  "export_configuration": {
+    "population_configuration_source": "process_models._discover_models_from_arch_hf(dataset='cifar-10')",
+    "dataset": "cifar-10",
+    "checkpoint_source": "NN-Dataset/checkpoints-epoch-50",
+    "precision": "fp32",
+    "opset_version": 12,
+    "onnx_ir_version": 7,
+    "exporter": "torch.onnx.export(dynamo=False)",
+    "dynamic_axes": {
+      "input": {
+        "0": "batch_size"
+      },
+      "output": {
+        "0": "batch_size"
+      }
+    },
+    "input_shape_source": "existing model-specific infer_in_out_shapes",
+    "target_height": 32
+  },
+  "onnx_size_mb": 0.01,
+  "onnx_exported": {
+    "main_opsets": [
+      12
+    ],
+    "ir_version": 7
+  },
+  "onnx_accuracy": 0.3,
+  "unity": {
+    "model_name": "model",
+    "success": true,
+    "error": "",
+    "input_shape": [
+      1,
+      32,
+      32,
+      3
+    ],
+    "output_shape": [
+      1,
+      1,
+      1,
+      10
+    ],
+    "cpu": {
+      "avg_ms": 2.6813104152679443,
+      "min_ms": 2.380579710006714,
+      "max_ms": 3.955274820327759,
+      "std_dev_ms": 0.35279253331441685,
+      "samples_ms": [
+        2.380579710006714,
+        2.451300621032715,
+        2.654135227203369,
+        3.955274820327759,
+        2.7208328247070312,
+        2.7174055576324463,
+        2.674698829650879,
+        2.9817521572113037,
+        2.5866031646728516,
+        2.442389726638794,
+        2.442002296447754,
+        2.4435818195343018,
+        2.4193227291107178,
+        2.5317370891571045,
+        2.4642646312713623,
+        2.5287866592407227,
+        2.515345811843872,
+        3.0639171600341797,
+        2.636522054672241,
+        3.015756607055664
+      ],
+      "warmup_iterations": 5,
+      "measured_iterations": 20,
+      "completion_operation": "Tensor.ToReadOnlyArray()"
+    },
+    "gpu": {
+      "avg_ms": 2.9424400329589844,
+      "min_ms": 2.3780763149261475,
+      "max_ms": 10.802030563354492,
+      "std_dev_ms": 1.8561054388318903,
+      "samples_ms": [
+        2.408146858215332,
+        2.448439598083496,
+        2.408742904663086,
+        2.418726682662964,
+        2.406895160675049,
+        2.4195313453674316,
+        2.4299919605255127,
+        2.4782121181488037,
+        4.443049430847168,
+        2.418637275695801,
+        2.4554431438446045,
+        2.4303197860717773,
+        2.420276403427124,
+        2.4143457412719727,
+        2.4074018001556396,
+        2.3780763149261475,
+        2.4100542068481445,
+        10.802030563354492,
+        2.457231283187866,
+        2.3932456970214844
+      ],
+      "warmup_iterations": 5,
+      "measured_iterations": 20,
+      "completion_operation": "Tensor.ToReadOnlyArray()"
+    },
+    "backend_cpu": "CSharpBurst",
+    "backend_gpu": "ComputePrecompiled",
+    "gpu_name": "NVIDIA GeForce RTX 4090",
+    "gpu_api": "Vulkan",
+    "unity_version": "2022.3.62f3",
+    "operating_system": "Linux 6.8 Ubuntu 22.04 64bit",
+    "system_memory_mb": 31187,
+    "cpu_count": 16,
+    "processor_type": "AMD Ryzen 7 7800X3D 8-Core Processor",
+    "timing_protocol": "completion_aware_v1",
+    "output_materialization": "Tensor.ToReadOnlyArray blocking host readback inside every warm-up and timed iteration",
+    "graphics_device_version": "Vulkan 1.1.0 [0x91104180]",
+    "unity_process": {
+      "command": [
+        "/home/syedalihaider/Unity/Hub/Editor/2022.3.62f3/Editor/Unity",
+        "-batchmode",
+        "-force-vulkan",
+        "-projectPath",
+        "/home/syedalihaider/Desktop/nn-vr/NNVRBenchmark",
+        "-executeMethod",
+        "BenchmarkCLI.RunBenchmark",
+        "-quit"
+      ],
+      "returncode": 0,
+      "vk_icd_filenames": "/usr/share/vulkan/icd.d/nvidia_icd.json",
+      "stdout_tail": "",
+      "stderr_tail": ""
+    }
+  },
+  "iterations": 20,
+  "duration": 2942440,
+  "unit": "gpu",
+  "cpu_duration": 2681310,
+  "cpu_min_duration": 2380579,
+  "cpu_max_duration": 3955274,
+  "cpu_std_dev": 0.35279253331441685,
+  "gpu_duration": 2942440,
+  "gpu_min_duration": 2378076,
+  "gpu_max_duration": 10802030,
+  "gpu_std_dev": 1.8561054388318903,
+  "runtime": "Barracuda",
+  "model_format": "onnx",
+  "backend": "ComputePrecompiled",
+  "unity_version": "2022.3.62f3",
+  "input_shape": [
+    1,
+    32,
+    32,
+    3
+  ],
+  "output_shape": [
+    1,
+    1,
+    1,
+    10
+  ],
+  "benchmark_duration_sec": 61.58,
+  "host": {
+    "device_type": "guest-MS-7E27",
+    "os_version": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35",
+    "python_version": "3.10.12",
+    "cpu": "x86_64",
+    "logical_cpu_count": 16
+  }
+}
