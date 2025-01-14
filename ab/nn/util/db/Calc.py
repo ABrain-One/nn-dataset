@@ -6,15 +6,29 @@ import ab.nn.util.db.Write as DB_Write
 import ab.nn.util.db.Read as DB_Read
 
 
-def patterns_to_configs(config_pattern: str | tuple, random_config_order: bool) -> tuple[str,...]:
+import os
+import random
+
+import os
+import random
+
+def patterns_to_configs(config_pattern: str | tuple, random_config_order: bool) -> tuple[str, ...]:
+    """
+    Generate unique configurations based on the input pattern(s).
+    :param config_pattern: A string or tuple of configuration patterns.
+    :param random_config_order: Whether to shuffle the configurations randomly.
+    :return: A tuple of unique configurations.
+    """
     if not isinstance(config_pattern, tuple):
         config_pattern = (config_pattern,)
-    all_configs: list[str] = DB_Read.unique_configs(config_pattern)
+    all_configs = DB_Read.unique_configs(config_pattern)
     if random_config_order:
         random.shuffle(all_configs)
     else:
         all_configs.sort()
     return tuple(all_configs)
+
+
 
 
 def save_results(config: str, epoch: int, model_stat_file: str, prm: dict):

@@ -1,6 +1,6 @@
 import json
 from os import listdir, makedirs
-
+import os
 from ab.nn.util.Util import *
 from ab.nn.util.db.Write import init_population
 
@@ -103,15 +103,22 @@ def supported_transformers():
 
 # todo: Request from the database unique names of all configures corresponding to config-patterns
 # once the database is loaded, the function will be updated
-def unique_configs(patterns) -> list[str]:
+
+def unique_configs(patterns: tuple[str, ...]) -> list[str]:
     """
-    Collect models matching the given configuration prefix
+    Collect models matching the given configuration prefix.
+    :param patterns: Tuple of configuration prefixes.
+    :return: List of unique configuration directories.
     """
     all_configs = []
     for pattern in patterns:
-        l = [c for c in listdir(stat_dir) if c.startswith(pattern)]
-        if not l and is_full_config(pattern):
-            makedirs(join(stat_dir, patterns))
-        all_configs = all_configs + l
-    all_configs = list(set(all_configs))
-    return all_configs
+        # Collect configurations matching the pattern
+        matching_configs = [
+            config for config in os.listdir(stat_dir) if config.startswith(pattern)
+        ]
+        # If no match, create a directory if the pattern is a full configuration
+        if not matching_configs and is_full_config(pattern):
+            os.makedirs(os.path.join(stat_dir, pattern), exist_ok=True)
+        all_configs.extend(matching_configs)
+    return list(set(all_configs))
+

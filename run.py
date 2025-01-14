@@ -8,8 +8,10 @@ if __name__ == "__main__":
     conf = a.config  # From the command line argument --config
     # conf = ''  # For all configurations
     # conf = 'img-classification' # For all image classification configurations
-    # conf = 'img-classification_cifar-10_acc' # For a particular configuration for all models
-    # conf = 'img-classification_cifar-10_acc_GoogLeNet'  # For a particular configuration and model
+    # conf = 'img-classification_cifar-10_acc' # For a particular configuration for all models for CIFAR-10
+    # conf = 'img-classification_cifar-10_acc_GoogLeNet'  # For a particular configuration and model for CIFAR-10
+    # conf = 'img-classification_mnist_acc' # For a particular configuration for all models for MNIST
+    # conf = 'img-classification_mnist_acc_GoogLeNet'  # For a particular configuration and model for MNIST
     # conf = ('img-classification', 'img-segmentation')  # For all image classification and segmentation configurations
 
     # Number of epochs.
