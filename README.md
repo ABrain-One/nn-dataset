@@ -78,6 +78,8 @@ All versions of this project are compatible with <a href='https://hub.docker.com
 docker run -v /a/mm:. abrainone/ai-linux bash -c "PYTHONPATH=/a/mm python -m ab.nn.train"
 ```
 
+Due to the rapid development of this project, some recently added dependencies may be missing in the 'AI Linux'. In this case, create a container from ```abrainone/ai-linux```, install the missing packages (preferably using ```pip install ...```), and then create a new image from the container using ```docker commit container_name new_image_name```. You can use this new image locally or push it to the registry for deployment on the computer cluster.
+
 ## Environment for NN Dataset Contributors
 ### Pip package manager
 Create a virtual environment, activate it, and run the following command to install all the project dependencies:
