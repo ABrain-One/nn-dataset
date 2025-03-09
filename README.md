@@ -11,6 +11,15 @@ The original version of the <a href='https://github.com/ABrain-One/nn-dataset'>L
 <h3>Overview 📖</h3>
 The primary goal of NN Dataset project is to provide flexibility for dynamically combining various deep learing tasks, datasets, metrics, and neural network models. It is designed to facilitate the verification of neural network performance under various combinations of training hyperparameters and data transformation algorithms, by automatically generating performance statistics. It is primarily developed to support the <a href="https://github.com/ABrain-One/nn-gpt">NN GPT</a> project.
 
+## Create and Activate a Virtual Environment (recommended):
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate   # Linux/Mac
+   .venv\Scripts\activate      # Windows
+   ```
+
+All subsequent commands are provided for Linux/Mac OS. For Windows, please replace ```source .venv/bin/activate``` with ```.venv\Scripts\activate```.
+
 ## Installation or Update of the NN Dataset
 Remove old version of the LEMUR Dataset and its database:
 ```bash
@@ -68,6 +77,8 @@ All versions of this project are compatible with <a href='https://hub.docker.com
 ```bash
 docker run -v /a/mm:. abrainone/ai-linux bash -c "PYTHONPATH=/a/mm python -m ab.nn.train"
 ```
+
+Some recently added dependencies might be missing in the <b>AI Linux</b>. In this case, you can create a container from the Docker image ```abrainone/ai-linux```, install the missing packages (preferably using ```pip install <package name>```), and then create a new image from the container using ```docker commit <container name> <new image name>```. You can use this new image locally or push it to the registry for deployment on the computer cluster.
 
 ## Environment for NN Dataset Contributors
 ### Pip package manager
