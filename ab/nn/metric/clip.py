@@ -1,4 +1,3 @@
-
 import torch
 from PIL import Image
 
@@ -6,10 +5,6 @@ try:
     from transformers import CLIPProcessor, CLIPModel
 except ImportError:
     raise ImportError("Please install the 'transformers' library for CLIP metric: pip install transformers")
-try:
-    import ftfy
-except ImportError:
-    raise ImportError("Please install the 'ftfy' library for CLIP metric: pip install ftfy")
 
 MODEL_NAME = "openai/clip-vit-base-patch32"
 _clip_model_cache = {}
@@ -18,7 +13,6 @@ _clip_model_cache = {}
 def _get_clip_model(device):
     if 'model' not in _clip_model_cache:
         model = CLIPModel.from_pretrained(MODEL_NAME).to(device)
-        # --- THE FIX: Reverted to the stable slow processor ---
         processor = CLIPProcessor.from_pretrained(MODEL_NAME)
         _clip_model_cache['model'] = model
         _clip_model_cache['processor'] = processor
@@ -37,36 +31,45 @@ class CLIPMetric:
 
     def __call__(self, preds, labels):
         """
-        This method is called by the framework's evaluation loop.
-        'preds' now contains a tuple from the model: (generated_images, prompts_used)
-        'labels' is the problematic data from the dataloader, which we now ignore.
+        This method now expects `preds` to be a tuple of
+        (generated_image_tensors, raw_text_prompts)
+        from the model's hijacked forward pass.
         """
+        if not isinstance(preds, (list, tuple)) or len(preds) != 2:
+            return
+
         generated_images, text_prompts = preds
 
-        if not generated_images or not text_prompts:
+        # Ensure the lists are not empty
+        if len(generated_images) == 0 or len(text_prompts) == 0:
             return
 
         model, processor = _get_clip_model(self.device)
         model.eval()
 
         with torch.no_grad():
+            # The CLIP processor can handle raw tensors and text directly
             inputs = processor(
                 text=text_prompts, images=generated_images, return_tensors="pt", padding=True, truncation=True
             )
             inputs = {key: val.to(self.device) for key, val in inputs.items()}
             outputs = model(**inputs)
 
+            # Calculate cosine similarity
             image_embeds = outputs.image_embeds / outputs.image_embeds.norm(p=2, dim=-1, keepdim=True)
             text_embeds = outputs.text_embeds / outputs.text_embeds.norm(p=2, dim=-1, keepdim=True)
 
-            batch_scores = (image_embeds * text_embeds).sum(dim=-1)
+            # The logits_per_image are the cosine similarities
+            batch_scores = outputs.logits_per_image.diag()  # Get the score for each (image, text) pair
+
             self.similarity_scores.append(batch_scores.sum().item())
             self.num_samples += len(generated_images)
 
     def result(self):
         if self.num_samples == 0:
             return 0.0
-        avg_score = sum(self.similarity_scores) / self.num_samples
+        # The CLIP score is typically scaled by 100
+        avg_score=sum(self.similarity_scores) / self.num_samples /100
         return avg_score
 
     def get_all(self):
