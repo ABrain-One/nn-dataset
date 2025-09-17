@@ -1,9 +1,14 @@
 import math
 from typing import Optional
+
 import torch
 import torch.nn.functional as F
-from .base.base import BaseMetric
 
+from .base import BaseMetric
+from .utils import flatten_logits_and_labels
+
+PPL_MIN = 1
+PPL_MAX = 1_000
 
 class Perplexity(BaseMetric):
     """
@@ -21,16 +26,16 @@ class Perplexity(BaseMetric):
         self._total_tokens: int = 0
 
     def update(self, outputs: torch.Tensor, targets: torch.Tensor) -> None:
-        # [B,S,V] -> [B*S,V] and [B,S] -> [B*S]
-        if outputs.dim() == 3:
-            B, S, V = outputs.shape
-            outputs = outputs.reshape(B * S, V)
-            targets = targets.reshape(-1)
-
+        outputs, targets = flatten_logits_and_labels(outputs, targets)  # [B*,V]  /  [B*]
         targets = targets.long()
 
         if self.ignore_index is not None:
-            loss = F.cross_entropy(outputs, targets, reduction="sum", ignore_index=self.ignore_index,)
+            loss = F.cross_entropy(
+                outputs,
+                targets,
+                reduction="sum",
+                ignore_index=self.ignore_index,
+            )
             valid = (targets != self.ignore_index).sum().item()
         else:
             loss = F.cross_entropy(outputs, targets, reduction="sum")
@@ -42,7 +47,19 @@ class Perplexity(BaseMetric):
     def result(self) -> float:
         if self._total_tokens == 0:
             return float("nan")
-        return math.exp(self._total_loss / self._total_tokens)
+
+        # perplexity as it is
+        avg_nll = self._total_loss / self._total_tokens
+        ppl = math.exp(avg_nll)
+
+        # Perplexity metric with min-max normalisation in log-scale score in [0;1],
+        # where 1 - perfect model, 0 - worst-threshold model
+        p_log = math.log1p(ppl)
+        p_min = math.log1p(PPL_MIN)
+        p_max = math.log1p(PPL_MAX)
+        p_norm = (p_log - p_min) / (p_max - p_min)
+        score = max(0.0, min(1.0, 1.0 - p_norm))
+        return score
 
     def __call__(self, outputs: torch.Tensor, targets: torch.Tensor):
         self.update(outputs, targets)

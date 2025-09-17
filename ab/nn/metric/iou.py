@@ -1,5 +1,5 @@
 import torch
-from ab.nn.metric.base.base import BaseMetric
+from .base import BaseMetric
 
 class MIoU(BaseMetric):
     """

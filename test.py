@@ -208,7 +208,7 @@ class Testing(unittest.TestCase):
     #  9 · Training
     # ------------------------------------------------------------------
     def test_nn_train(self):
-        train.main('img-classification_cifar-10_acc_' + default_nn_name, 1,
+        train.main('img-classification_cifar-10_acc_' + default_nn_name, {}, 1,
                    min_batch_binary_power=6, max_batch_binary_power=6, transform='norm_64_flip')
 
 

@@ -14,6 +14,7 @@ default_max_dropout = 0.5
 default_pretrained = None
 default_transform = None
 default_train_missing_pipelines = None
+default_nn_hyperparameters = {}
 
 default_nn_fail_attempts = 30
 default_num_workers = 2

@@ -5,17 +5,16 @@ from ab.nn.util.Train import optuna_objective
 from ab.nn.util.Util import *
 from ab.nn.util.db.Calc import patterns_to_configs
 from ab.nn.util.db.Read import remaining_trials
+from types import MappingProxyType
 
-
-def main(config: str | tuple | list = default_config, n_epochs: int = default_epochs,
-         n_optuna_trials: int | str = default_trials,
+def main(config: str | tuple | list = default_config, nn_prm:dict = default_nn_hyperparameters, n_epochs: int = default_epochs, n_optuna_trials: int | str = default_trials,
          min_batch_binary_power: int = default_min_batch_power, max_batch_binary_power: int = default_max_batch_power,
          min_learning_rate: float = default_min_lr, max_learning_rate: float = default_max_lr,
          min_momentum: float = default_min_momentum, max_momentum: float = default_max_momentum,
          min_dropout: float = default_min_dropout, max_dropout: float = default_max_dropout,
          transform: str | tuple = None, nn_fail_attempts: int = default_nn_fail_attempts, random_config_order: bool = default_random_config_order,
          num_workers: int = default_num_workers, pretrained: int = default_pretrained, epoch_limit_minutes: int = default_epoch_limit_minutes,
-         train_missing_pipelines : bool = default_train_missing_pipelines):
+         train_missing_pipelines: bool = default_train_missing_pipelines):
     """
     Main function for training models using Optuna optimization.
 
@@ -29,6 +28,7 @@ def main(config: str | tuple | list = default_config, n_epochs: int = default_ep
     conf = ('img-classification', 'img-segmentation')  # For all image classification and segmentation configurations
 
     :param config: Configuration specifying the model training pipelines. The default value for all configurations.
+    :param nn_prm: Fixed hyperparameter values for neural network training, e.g. {"lr": 0.0061, "momentum": 0.7549, "batch": 4}.
     :param n_epochs: Number of training epochs.
     :param n_optuna_trials: The total number of Optuna trials the model should have. If negative, its absolute value represents the number of additional trials.
     :param min_batch_binary_power: Minimum power of two for batch size. E.g., with a value of 0, batch size equals 2**0 = 1.
@@ -49,6 +49,7 @@ def main(config: str | tuple | list = default_config, n_epochs: int = default_ep
     """
 
     validate_prm(min_batch_binary_power, max_batch_binary_power, min_learning_rate, max_learning_rate, min_momentum, max_momentum, min_dropout, max_dropout)
+    nn_prm = MappingProxyType(nn_prm)
 
     # Determine configurations based on the provided config
     sub_configs = patterns_to_configs(config, random_config_order, train_missing_pipelines)
@@ -82,7 +83,7 @@ def main(config: str | tuple | list = default_config, n_epochs: int = default_ep
                     def objective(trial):
                         nonlocal continue_study, fail_iterations, max_batch_binary_power_local
                         try:
-                            accuracy, accuracy_to_time, duration = optuna_objective(trial, sub_config, num_workers, min_learning_rate, max_learning_rate,
+                            accuracy, accuracy_to_time, duration = optuna_objective(trial, sub_config, nn_prm, num_workers, min_learning_rate, max_learning_rate,
                                                                                     min_momentum, max_momentum, min_dropout, max_dropout,
                                                                                     min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, n_epochs,
                                                                                     pretrained, epoch_limit_minutes)
@@ -112,7 +113,6 @@ def main(config: str | tuple | list = default_config, n_epochs: int = default_ep
 
 if __name__ == "__main__":
     a = args()
-    main(
-        a.config, a.epochs, a.trials, a.min_batch_binary_power, a.max_batch_binary_power,
-        a.min_learning_rate, a.max_learning_rate, a.min_momentum, a.max_momentum, a.min_dropout, a.max_dropout, a.transform,
-        a.nn_fail_attempts, a.random_config_order, a.workers, a.pretrained, a.epoch_limit_minutes, a.train_missing_pipelines)
+    main(a.config, a.nn_prm, a.epochs, a.trials, a.min_batch_binary_power, a.max_batch_binary_power,
+         a.min_learning_rate, a.max_learning_rate, a.min_momentum, a.max_momentum, a.min_dropout, a.max_dropout, a.transform,
+         a.nn_fail_attempts, a.random_config_order, a.workers, a.pretrained, a.epoch_limit_minutes, a.train_missing_pipelines)

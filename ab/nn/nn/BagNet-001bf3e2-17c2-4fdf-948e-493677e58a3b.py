@@ -2,14 +2,8 @@
 import torch
 import torch.nn as nn
 
-
-class SupportedHyperparameters():
-    def __init__(self):
-        self.hyperparameters = {'lr','momentum', 'dropout'}
-
-    def check_hyperparameters(self, param):
-        return param in self.hyperparameters
-
+def supported_hyperparameters():
+    return {'lr', 'momentum', 'dropout'}
 
 class BagNetBottleneck(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, bottleneck_factor=4):

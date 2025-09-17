@@ -1,14 +1,14 @@
-import importlib
-import sys
-import time as time
-from os.path import join
-from typing import Union
+import importlib, sys
 
 import numpy as np
-from torch.cuda import OutOfMemoryError
-
+import time as time
 import ab.nn.util.CodeEval as codeEvaluator
 import ab.nn.util.db.Write as DB_Write
+
+from os.path import join
+from typing import Union
+from torch.cuda import OutOfMemoryError
+
 from ab.nn.util.Classes import DataRoll
 from ab.nn.util.Exception import *
 from ab.nn.util.Loader import load_dataset
@@ -18,29 +18,29 @@ from ab.nn.util.db.Read import supported_transformers
 
 debug = False
 
-def optuna_objective(trial, config, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout, max_dropout,
+def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout, max_dropout,
                      min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, n_epochs, pretrained, epoch_limit_minutes):
     task, dataset_name, metric, nn = config
     try:
         # Load model
         s_prm: set = get_ab_nn_attr(f"nn.{nn}", "supported_hyperparameters")()
         # Suggest hyperparameters
-        prms = {}
+        prms = dict(nn_prm)
         for prm in s_prm:
-            match prm:
-                case 'lr':
-                    prms[prm] = trial.suggest_float(prm, min_lr, max_lr, log=True)
-                case 'momentum':
-                    prms[prm] = trial.suggest_float(prm, min_momentum, max_momentum)
-                case 'dropout':
-                    prms[prm] = trial.suggest_float(prm, min_dropout, max_dropout)
-                case 'pretrained':
-                    prms[prm] = float(pretrained if pretrained else trial.suggest_categorical(prm, [0, 1]))
-                case _:
-                    prms[prm] = trial.suggest_float(prm, 0.0, 1.0)
-        batch = trial.suggest_categorical('batch', [max_batch(x) for x in range(min_batch_binary_power, max_batch_binary_power_local + 1)])
-        transform_name = trial.suggest_categorical('transform', transform if transform else supported_transformers())
-        prms = merge_prm(prms, {'batch': batch, 'transform': transform_name})
+            if not (prm in prms and prms[prm]):
+                match prm:
+                    case 'lr':
+                        prms[prm] = trial.suggest_float(prm, min_lr, max_lr, log=True)
+                    case 'momentum':
+                        prms[prm] = trial.suggest_float(prm, min_momentum, max_momentum)
+                    case 'dropout':
+                        prms[prm] = trial.suggest_float(prm, min_dropout, max_dropout)
+                    case 'pretrained':
+                        prms[prm] = float(pretrained if pretrained else trial.suggest_categorical(prm, [0, 1]))
+                    case _:
+                        prms[prm] = trial.suggest_float(prm, 0.0, 1.0)
+        batch = add_categorical_if_absent(trial, prms, 'batch', lambda: [max_batch(x) for x in range(min_batch_binary_power, max_batch_binary_power_local + 1)])
+        transform_name = add_categorical_if_absent(trial, prms, 'transform', supported_transformers, default=transform)
         prm_str = ''
         for k, v in prms.items():
             prm_str += f", {k}: {v}"
@@ -166,12 +166,12 @@ class Train:
                                         f"Accuracy is too low: {accuracy}."
                                         f" The minimum accepted accuracy for the '{self.config[1]}"
                                         f"' dataset is {self.minimum_accuracy}.")
-            only_prm = {k: v for k, v in self.prm.items() if  k not in {'uid', 'duration', 'accuracy', 'epoch'}}
+            only_prm = {k: v for k, v in self.prm.items() if k not in {'uid', 'duration', 'accuracy', 'epoch'}}
             prm = merge_prm(self.prm, {'uid': uuid4(only_prm), 'duration': duration, 'accuracy': accuracy})
             if self.save_to_db:
                 if self.is_code:  # We don't want the filename to contain full codes
                     if self.save_path is None:
-                        print(f"[WARN]parameter `save_Path` set to null, the staticis will not be saved into a file.")
+                        print(f"[WARN]parameter `save_Path` set to null, the statics will not be saved into a file.")
                     else:
                         save_results(self.config + (epoch,), join(self.save_path, f"{epoch}.json"), prm)
                 else:  # Legacy save result codes in file
@@ -207,7 +207,7 @@ class Train:
         return self.metric_function.result()
 
 
-def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Union[str, None] = None, save_path: Union[str, None] = None, export_onnx=False, epoch_limit_minutes=default_epoch_limit_minutes):
+def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Union[str, None] = None, save_path: Union[str, None] = None, export_onnx=False, epoch_limit_minutes=default_epoch_limit_minutes, transform_dir= None):
     """
     train the model with the given code and hyperparameters and evaluate it.
 
@@ -238,7 +238,7 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             f.write(nn_code)  # write the code to the temp file
         res = codeEvaluator.evaluate_single_file(temp_file_path)
         # load dataset
-        out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset, prm['transform'])
+        out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset, prm['transform'], transform_dir)
         num_workers = prm.get('num_workers', 1)
         # initialize model and trainer
         trainer = Train(

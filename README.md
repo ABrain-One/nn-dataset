@@ -1,5 +1,5 @@
 ## <img src='https://abrain.one/img/lemur-nn-icon-64x64.png' width='32px'/> Neural Network Dataset 
-<sub><a href='https://pypi.python.org/pypi/nn-dataset'><img src='https://img.shields.io/pypi/v/nn-dataset.svg'/></a><br/>
+<sub><a href='https://pypi.python.org/pypi/nn-dataset'><img src='https://img.shields.io/pypi/v/nn-dataset.svg'/></a> <a href="https://pepy.tech/project/nn-dataset"><img alt="GitHub release" src="https://static.pepy.tech/badge/nn-dataset"></a><br/>
 short alias  <a href='https://pypi.python.org/pypi/lmur'>lmur</a></sub>
    
 LEMUR - Learning, Evaluation, and Modeling for Unified Research
@@ -16,24 +16,18 @@ For Linux/Mac:
    ```bash
    python3 -m venv .venv
    source .venv/bin/activate
+   python -m pip install --upgrade pip
    ```
 For Windows:
    ```bash
    python3 -m venv .venv
    .venv\Scripts\activate
+   python -m pip install --upgrade pip
    ```
 
-It is also assumed that CUDA 12.6 is installed; otherwise, consider replacing 'cu126' with the appropriate version.
+It is assumed that CUDA 12.6 is installed; otherwise, consider replacing 'cu126' with the appropriate version. Some neural network training tasks require GPUs with at least 24 GB of memory.
 
-## Environment for NN Dataset Contributors
-### Pip package manager
-Create a virtual environment, activate it, and run the following command to install all the project dependencies:
-```bash
-python -m pip install --upgrade pip
-pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu126
-```
-
-## Installation or Update of the NN Dataset
+## Installation or Update of the NN Dataset with pip
 Remove an old version of the LEMUR Dataset and its database:
 ```bash
 pip uninstall nn-dataset -y
@@ -49,11 +43,19 @@ pip install git+https://github.com/ABrain-One/nn-dataset --upgrade --force --ext
 ```
 Adding functionality to export data to Excel files and generate plots for <a href='https://github.com/ABrain-One/nn-stat'>analyzing neural network performance</a>:
 ```bash
-pip install nn-stat --upgrade --extra-index-url https://download.pytorch.org/whl/cu126
+pip install nn-dataset[stat] --upgrade --extra-index-url https://download.pytorch.org/whl/cu126
 ```
 and export/generate:
 ```bash
 python -m ab.stat.export
+```
+
+## Environment for NN Dataset Contributors
+### Pip package manager
+Create a virtual environment, activate it, and run the following command to install all the project dependencies:
+```bash
+python -m pip install --upgrade pip
+pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu126
 ```
 
 ## Usage
@@ -70,11 +72,26 @@ or for all image segmentation models using a fixed range of training parameters 
 ```
 `train.sh` internally calls `ab.nn.train`, offering a shorter way to run the program. Both scripts accept the same input flags and can be used interchangeably.
 
-To reproduce a previously obtained result, set both the minimum and maximum values of the training parameters to the desired value:
+##### Reproducing Results with Fixed Training Parameters
+
+To reproduce previously obtained results, provide fixed values for the training parameters in JSON format. The parameter names should match those returned by the <strong>supported_hyperparameters()</strong> function of the NN model.
+
+Example command:
+
 ```bash
-. train.sh -c img-classification_cifar-10_acc_AlexNet --min_learning_rate 0.0061 -l 0.0061 --min_momentum 0.7549 -m 0.7549 --min_batch_binary_power 2 -b 2 -f norm_299
+. train.sh -c img-classification_cifar-10_acc_ComplexNet -f complex -p '{"lr": 0.017, "momentum": 0.022 , "batch": 32}'
 ```
-To view supported flags:
+
+where:
+
+-c specifies the training pipeline,
+
+-f selects the preprocessing algorithm,
+
+-p sets the hyperparameters explicitly (e.g., learning rate, momentum, batch size) using a JSON string.
+
+
+##### To view supported flags:
 ```bash
 . train.sh -h
 ```
@@ -89,12 +106,12 @@ Installing the latest version of the project from GitHub
 docker run --rm -u $(id -u):ab -v $(pwd):/a/mm abrainone/ai-linux bash -c "[ -d nn-dataset ] && git -C nn-dataset pull || git -c advice.detachedHead=false clone --depth 1 https://github.com/ABrain-One/nn-dataset"
 ```
 
-Running script
+Running a quick training script:
 ```bash
-docker run --rm -u $(id -u):ab --shm-size=16G -v $(pwd)/nn-dataset:/a/mm abrainone/ai-linux bash -c ". train.sh -c img-classification_cifar-10_acc_ComplexNet -f complex -l 0.017 --min_learning_rate 0.013 -m 0.025 --min_momentum 0.022 -b 9 --min_batch_binary_power 9"
+docker run --rm -u $(id -u):ab --shm-size=16G -v $(pwd)/nn-dataset:/a/mm abrainone/ai-linux bash -c ". train.sh -c img-classification_cifar-10_acc_ComplexNet -f complex -l 0.017 --min_learning_rate 0.013 -m 0.025 --min_momentum 0.022 -b 7 --min_batch_binary_power 8 --max_batch_binary_power 9"
 ```
 
-Some recently added dependencies might be missing in the <a href='https://hub.docker.com/r/abrainone/ai-linux' target='_blank'>AI Linux</a>. In this case, you can create a container from the Docker image ```abrainone/ai-linux```, install the missing packages (preferably using ```pip install <package name>```), and then create a new image from the container using ```docker commit <container name> <new image name>```. You can use this new image locally or push it to the registry for deployment on the computer cluster.
+If recently added dependencies are missing in the <a href='https://hub.docker.com/r/abrainone/ai-linux' target='_blank'>AI Linux</a>, you can create a container from the Docker image ```abrainone/ai-linux```, install the missing packages (preferably using ```pip install <package name>```), and then create a new image from the container using ```docker commit <container name> <new image name>```. You can use this new image locally or push it to the registry for deployment on the computer cluster.
 
 ## Contribution
 

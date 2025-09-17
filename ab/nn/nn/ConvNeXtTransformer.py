@@ -96,16 +96,6 @@ class TransformerDecoder(nn.Module):
         logits = self.fc_out(x)
         return logits
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torchvision.models import convnext_tiny, ConvNeXt_Tiny_Weights
-
-def supported_hyperparameters():
-    return {'lr', 'momentum', 'dropout', 'tie_weights'}
-
-# ... [MultiScaleConvNeXtEncoder, PositionalEncoding, TransformerDecoderLayer, TransformerDecoder as before] ...
-
 class Net(nn.Module):
     def __init__(self, in_shape, out_shape, prm, device):
         super().__init__()

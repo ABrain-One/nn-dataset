@@ -1,13 +1,4 @@
-import argparse
-import datetime
-import gc
-import hashlib
-import importlib.util
-import inspect
-import random
-import re
-
-import torch
+import argparse, json, datetime, gc, hashlib, inspect, random, re, importlib.util, torch
 from os import makedirs, remove
 from os.path import exists
 
@@ -90,14 +81,19 @@ def accuracy_to_time_metric(accuracy, min_accuracy, training_duration) -> float:
     """
     Naive 'accuracy to time' metric for fixed number of training epochs.
     This metric is essential for detecting the fastest accuracy improvements during neural network training.
-
     """
+    if accuracy is None:
+        accuracy = 0.0
+    if min_accuracy is None:
+        min_accuracy = 0.0
     d = max(0.0, (accuracy - min_accuracy)) / (training_duration / 1e11)
     print(f"accuracy_to_time_metric {d}")
     return d
 
 
 def good(result, minimum_accuracy, duration):
+    if minimum_accuracy is None:
+        minimum_accuracy = 0.0
     return result > minimum_accuracy * 1.2
 
 
@@ -185,10 +181,18 @@ def export_model_to_onnx(model, dummy_input):
     print(f"Exported neural network to ONNX format at {onnx_file}")
 
 
+def add_categorical_if_absent(trial, prms, nm, fn, default=None):
+    if not (nm in prms and prms[nm]):
+        prms[nm] = trial.suggest_categorical(nm, default or fn())
+    return prms[nm]
+
+
 def args():
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--config', type=str, default=default_config,
                         help="Configuration specifying the model training pipelines. The default value for all configurations.")
+    parser.add_argument('-p', '--nn_prm', type=json.loads, default=default_nn_hyperparameters,
+                        help="JSON string with fixed hyperparameter values for neural network training, e.g. -p '{\"lr\": 0.0061, \"momentum\": 0.7549, \"batch\": 4}'")
     parser.add_argument('-e', '--epochs', type=int, default=default_epochs,
                         help="Numbers of training epochs.")
     parser.add_argument('-t', '--trials', type=int, default=default_trials,

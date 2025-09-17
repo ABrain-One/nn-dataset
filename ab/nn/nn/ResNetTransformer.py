@@ -171,58 +171,6 @@ class Net(nn.Module):
     # Use beam search decoding for evaluation
         return self.batch_beam_search(images, beam_width=4, max_len=20, length_penalty=0.7)
 
-    '''
-    def forward(self, images, captions=None, hidden_state=None):
-        if self.word2idx is None or self.idx2word is None:
-            raise ValueError("word2idx and idx2word must be set before evaluation.")
-        memory = self.encoder(images)  # [B, 1, 768]
-        if captions is not None:
-            tgt_input = captions[:, :-1]  # [B, T-1]
-            return self.decoder(tgt_input, memory)  # [B, T-1, vocab_size]
-
-        batch_size = images.size(0)
-        results = []
-        max_len = 15
-        for i in range(batch_size):
-            generated = [self.word2idx['<SOS>']]
-            mem = memory[i:i+1]  # [1, 1, 768]
-            for t in range(max_len):
-                tgt = torch.tensor(generated, dtype=torch.long).unsqueeze(0).to(self.device)  # [1, cur_len]
-                out = self.decoder(tgt, mem)  # [1, cur_len, vocab_size]
-                next_token = out[0, -1].argmax().item()
-                generated.append(next_token)
-                if next_token == self.word2idx['<EOS>']:
-                    break
-            results.append(generated[1:])
-
-        # Pad and convert to one-hot for metric compatibility
-        max_seq_len = max(len(r) for r in results)
-        preds = torch.zeros(batch_size, max_seq_len, self.vocab_size).to(self.device)
-        for i, seq in enumerate(results):
-            for t, idx in enumerate(seq):
-                preds[i, t, idx] = 1.0
-        return preds
-
-    
-    def generate(self, image, word2idx, idx2word, max_len=15):
-        self.eval()
-        self.word2idx = word2idx
-        self.idx2word = idx2word
-        with torch.no_grad():
-            image = image.unsqueeze(0).to(self.device)
-            memory = self.encoder(image)  # [1, 1, 768]
-            generated = [word2idx['<SOS>']]
-            for _ in range(max_len):
-                tgt = torch.tensor(generated, dtype=torch.long).unsqueeze(0).to(self.device)  # [1, cur_len]
-                out = self.decoder(tgt, memory)  # [1, cur_len, vocab_size]
-                next_token = out[0, -1].argmax().item()
-                generated.append(next_token)
-                if next_token == word2idx['<EOS>']:
-                    break
-            caption = [idx2word[idx] for idx in generated[1:-1]]
-            return ' '.join(caption)
-    '''
-
     def beam_search_generate(self, image, word2idx, idx2word, beam_width=4, max_len=20, length_penalty=0.7):
         self.eval()
         self.word2idx = word2idx

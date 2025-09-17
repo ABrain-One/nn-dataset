@@ -44,11 +44,7 @@ class SpatialAttentionLSTMDecoder(nn.Module):
         self.hidden_size = hidden_size
 
     def forward(self, features, captions, hidden_state=None):
-        """
-        features: [B, num_regions, feature_dim]
-        captions: [B, seq_len]
-        hidden_state: tuple (h, c), each [B, hidden_size]
-        """
+
         B, num_regions, feature_dim = features.size()
         seq_len = captions.size(1)
 
@@ -104,14 +100,10 @@ class SpatialAttentionLSTMDecoder(nn.Module):
 
 class EarlyStopping:
     def __init__(self, patience=5, min_delta=1e-4, mode='max'):
-        """
-        patience: epochs to wait after last improvement
-        min_delta: minimum BLEU improvement to count as better
-        mode: 'max' for BLEU (higher is better)
-        """
-        self.patience = patience
-        self.min_delta = min_delta
-        self.mode = mode
+
+        self.patience = patience            # patience: epochs to wait after last improvement
+        self.min_delta = min_delta          # min_delta: minimum BLEU improvement to count as better
+        self.mode = mode                    # mode: 'max' for BLEU (higher is better)
         self.best_score = None
         self.counter = 0
         self.early_stop = False
