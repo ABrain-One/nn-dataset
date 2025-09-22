@@ -199,7 +199,7 @@ class Train:
             for inputs, labels in test_loader:
                 inputs = inputs.to(self.device)
                 if torch.is_tensor(labels):
-                    labels = labels.to(self.device)
+                    labels = labels.to(self.device) #if statement for removing error
                 outputs = self.model(inputs)
 
                 # Call the metric - all metrics now use the same interface
