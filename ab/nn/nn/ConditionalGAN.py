@@ -1,4 +1,4 @@
-# ConditionalGAN.py (Updated with stability fixes)
+
 
 import torch
 import torch.nn as nn
@@ -182,8 +182,7 @@ class Net(nn.Module):
         lr = float(prm.get('lr', 0.0002))
         beta1 = float(prm.get('beta1', 0.5))
 
-        # --- FIX 1: Rebalance Learning Rates ---
-        # The Generator's learning rate should be smaller than the Discriminator's
+
         lr_g = lr / 4.0
         lr_d = lr
 
@@ -192,9 +191,11 @@ class Net(nn.Module):
         self.optimizer_G = torch.optim.Adam(self.generator.parameters(), lr=lr_g, betas=(beta1, 0.999))
         self.optimizer_D = torch.optim.Adam(self.discriminator.parameters(), lr=lr_d, betas=(beta1, 0.999))
 
-        total_epochs = 70
+        # --- FIX: Align scheduler with longer training run ---
+        total_epochs = 150
 
         def lr_lambda(epoch):
+            # Keep LR constant for the first half, then decay linearly
             if epoch < total_epochs / 2:
                 return 1.0
             else:
@@ -207,11 +208,14 @@ class Net(nn.Module):
         torch.backends.cudnn.benchmark = True
 
         if os.path.exists(self.gen_checkpoint_path):
-            self.generator.load_state_dict(torch.load(self.gen_checkpoint_path))
-            self.discriminator.load_state_dict(torch.load(self.disc_checkpoint_path))
-            self.optimizer_G.load_state_dict(torch.load(self.opt_gen_checkpoint_path))
-            self.optimizer_D.load_state_dict(torch.load(self.opt_disc_checkpoint_path))
-            print("--- Checkpoints loaded. Resuming training. ---")
+            try:
+                self.generator.load_state_dict(torch.load(self.gen_checkpoint_path, map_location=self.device))
+                self.discriminator.load_state_dict(torch.load(self.disc_checkpoint_path, map_location=self.device))
+                self.optimizer_G.load_state_dict(torch.load(self.opt_gen_checkpoint_path, map_location=self.device))
+                self.optimizer_D.load_state_dict(torch.load(self.opt_disc_checkpoint_path, map_location=self.device))
+                print("--- Checkpoints loaded. Resuming training. ---")
+            except Exception as e:
+                print(f"Could not load checkpoints, starting from scratch. Error: {e}")
 
     def learn(self, train_data, current_epoch=0):
         epoch_to_run = self.epochs_trained
@@ -220,39 +224,46 @@ class Net(nn.Module):
             self.generator.train()
             self.discriminator.train()
             real_images, raw_text_prompts = data_batch
+
             tokenized_prompts = self.tokenizer(
                 list(raw_text_prompts), padding='max_length', truncation=True,
                 max_length=self.max_length, return_tensors="pt"
             )
-            text_tokens = tokenized_prompts['input_ids']
+            text_tokens = tokenized_prompts['input_ids'].to(self.device)
             real_images = real_images.to(self.device)
-            text_tokens = text_tokens.to(self.device)
             b_size = real_images.size(0)
 
             real_target = torch.full((b_size,), 0.9, device=self.device)
             fake_target = torch.full((b_size,), 0.1, device=self.device)
 
-            self.optimizer_D.zero_grad()
-            real_images.requires_grad = True
-            output_real = self.discriminator(real_images, text_tokens)
-            loss_d_real = self.criterion(output_real, real_target)
-            grad_real = torch.autograd.grad(outputs=output_real.sum(), inputs=real_images, create_graph=True)[0]
-            grad_penalty = (grad_real.view(grad_real.size(0), -1).norm(2, dim=1) ** 2).mean()
-            r1_penalty = self.r1_penalty_weight / 2 * grad_penalty
-            with torch.no_grad():
-                noise = torch.randn(b_size, self.noise_dim, device=self.device)
-                fake_images = self.generator(noise, text_tokens).detach()
-            output_fake = self.discriminator(fake_images, text_tokens)
-            loss_d_fake = self.criterion(output_fake, fake_target)
-            loss_d = loss_d_real + loss_d_fake + r1_penalty
-            loss_d.backward()
-            self.optimizer_D.step()
-            real_images.requires_grad = False
 
-            generator_real_target = torch.full((b_size,), 1.0, device=self.device)
-            # --- FIX 2: Remove the extra generator update loop ---
-            # The Generator is now updated once per step (1:1 ratio with Discriminator)
+            for _ in range(2):
+                self.optimizer_D.zero_grad()
+                real_images.requires_grad = True
+
+                # Train with real images
+                output_real = self.discriminator(real_images, text_tokens)
+                loss_d_real = self.criterion(output_real, real_target)
+                grad_real = torch.autograd.grad(outputs=output_real.sum(), inputs=real_images, create_graph=True)[0]
+                grad_penalty = (grad_real.view(grad_real.size(0), -1).norm(2, dim=1) ** 2).mean()
+                r1_penalty = self.r1_penalty_weight / 2 * grad_penalty
+
+                # Train with fake images
+                with torch.no_grad():
+                    noise = torch.randn(b_size, self.noise_dim, device=self.device)
+                    fake_images = self.generator(noise, text_tokens).detach()
+                output_fake = self.discriminator(fake_images, text_tokens)
+                loss_d_fake = self.criterion(output_fake, fake_target)
+
+                # Total discriminator loss
+                loss_d = loss_d_real + loss_d_fake + r1_penalty
+                loss_d.backward()
+                self.optimizer_D.step()
+                real_images.requires_grad = False
+
+            # Update Generator once
             self.optimizer_G.zero_grad()
+            generator_real_target = torch.full((b_size,), 1.0, device=self.device)
             noise_g = torch.randn(b_size, self.noise_dim, device=self.device)
             fake_images_for_g = self.generator(noise_g, text_tokens)
             output_g = self.discriminator(fake_images_for_g, text_tokens)
@@ -286,24 +297,22 @@ class Net(nn.Module):
 
     def forward(self, input_tensor: torch.Tensor, text_prompts: list = None) -> torch.Tensor:
         self.generator.eval()
-        if text_prompts is None or not text_prompts:
-            prompts_to_use = self.fixed_prompts
-            tokenized_prompts = self.fixed_tokenized_prompts
-            noise = self.fixed_noise
-        else:
+
+        # --- FIX: Robust handling of text_prompts to prevent "ambiguous boolean" error ---
+        prompts_to_use = self.fixed_prompts
+        if text_prompts is not None:
             valid_prompts = [p for p in text_prompts if isinstance(p, str) and p.strip()]
-            if not valid_prompts:
-                prompts_to_use = self.fixed_prompts
-                tokenized_prompts = self.fixed_tokenized_prompts
-                noise = self.fixed_noise
-            else:
+            if valid_prompts:
                 prompts_to_use = valid_prompts
-                tokenized_prompts = self.tokenizer(
-                    prompts_to_use, padding='max_length', truncation=True,
-                    max_length=self.max_length, return_tensors="pt"
-                )['input_ids'].to(self.device)
-                noise = torch.randn(len(prompts_to_use), self.noise_dim, device=self.device)
+
+        tokenized_prompts = self.tokenizer(
+            prompts_to_use, padding='max_length', truncation=True,
+            max_length=self.max_length, return_tensors="pt"
+        )['input_ids'].to(self.device)
+
+        noise = torch.randn(len(prompts_to_use), self.noise_dim, device=self.device)
+
         with torch.no_grad():
             generated_tensors = self.generator(noise, tokenized_prompts)
-            generated_tensors = generated_tensors * 0.5 + 0.5
+            generated_tensors = generated_tensors * 0.5 + 0.5  # Denormalize
             return (generated_tensors, prompts_to_use)
