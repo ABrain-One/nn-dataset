@@ -1,6 +1,6 @@
+
 import os
 import random
-import re
 from os.path import join
 from PIL import Image
 
@@ -12,18 +12,17 @@ import torchvision.transforms as T
 
 from ab.nn.util.Const import data_dir
 
-# --- Constants Definition ---
+# --- Configuration ---
 COCO_ANN_URL = 'http://images.cocodataset.org/annotations/annotations_trainval2017.zip'
 COCO_IMG_URL_TEMPLATE = 'http://images.cocodataset.org/zips/{}2017.zip'
+
 NORM_MEAN = (0.5, 0.5, 0.5)
 NORM_DEV = (0.5, 0.5, 0.5)
+
 TARGET_CATEGORIES = ['car']
-DEFAULT_IMAGE_SIZE = 256 # Fallback size if it cannot be determined
+
 
 class Text2Image(Dataset):
-    """
-    A PyTorch Dataset for loading COCO image-caption pairs.
-    """
     def __init__(self, root, split='train', transform=None):
         super().__init__()
         self.root = root
@@ -80,31 +79,33 @@ class Text2Image(Dataset):
 
 
 def loader(transform_fn, task, **kwargs):
-    """
-    The main entry point for the Lemur framework to get the datasets.
-    This version correctly uses the transform_fn provided by the framework.
-    """
     if 'txt-image' not in task.strip().lower():
         raise ValueError(f"The task '{task}' is not a text-to-image task for this dataloader.")
 
-    # Use the transform function passed by the framework
-    final_transform = transform_fn((NORM_MEAN, NORM_DEV))
+    # --- THE DEFINITIVE FIX ---
+    # Inspect the transform provided by the framework to get the target image size
+    example_transform = transform_fn((NORM_MEAN, NORM_DEV))
+    resize_step = example_transform.transforms[0]
 
-    # Get the image size from the transform for defining the output shape
-    try:
-        # Find the resize step in the transform pipeline to determine the image size
-        resize_step = next((t for t in final_transform.transforms if isinstance(t, T.Resize)), None)
-        image_size = resize_step.size if isinstance(resize_step.size, int) else resize_step.size[0]
-    except (AttributeError, TypeError, StopIteration):
-        print(f"Warning: Could not determine image size from transform. Falling back to {DEFAULT_IMAGE_SIZE}x{DEFAULT_IMAGE_SIZE}.")
-        image_size = DEFAULT_IMAGE_SIZE
+    # Extract the integer size (e.g., 256) from the resize step
+    image_size = -1
+    if hasattr(resize_step, 'size'):
+        size_attr = getattr(resize_step, 'size')
+        image_size = size_attr if isinstance(size_attr, int) else size_attr[0]
+
+    if image_size == -1:
+        raise ValueError("Could not determine image size from the provided transform.")
+
+    # Rebuild the transform pipeline correctly, adding the crucial CenterCrop step
+    final_transform = T.Compose([
+        T.Resize(image_size),
+        T.CenterCrop(image_size),  # <-- THE FIX: Ensures a square image
+        T.ToTensor(),
+        T.Normalize(NORM_MEAN, NORM_DEV)
+    ])
+    # --- END OF FIX ---
 
     path = join(data_dir, 'coco')
     train_dataset = Text2Image(root=path, split='train', transform=final_transform)
     val_dataset = Text2Image(root=path, split='val', transform=final_transform)
-
-    out_shape = (3, image_size, image_size)
-    in_shape = {'vocab_size': 30000}
-    class_names = None
-
-    return (in_shape, out_shape, class_names), 0.0, train_dataset, val_dataset
+    return (None,), 0.0, train_dataset, val_dataset
