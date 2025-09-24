@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Text-to-Image Demo</title>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; margin-top: 50px; background-color: #f4f4f9; }
+        #container { width: 500px; padding: 20px; border: 1px solid #ccc; border-radius: 8px; background-color: white; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        input { width: 100%; padding: 10px; margin-bottom: 10px; box-sizing: border-box; }
+        button { width: 100%; padding: 10px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:disabled { background-color: #ccc; }
+        #image-container { margin-top: 20px; min-height: 256px; border: 1px dashed #ccc; display: flex; justify-content: center; align-items: center; }
+        img { max-width: 100%; }
+        #status { text-align: center; color: #555; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <h2>ConditionalVAE3 Image Generation</h2>
+        <p>Enter a prompt related to a car to generate an image.</p>
+        <input type="text" id="prompt-input" placeholder="e.g., a vintage blue pickup truck">
+        <button id="generate-btn" onclick="generateImage()">Generate Image</button>
+        <div id="image-container">
+            <p id="status">Your generated image will appear here.</p>
+            <img id="result-img" src="" style="display:none;">
+        </div>
+    </div>
+
+    <script>
+        async function generateImage() {
+            const promptInput = document.getElementById('prompt-input');
+            const generateBtn = document.getElementById('generate-btn');
+            const resultImg = document.getElementById('result-img');
+            const statusText = document.getElementById('status');
+
+            if (!promptInput.value) {
+                alert('Please enter a prompt.');
+                return;
+            }
+
+            // Disable button and show loading status
+            generateBtn.disabled = true;
+            generateBtn.innerText = 'Generating...';
+            resultImg.style.display = 'none';
+            statusText.style.display = 'block';
+            statusText.innerText = 'Generating image, this may take a moment...';
+
+            try {
+                const response = await fetch('/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: promptInput.value })
+                });
+
+                const data = await response.json();
+
+                if (data.image_path) {
+                    // Update the image source to display the new image
+                    resultImg.src = data.image_path + '?t=' + new Date().getTime(); // Append timestamp to avoid caching
+                    resultImg.style.display = 'block';
+                    statusText.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                statusText.innerText = 'An error occurred. Please try again.';
+            } finally {
+                // Re-enable the button
+                generateBtn.disabled = false;
+                generateBtn.innerText = 'Generate Image';
+            }
+        }
+    </script>
+</body>
+</html>

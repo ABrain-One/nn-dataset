@@ -6,7 +6,7 @@ from pydantic import BaseModel
 import uvicorn
 
 # --- Make sure this import path is correct for your project ---
-from ab.nn.nn.ConditionalVAE2 import Net, export_torch_weights  # Use your final model
+from ab.nn.nn.ConditionalVAE3 import Net, export_torch_weights  # Use your final model
 
 # --- Configuration ---
 # This MUST point to the final weights file you saved after training
