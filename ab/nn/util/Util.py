@@ -6,6 +6,7 @@ import importlib.util
 import inspect
 import random
 import re
+import json
 
 import torch
 from os import makedirs, remove
@@ -67,6 +68,11 @@ def order_configs(configs, random_config_order):
 def conf_to_names(c: str) -> tuple[str, ...]:
     return tuple(c.split(config_splitter))
 
+
+def add_categorical_if_absent(trial, prms, nm, fn, default=None):
+    if not (nm in prms and prms[nm]):
+        prms[nm] = trial.suggest_categorical(nm, default or fn())
+    return prms[nm]
 
 def is_full_config(l: list[str] | tuple[str, ...]):
     return 4 == len(l) and (nn_dir / (l[-1] + '.py')).exists()
@@ -217,12 +223,13 @@ def load_torch_weights(model, path):
         raise FileNotFoundError(f"Weights file not found at {path}. Cannot load model.")
 
 
-
-
 def args():
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--config', type=str, default=default_config,
                         help="Configuration specifying the model training pipelines. The default value for all configurations.")
+    parser.add_argument('-p', '--nn_prm', type=json.loads, default=default_nn_hyperparameters,  # line 193
+                        help="JSON string with fixed hyperparameter values, e.g. -p '{\"lr\": 0.001}'")
+
     parser.add_argument('-e', '--epochs', type=int, default=default_epochs,
                         help="Numbers of training epochs.")
     parser.add_argument('-t', '--trials', type=int, default=default_trials,

@@ -1,6 +1,7 @@
 # File: ConditionalVAE3_1.py
 # Description: This version includes a robust, controllable resume feature
-#              and an improved decoder architecture using Pixel Shuffle to reduce artifacts.
+#              and an improved decoder architecture using Pixel Shuffle. It is
+#              now corrected to be compatible with the training framework.
 
 import torch
 import torch.nn as nn
@@ -19,7 +20,6 @@ def supported_hyperparameters():
 
 
 class PerceptualLoss(nn.Module):
-    # ... (class is unchanged)
     def __init__(self):
         super(PerceptualLoss, self).__init__()
         vgg = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1).features[:23].eval()
@@ -38,7 +38,6 @@ class PerceptualLoss(nn.Module):
 
 
 class SelfAttention(nn.Module):
-    # ... (class is unchanged)
     def __init__(self, in_channels):
         super().__init__()
         self.query = nn.Conv2d(in_channels, in_channels // 8, 1)
@@ -59,7 +58,6 @@ class SelfAttention(nn.Module):
 
 class Net(nn.Module):
     class TextEncoder(nn.Module):
-        # ... (class is unchanged)
         def __init__(self, out_size=128):
             super().__init__()
             model_name = "openai/clip-vit-base-patch32"
@@ -79,12 +77,11 @@ class Net(nn.Module):
             return self.text_linear(outputs.pooler_output)
 
     class CVAE(nn.Module):
-        # --- NEW UpsampleBlock using Pixel Shuffle ---
         class UpsampleBlock(nn.Module):
             def __init__(self, in_channels, out_channels):
                 super().__init__()
                 self.conv = nn.Conv2d(in_channels, out_channels * 4, kernel_size=3, padding=1)
-                self.pixel_shuffle = nn.PixelShuffle(2)  # Upscales by a factor of 2
+                self.pixel_shuffle = nn.PixelShuffle(2)
                 self.lrelu = nn.LeakyReLU(0.2, inplace=True)
 
             def forward(self, x):
@@ -116,7 +113,6 @@ class Net(nn.Module):
             self.fc_log_var = nn.Linear(combined_dim, latent_dim)
             self.decoder_input = nn.Linear(latent_dim + text_embedding_dim, self.final_feature_dim)
 
-            # --- UPDATED Decoder using the new UpsampleBlock ---
             self.decoder_conv = nn.Sequential(
                 self.UpsampleBlock(512, 512),
                 self.UpsampleBlock(512, 256),
@@ -154,11 +150,8 @@ class Net(nn.Module):
         self.latent_dim = 512
         self.model_name = "ConditionalVAE3"
 
-        # --- ROBUST STATE MANAGEMENT ---
-        # Registering as buffers makes them part of the model's state_dict
         self.register_buffer('epoch_counter', torch.tensor(0))
         self.register_buffer('best_score_so_far', torch.tensor(-1.0))
-        # --- END ROBUST STATE ---
 
         self.checkpoint_dir = os.path.join("checkpoints", self.model_name)
         if not os.path.exists(self.checkpoint_dir):
@@ -174,7 +167,6 @@ class Net(nn.Module):
         self.reconstruction_loss = nn.L1Loss()
         self.perceptual_loss = PerceptualLoss().to(device)
 
-        # --- ROBUST RESUME LOGIC ---
         resume_flag = os.getenv('RESUME_TRAINING', 'true').lower()
         best_checkpoint_path = os.path.join(self.checkpoint_dir, "best_model.pth")
 
@@ -188,21 +180,25 @@ class Net(nn.Module):
                 print("RESUME_TRAINING=false. Starting a fresh training run.")
             else:
                 print("No checkpoint found. Starting a fresh training run.")
-        # --- END ROBUST RESUME ---
 
     def train_setup(self, prm):
         pass
 
-    def learn(self, train_data):
+    # --- THIS IS THE CORRECTED METHOD ---
+    def learn(self, train_data, current_epoch=0):
         self.train()
+        # The model's internal epoch counter is updated here, once per training epoch
+        self.epoch_counter = torch.tensor(current_epoch)
         total_loss = 0.0
         kld_warmup_epochs = 25
         max_kld_weight = 0.0000025
-        current_epoch = self.epoch_counter.item()
+
+        # Use the epoch passed in by the training framework for KLD warmup
         if current_epoch < kld_warmup_epochs:
-            kld_weight = max_kld_weight * (current_epoch / kld_warmup_epochs)
+            kld_weight = max_kld_weight * ((current_epoch + 1) / kld_warmup_epochs)
         else:
             kld_weight = max_kld_weight
+
         for batch in train_data:
             real_images, text_prompts = batch
             real_images = real_images.to(self.device)
@@ -233,20 +229,17 @@ class Net(nn.Module):
 
     @torch.no_grad()
     def forward(self, images, **kwargs):
-        self.epoch_counter += 1  # Increment epoch counter once per validation
+        # The epoch counter is now handled in the 'learn' method
         prompts_to_use = kwargs.get('prompts')
         if not prompts_to_use:
             batch_size = images.size(0)
             default_prompts = ["a photo of a car"]
             prompts_to_use = [default_prompts[i % len(default_prompts)] for i in range(batch_size)]
 
-        return self.generate(prompts_to_use), prompts_to_use
+        generated_images = self.generate(prompts_to_use)
+        return generated_images, prompts_to_use
 
     def save_if_best(self, current_score):
-        """
-        Compares the current score to the best score seen so far.
-        If the current score is better, it saves a checkpoint.
-        """
         if current_score > self.best_score_so_far.item():
             self.best_score_so_far = torch.tensor(current_score)
             best_checkpoint_path = os.path.join(self.checkpoint_dir, "best_model.pth")
