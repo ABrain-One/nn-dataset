@@ -197,7 +197,9 @@ class Train:
 
         with torch.no_grad():
             for inputs, labels in test_loader:
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                inputs = inputs.to(self.device)
+                if torch.is_tensor(labels):
+                    labels = labels.to(self.device) #if statement for removing Image generation error
                 outputs = self.model(inputs)
 
                 # Call the metric - all metrics now use the same interface
