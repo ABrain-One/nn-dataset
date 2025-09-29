@@ -145,7 +145,6 @@ class Net(nn.Module):
     class Discriminator(nn.Module):
         def __init__(self, image_channels=3):
             super().__init__()
-            # --- Weakened Discriminator Architecture ---
             self.model = nn.Sequential(
                 nn.Conv2d(image_channels, 64, 4, 2, 1), nn.LeakyReLU(0.2, inplace=True),
                 nn.Conv2d(64, 128, 4, 2, 1), nn.LeakyReLU(0.2, inplace=True),
@@ -162,7 +161,7 @@ class Net(nn.Module):
         self.prm = prm or {}
         self.text_embedding_dim = 128
         self.latent_dim = 512
-        self.model_name = "ConditionalVAE_GAN"
+        self.model_name = "ConditionalVAE4"
 
         self.register_buffer('epoch_counter', torch.tensor(0))
         self.register_buffer('best_score_so_far', torch.tensor(-1.0))
@@ -176,9 +175,10 @@ class Net(nn.Module):
         self.cvae = self.CVAE(self.latent_dim, self.text_embedding_dim, image_channels, image_size).to(device)
         self.discriminator = self.Discriminator(image_channels).to(device)
 
+        # --- THIS SECTION IS CORRECTED ---
         # Asymmetrical learning rates for Generator and Discriminator
-        lr_g = self.prm.get('lr', 2e-6)
-        lr_d = self.prm.get('min_learning_rate', 2e-7)
+        lr_g = self.prm.get('lr_g', 2e-6)
+        lr_d = self.prm.get('lr_d', 2e-7)
         beta1 = self.prm.get('momentum', 0.5)
 
         print(f"--- Initializing VAE-GAN with G_LR: {lr_g} | D_LR: {lr_d} | Beta1: {beta1} ---")
@@ -190,7 +190,6 @@ class Net(nn.Module):
         self.perceptual_loss = PerceptualLoss().to(device)
         self.adversarial_loss = nn.BCEWithLogitsLoss()
 
-        # Robust resume logic with score reset
         resume_flag = os.getenv('RESUME_TRAINING', 'true').lower()
         source_checkpoint_path = os.path.join("checkpoints", "ConditionalVAE3", "best_model.pth")
         gan_checkpoint_path = os.path.join(self.checkpoint_dir, "best_model.pth")
@@ -213,14 +212,13 @@ class Net(nn.Module):
     def train_setup(self, prm):
         pass
 
-    def learn(self, train_data):
+    def learn(self, train_data, current_epoch=0):
         self.train()
         total_g_loss = 0.0
         total_d_loss = 0.0
 
-        # --- Final, conservative loss weights for stability ---
         recon_weight = 10.0
-        perc_weight = 1.0
+        perc_weight =  1.0
         kld_weight = 0.0000025
         adversarial_weight = 0.0001
 
