@@ -1,0 +1,329 @@
+# Auto-generated single-file for WindowAttentionGlobal
+# Dependencies are emitted in topological order (utilities first).
+# Standard library and external imports
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import Optional, Tuple
+import math
+import warnings
+import collections
+from itertools import repeat
+from typing import Optional
+def _assert(condition, message): assert condition, message
+from collections import *
+from typing import Tuple
+
+def to_2tuple(x):
+    if isinstance(x, (list, tuple)):
+        return tuple(x)
+    return (x, x)
+
+# ---- timm.layers.helpers._ntuple ----
+def _ntuple(n):
+    def parse(x):
+        if isinstance(x, collections.abc.Iterable) and not isinstance(x, str):
+            return tuple(x)
+        return tuple(repeat(x, n))
+    return parse
+
+# ---- timm.layers.grid.ndgrid ----
+def ndgrid(*tensors) -> Tuple[torch.Tensor, ...]:
+    """generate N-D grid in dimension order.
+
+    The ndgrid function is like meshgrid except that the order of the first two input arguments are switched.
+
+    That is, the statement
+    [X1,X2,X3] = ndgrid(x1,x2,x3)
+
+    produces the same result as
+
+    [X2,X1,X3] = meshgrid(x2,x1,x3)
+
+    This naming is based on MATLAB, the purpose is to avoid confusion due to torch's change to make
+    torch.meshgrid behaviour move from matching ndgrid ('ij') indexing to numpy meshgrid defaults of ('xy').
+
+    """
+    try:
+        return torch.meshgrid(*tensors, indexing='ij')
+    except TypeError:
+        # old PyTorch < 1.10 will follow this path as it does not have indexing arg,
+        # the old behaviour of meshgrid was 'ij'
+        return torch.meshgrid(*tensors)
+
+# ---- timm.layers.pos_embed_rel.gen_relative_position_index ----
+def gen_relative_position_index(
+        q_size: Tuple[int, int],
+        k_size: Optional[Tuple[int, int]] = None,
+        class_token: bool = False,
+) -> torch.Tensor:
+    # Adapted with significant modifications from Swin / BeiT codebases
+    # get pair-wise relative position index for each token inside the window
+    assert k_size is None, 'Different q & k sizes not currently supported'  # FIXME
+
+    coords = torch.stack(ndgrid(torch.arange(q_size[0]), torch.arange(q_size[1]))).flatten(1)  # 2, Wh, Ww
+    relative_coords = coords[:, :, None] - coords[:, None, :]  # 2, Wh*Ww, Wh*Ww
+    relative_coords = relative_coords.permute(1, 2, 0)  # Qh*Qw, Kh*Kw, 2
+    relative_coords[:, :, 0] += q_size[0] - 1  # shift to start from 0
+    relative_coords[:, :, 1] += q_size[1] - 1
+    relative_coords[:, :, 0] *= 2 * q_size[1] - 1
+    num_relative_distance = (2 * q_size[0] - 1) * (2 * q_size[1] - 1)
+
+    # else:
+    #     # FIXME different q vs k sizes is a WIP, need to better offset the two grids?
+    #     q_coords = torch.stack(
+    #         ndgrid(
+    #             torch.arange(q_size[0]),
+    #             torch.arange(q_size[1])
+    #         )
+    #     ).flatten(1)  # 2, Wh, Ww
+    #     k_coords = torch.stack(
+    #         ndgrid(
+    #             torch.arange(k_size[0]),
+    #             torch.arange(k_size[1])
+    #         )
+    #     ).flatten(1)
+    #     relative_coords = q_coords[:, :, None] - k_coords[:, None, :]  # 2, Wh*Ww, Wh*Ww
+    #     relative_coords = relative_coords.permute(1, 2, 0)  # Qh*Qw, Kh*Kw, 2
+    #     relative_coords[:, :, 0] += max(q_size[0], k_size[0]) - 1  # shift to start from 0
+    #     relative_coords[:, :, 1] += max(q_size[1], k_size[1]) - 1
+    #     relative_coords[:, :, 0] *= k_size[1] + q_size[1] - 1
+    #     relative_position_index = relative_coords.sum(-1)  # Qh*Qw, Kh*Kw
+    #     num_relative_distance = (q_size[0] + k_size[0] - 1) * (q_size[1] + k_size[1] - 1) + 3
+
+    relative_position_index = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
+
+    if class_token:
+        # handle cls to token & token 2 cls & cls to cls as per beit for rel pos bias
+        # NOTE not intended or tested with MLP log-coords
+        relative_position_index = F.pad(relative_position_index, [1, 0, 1, 0])
+        relative_position_index[0, 0:] = num_relative_distance
+        relative_position_index[0:, 0] = num_relative_distance + 1
+        relative_position_index[0, 0] = num_relative_distance + 2
+
+    return relative_position_index.contiguous()
+
+# ---- timm.layers.weight_init._trunc_normal_ ----
+def _trunc_normal_(tensor, mean, std, a, b):
+    # Cut & paste from PyTorch official master until it's in a few official releases - RW
+    # Method based on https://people.sc.fsu.edu/~jburkardt/presentations/truncated_normal.pdf
+    def norm_cdf(x):
+        # Computes standard normal cumulative distribution function
+        return (1. + math.erf(x / math.sqrt(2.))) / 2.
+
+    if (mean < a - 2 * std) or (mean > b + 2 * std):
+        warnings.warn("mean is more than 2 std from [a, b] in nn.init.trunc_normal_. "
+                      "The distribution of values may be incorrect.",
+                      stacklevel=2)
+
+    # Values are generated by using a truncated uniform distribution and
+    # then using the inverse CDF for the normal distribution.
+    # Get upper and lower cdf values
+    l = norm_cdf((a - mean) / std)
+    u = norm_cdf((b - mean) / std)
+
+    # Uniformly fill tensor with values from [l, u], then translate to
+    # [2l-1, 2u-1].
+    tensor.uniform_(2 * l - 1, 2 * u - 1)
+
+    # Use inverse cdf transform for normal distribution to get truncated
+    # standard normal
+    tensor.erfinv_()
+
+    # Transform to proper mean, std
+    tensor.mul_(std * math.sqrt(2.))
+    tensor.add_(mean)
+
+    # Clamp to ensure it's in the proper range
+    tensor.clamp_(min=a, max=b)
+    return tensor
+
+# ---- timm.layers.weight_init.trunc_normal_ ----
+def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
+    # type: (Tensor, float, float, float, float) -> Tensor
+    r"""Fills the input Tensor with values drawn from a truncated
+    normal distribution. The values are effectively drawn from the
+    normal distribution :math:`\mathcal{N}(\text{mean}, \text{std}^2)`
+    with values outside :math:`[a, b]` redrawn until they are within
+    the bounds. The method used for generating the random values works
+    best when :math:`a \leq \text{mean} \leq b`.
+
+    NOTE: this impl is similar to the PyTorch trunc_normal_, the bounds [a, b] are
+    applied while sampling the normal with mean/std applied, therefore a, b args
+    should be adjusted to match the range of mean, std args.
+
+    Args:
+        tensor: an n-dimensional `torch.Tensor`
+        mean: the mean of the normal distribution
+        std: the standard deviation of the normal distribution
+        a: the minimum cutoff value
+        b: the maximum cutoff value
+    Examples:
+        >>> w = torch.empty(3, 5)
+        >>> nn.init.trunc_normal_(w)
+    """
+    with torch.no_grad():
+        return _trunc_normal_(tensor, mean, std, a, b)
+
+# ---- timm.layers.pos_embed_rel.RelPosBias ----
+class RelPosBias(nn.Module):
+    """ Relative Position Bias
+    Adapted from Swin-V1 relative position bias impl, modularized.
+    """
+
+    def __init__(self, window_size, num_heads, prefix_tokens=0):
+        super().__init__()
+        assert prefix_tokens <= 1
+        self.window_size = window_size
+        self.window_area = window_size[0] * window_size[1]
+        self.bias_shape = (self.window_area + prefix_tokens,) * 2 + (num_heads,)
+
+        num_relative_distance = (2 * window_size[0] - 1) * (2 * window_size[1] - 1) + 3 * prefix_tokens
+        self.relative_position_bias_table = nn.Parameter(torch.zeros(num_relative_distance, num_heads))
+        self.register_buffer(
+            "relative_position_index",
+            gen_relative_position_index(self.window_size, class_token=prefix_tokens > 0).view(-1),
+            persistent=False,
+        )
+
+        self.init_weights()
+
+    def init_weights(self):
+        trunc_normal_(self.relative_position_bias_table, std=.02)
+
+    def get_bias(self) -> torch.Tensor:
+        relative_position_bias = self.relative_position_bias_table[self.relative_position_index]
+        # win_h * win_w, win_h * win_w, num_heads
+        relative_position_bias = relative_position_bias.view(self.bias_shape).permute(2, 0, 1)
+        return relative_position_bias.unsqueeze(0).contiguous()
+
+    def forward(self, attn, shared_rel_pos: Optional[torch.Tensor] = None):
+        return attn + self.get_bias()
+
+# ---- timm.layers.helpers.to_2tuple ----
+to_2tuple = _ntuple(2)
+
+# ---- WindowAttentionGlobal (target) ----
+class WindowAttentionGlobal(nn.Module):
+
+    def __init__(
+            self,
+            dim: int,
+            num_heads: int,
+            window_size: Tuple[int, int],
+            use_global: bool = True,
+            qkv_bias: bool = True,
+            attn_drop: float = 0.,
+            proj_drop: float = 0.,
+    ):
+        super().__init__()
+        window_size = to_2tuple(window_size)
+        self.window_size = window_size
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim ** -0.5
+        self.use_global = use_global
+
+        self.rel_pos = RelPosBias(window_size=window_size, num_heads=num_heads)
+        if self.use_global:
+            self.qkv = nn.Linear(dim, dim * 2, bias=qkv_bias)
+        else:
+            self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+    def forward(self, x, q_global: Optional[torch.Tensor] = None):
+        B, N, C = x.shape
+        if self.use_global and q_global is not None:
+            _assert(x.shape[-1] == q_global.shape[-1], 'x and q_global seq lengths should be equal')
+
+            kv = self.qkv(x)
+            kv = kv.reshape(B, N, 2, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+            k, v = kv.unbind(0)
+
+            q = q_global.repeat(B // q_global.shape[0], 1, 1, 1)
+            q = q.reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        else:
+            qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+            q, k, v = qkv.unbind(0)
+        q = q * self.scale
+
+        attn = q @ k.transpose(-2, -1).contiguous()  # NOTE contiguous() fixes an odd jit bug in PyTorch 2.0
+        attn = self.rel_pos(attn)
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+
+        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
+
+def supported_hyperparameters():
+    return ['lr', 'momentum']
+
+class Net(nn.Module):
+    def __init__(self, in_shape: tuple, out_shape: tuple, prm: dict, device) -> None:
+        super().__init__()
+        self.device = device
+        self.in_channels = in_shape[1]
+        self.image_size = in_shape[2]
+        self.num_classes = out_shape[0]
+        self.learning_rate = prm['lr']
+        self.momentum = prm['momentum']
+        self.features = self.build_features()
+        
+        self.window_attention_global = WindowAttentionGlobal(
+            dim=64,
+            num_heads=4,
+            window_size=(4, 4),
+            use_global=True,
+            qkv_bias=True,
+            attn_drop=0.0,
+            proj_drop=0.0
+        )
+        self.classifier = nn.Linear(64, self.num_classes)
+
+    def build_features(self):
+        layers = []
+        layers += [
+            nn.Conv2d(self.in_channels, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        ]
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        x = self.features(x)
+        B, C, H, W = x.shape
+        
+        x = F.adaptive_avg_pool2d(x, (4, 4))
+        B, C, H, W = x.shape
+        
+        x = x.view(B, C, H * W).transpose(1, 2)
+        
+        q_global = torch.randn(1, H * W, 64, device=x.device)
+        x = self.window_attention_global(x, q_global)
+        
+        x = x.mean(dim=1)
+        x = self.classifier(x)
+        return x
+
+    def train_setup(self, prm: dict):
+        self.optimizer = torch.optim.SGD(self.parameters(), lr=self.learning_rate, momentum=self.momentum)
+        self.criterion = nn.CrossEntropyLoss()
+
+    def learn(self, data_roll):
+        for data, target in data_roll:
+            data, target = data.to(self.device), target.to(self.device)
+            self.optimizer.zero_grad()
+            output = self.forward(data)
+            loss = self.criterion(output, target)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+            self.optimizer.step()
