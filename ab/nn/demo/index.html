@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text-to-Image Generation - Your Model</title>
+    <style>
+        body { font-family: Arial, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; height: 100vh; margin: 0; padding-top: 20px; }
+        h1 { position: absolute; top: 20px; }
+        .container { position: relative; display: flex; width: 80%; margin-left: 10%; margin-right: 5%; margin-top: 60px; justify-content: space-between; }
+        .left { display: flex; flex-direction: column; align-items: right; justify-content: center; width: 35%; margin-left: 10%; }
+        #prompt { width: 100%; height: 100px; margin-bottom: 20px; font-size: 16px; padding: 10px; box-sizing: border-box; resize: vertical; }
+        #generate-btn { padding: 10px 20px; font-size: 16px; cursor: pointer; }
+        .right { display: flex; flex-direction: column; align-items: right; width: 45%; }
+        #image { margin-top: 20px; width: 500px; height: 500px; border: 2px solid black; object-fit: contain; background-color: #f0f0f0; }
+        #loading-container { position: absolute; top: 0; left: 0; width: 100%; height: 85%; margin-top: 1%; background-color: rgba(0, 0, 0, 0.5); display: none; z-index: 100; justify-content: center; align-items: center; flex-direction: column; }
+        #loading-bar-container { width: 550px; height: 30px; background-color: white; border: 2px solid black; position: relative; }
+        #loading-bar { height: 100%; width: 0; background-color: #4caf50; }
+        #loading-percentage { position: absolute; width: 100%; height: 100%; top: 0; left: 0; display: flex; justify-content: center; align-items: center; font-size: 18px; font-weight: bold; color: black; }
+        h2 { margin-top: 50px; }
+        .collage-container { margin-top: 20px; margin-left: 25px; margin-right: 25px; width: 80%; display: flex; flex-wrap: wrap; justify-content: space-between; }
+        .collage-item { width: 19%; height: 300px; margin-bottom: 20px; border: 2px solid black; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; }
+        .collage-item img { width: 100%; height: 250px; object-fit: contain; background-color: #f0f0f0; }
+        .caption { text-align: center; font-size: 14px; padding: 5px; }
+        #image-url { margin-top: 10px; font-size: 14px; color: #333; word-break: break-all; }
+    </style>
+</head>
+<body>
+    <h1>Text-to-Image Generation (ConditionalVAE Model)</h1>
+    <div id="loading-container">
+        <div id="loading-text">Generating image... Please wait.</div>
+        <div id="loading-bar-container">
+            <div id="loading-bar"></div>
+            <div id="loading-percentage">0%</div>
+        </div>
+    </div>
+    <div class="container">
+        <div class="left">
+            <textarea id="prompt" placeholder="Enter a caption, e.g., 'a photo of a car'"></textarea>
+            <button id="generate-btn">Generate</button>
+            <div id="image-url"></div>
+        </div>
+        <div class="right">
+            <img id="image" src="" alt="Generated image will appear here">
+        </div>
+    </div>
+    <h2>Gallery of Generated Images</h2>
+    <div class="collage-container" id="collage-container"></div>
+    <script>
+        // Updated port to 8003
+        const serverUrl = 'http://10.85.13.56:8003/';
+
+        const collageContainer = document.getElementById('collage-container');
+        const loadingContainer = document.getElementById('loading-container');
+        const loadingBar = document.getElementById('loading-bar');
+        const loadingPercentage = document.getElementById('loading-percentage');
+        const imageElement = document.getElementById('image');
+        const generateButton = document.getElementById('generate-btn');
+        const imageUrlElement = document.getElementById('image-url');
+
+        document.getElementById('generate-btn').addEventListener('click', async () => {
+            const prompt = document.getElementById('prompt').value;
+            if (prompt) {
+                loadingContainer.style.display = 'flex';
+                loadingBar.style.width = '0';
+                loadingPercentage.innerText = '0%';
+                generateButton.disabled = true;
+
+                // Simulate progress. Adjust time based on your model's speed.
+                let progress = 0;
+                const maxTime = 90000; // 90 seconds
+                const interval = setInterval(() => {
+                    progress += 1.66;
+                    if (progress <= 100) {
+                        loadingBar.style.width = progress + '%';
+                        loadingPercentage.innerText = Math.round(progress) + '%';
+                    } else {
+                        clearInterval(interval);
+                    }
+                }, maxTime / 100);
+
+                const response = await fetch(serverUrl + 'generate_image', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt }),
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    // Construct the full URL to the single 256x256 image
+                    const imageUrl = serverUrl + 'generated_images/' + data.image_url;
+
+                    // Display the generated image
+                    imageElement.src = imageUrl;
+
+                    // Display the link to the image
+                    imageUrlElement.innerHTML = `
+                        <p style="margin: 5px 0 0; font-size: 14px; color: #333;">
+                            Image generated! Link:
+                            <a href="${imageUrl}" target="_blank">${imageUrl}</a>
+                        </p>`;
+
+                    // Add the generated image to the collage
+                    const collageItem = document.createElement('div');
+                    collageItem.className = 'collage-item';
+                    const imgElement = document.createElement('img');
+                    imgElement.src = imageUrl;
+                    const captionElement = document.createElement('div');
+                    captionElement.className = 'caption';
+                    captionElement.innerText = prompt;
+                    collageItem.appendChild(imgElement);
+                    collageItem.appendChild(captionElement);
+                    collageContainer.appendChild(collageItem);
+
+                    clearInterval(interval);
+                    loadingBar.style.width = '100%';
+                    loadingPercentage.innerText = '100%';
+                } else {
+                    alert('Failed to generate image');
+                }
+
+                setTimeout(() => {
+                    loadingContainer.style.display = 'none';
+                    generateButton.disabled = false;
+                }, 500);
+
+            } else {
+                alert('Please enter a caption');
+            }
+        });
+    </script>
+</body>
+</html>
