@@ -292,5 +292,6 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             if trainer: del trainer.model
         except NameError:
             pass
+        release_memory()
 
     return model_name, accuracy, accuracy_to_time, res['score']
