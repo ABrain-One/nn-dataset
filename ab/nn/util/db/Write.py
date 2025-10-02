@@ -1,4 +1,4 @@
-import json
+from tqdm import tqdm
 
 from ab.nn.util.Util import *
 from ab.nn.util.db.Init import init_db, sql_conn, close_conn
@@ -89,7 +89,8 @@ def json_n_code_to_db():
     stat_base_path = Path(stat_dir)
     sub_configs = [d.name for d in stat_base_path.iterdir() if d.is_dir()]
 
-    for sub_config_str in sub_configs:
+    print(f"Import all statistics from JSON files in {stat_dir} into database {db_file}")
+    for sub_config_str in tqdm(sub_configs):
         model_stat_dir = stat_base_path / sub_config_str
 
         for epoch_file in Path(model_stat_dir).iterdir():
