@@ -103,15 +103,15 @@ All versions of this project are compatible with <a href='https://hub.docker.com
 
 Installing the latest version of the project from GitHub
 ```bash
-docker run --rm -u $(id -u):ab -v $(pwd):/a/mm abrainone/ai-linux bash -c "[ -d nn-dataset ] && git -C nn-dataset pull || git -c advice.detachedHead=false clone --depth 1 https://github.com/ABrain-One/nn-dataset"
+docker run --rm -u $(id -u):ab -v $(pwd):/a/mm abrainone/ai-linux:cv bash -c "[ -d nn-dataset ] && git -C nn-dataset pull || git -c advice.detachedHead=false clone --depth 1 https://github.com/ABrain-One/nn-dataset"
 ```
 
 Running a quick training script:
 ```bash
-docker run --rm -u $(id -u):ab --shm-size=16G -v $(pwd)/nn-dataset:/a/mm abrainone/ai-linux bash -c ". train.sh -c img-classification_cifar-10_acc_ComplexNet -f complex -l 0.017 --min_learning_rate 0.013 -m 0.025 --min_momentum 0.022 -b 7 --min_batch_binary_power 8 --max_batch_binary_power 9"
+docker run --rm -u $(id -u):ab --shm-size=16G -v $(pwd)/nn-dataset:/a/mm abrainone/ai-linux:cv bash -c ". train.sh -c img-classification_cifar-10_acc_ComplexNet -f complex -l 0.017 --min_learning_rate 0.013 -m 0.025 --min_momentum 0.022 -b 7 --min_batch_binary_power 8 --max_batch_binary_power 9"
 ```
 
-If recently added dependencies are missing in the <a href='https://hub.docker.com/r/abrainone/ai-linux' target='_blank'>AI Linux</a>, you can create a container from the Docker image ```abrainone/ai-linux```, install the missing packages (preferably using ```pip install <package name>```), and then create a new image from the container using ```docker commit <container name> <new image name>```. You can use this new image locally or push it to the registry for deployment on the computer cluster.
+If recently added dependencies are missing in the <a href='https://hub.docker.com/r/abrainone/ai-linux' target='_blank'>AI Linux</a>, you can create a container from the Docker image ```abrainone/ai-linux:cv```, install the missing packages (preferably using ```pip install <package name>```), and then create a new image from the container using ```docker commit <container name> <new image name>```. You can use this new image locally or push it to the registry for deployment on the computer cluster.
 
 ## Contribution
 
