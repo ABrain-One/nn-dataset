@@ -97,7 +97,7 @@ where:
 ```
 
 ### Docker
-All versions of this project are compatible with <a href='https://hub.docker.com/r/abrainone/ai-linux:cv' target='_blank'>AI Linux</a> and can be seamlessly executed within the AI Linux Docker container.
+All versions of this project are compatible with <a href='https://hub.docker.com/r/abrainone/ai-linux' target='_blank'>AI Linux</a> and can be seamlessly executed within the AI Linux Docker container.
 
 <h4>Example of training LEMUR neural network within the AI Linux container (Linux host):</h4>
 
