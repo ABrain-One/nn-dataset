@@ -13,7 +13,7 @@ import uvicorn
 print("--- Loading Your Custom ConditionalVAE4 Model ---")
 from ab.nn.nn.ConditionalVAE4 import Net
 
-WEIGHTS_PATH = "checkpoints/ConditionalVAE4/best_model.pth"
+WEIGHTS_PATH = "out/checkpoints/ConditionalVAE4/best_model.pth"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load your CVAE-GAN architecture and weights
