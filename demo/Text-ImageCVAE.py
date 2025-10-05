@@ -8,12 +8,13 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+from ab.nn.util.Util import out_dir
 
 # --- 1. Load Your Custom ConditionalVAE4 Model ---
 print("--- Loading Your Custom ConditionalVAE4 Model ---")
 from ab.nn.nn.ConditionalVAE4 import Net
 
-WEIGHTS_PATH = "out/checkpoints/ConditionalVAE4/best_model.pth"
+WEIGHTS_PATH = out_dir / 'checkpoints' / 'ConditionalVAE4' / 'best_model.pth'
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load your CVAE-GAN architecture and weights
@@ -29,7 +30,7 @@ model.eval()
 print(f"--- Model 'ConditionalVAE4' Ready ---")
 
 # --- 2. FastAPI Web Server ---
-OUTPUT_DIR = "out/generated_images"
+OUTPUT_DIR = out_dir / 'generated_images'
 
 app = FastAPI()
 

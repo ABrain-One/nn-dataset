@@ -6,6 +6,7 @@ import torch
 import os
 import argparse
 import importlib
+from ab.nn.util.Util import out_dir
 
 # --- Make sure this import path is correct for your project ---
 from ab.nn.util.Util import export_torch_weights
@@ -27,7 +28,7 @@ def save_best_model(model_name):
     ]
 
     # --- THE FIX: Directly load the single best checkpoint ---
-    checkpoint_dir = os.path.join("checkpoints", model_name)
+    checkpoint_dir = out_dir / 'checkpoints' /  model_name
     best_checkpoint_path = os.path.join(checkpoint_dir, "best_model.pth")
 
     if not os.path.exists(best_checkpoint_path):
