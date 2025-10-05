@@ -1,3 +1,6 @@
+# File: Text2Image.py
+# Description: A unified and robust dataloader for text-to-image tasks,
+#              compatible with the LEMUR framework and all CVAE models.
 
 import os
 import random
@@ -20,9 +23,15 @@ NORM_MEAN = (0.5, 0.5, 0.5)
 NORM_DEV = (0.5, 0.5, 0.5)
 
 TARGET_CATEGORIES = ['car']
+DEFAULT_IMAGE_SIZE = 256  # Fallback size
 
 
 class Text2Image(Dataset):
+    """
+    A PyTorch Dataset for loading COCO image-caption pairs, filtered by category.
+    Includes robust error handling for missing or corrupt image files.
+    """
+
     def __init__(self, root, split='train', transform=None):
         super().__init__()
         self.root = root
@@ -37,6 +46,7 @@ class Text2Image(Dataset):
         captions_ann_file = join(ann_dir, f'captions_{split}2017.json')
         self.coco = COCO(captions_ann_file)
 
+        # Filter image IDs to only include those with the target categories
         if TARGET_CATEGORIES:
             instances_ann_file = join(ann_dir, f'instances_{split}2017.json')
             coco_instances = COCO(instances_ann_file)
@@ -62,12 +72,14 @@ class Text2Image(Dataset):
         try:
             image = Image.open(img_path).convert('RGB')
         except (IOError, FileNotFoundError):
+            # This robust error handling prevents training crashes from bad data
             print(f"Warning: Could not load image {img_path}. Skipping.")
             return self.__getitem__((index + 1) % len(self))
 
         if self.transform:
             image = self.transform(image)
 
+        # Return (image, text) for training and (image, dummy_tensor) for validation
         if self.split == 'train':
             ann_ids = self.coco.getAnnIds(imgIds=img_id)
             anns = self.coco.loadAnns(ann_ids)
@@ -79,27 +91,28 @@ class Text2Image(Dataset):
 
 
 def loader(transform_fn, task, **kwargs):
+    """
+    The main entry point for the LEMUR framework. It creates a robust, global
+    transform pipeline that works for all text-to-image models.
+    """
     if 'txt-image' not in task.strip().lower():
         raise ValueError(f"The task '{task}' is not a text-to-image task for this dataloader.")
 
-    # --- THE DEFINITIVE FIX ---
-    # Inspect the transform provided by the framework to get the target image size
-    example_transform = transform_fn((NORM_MEAN, NORM_DEV))
-    resize_step = example_transform.transforms[0]
-
-    # Extract the integer size (e.g., 256) from the resize step
-    image_size = -1
-    if hasattr(resize_step, 'size'):
-        size_attr = getattr(resize_step, 'size')
-        image_size = size_attr if isinstance(size_attr, int) else size_attr[0]
-
-    if image_size == -1:
-        raise ValueError("Could not determine image size from the provided transform.")
+    # --- THE ROBUST GLOBAL TRANSFORM ---
+    # Intelligently inspect the framework's transform to get the target size
+    try:
+        example_transform = transform_fn((NORM_MEAN, NORM_DEV))
+        resize_step = next((t for t in example_transform.transforms if isinstance(t, T.Resize)), None)
+        image_size = resize_step.size if isinstance(resize_step.size, int) else resize_step.size[0]
+    except (AttributeError, TypeError, StopIteration):
+        print(
+            f"Warning: Could not determine image size from transform. Falling back to {DEFAULT_IMAGE_SIZE}x{DEFAULT_IMAGE_SIZE}.")
+        image_size = DEFAULT_IMAGE_SIZE
 
     # Rebuild the transform pipeline correctly, adding the crucial CenterCrop step
     final_transform = T.Compose([
         T.Resize(image_size),
-        T.CenterCrop(image_size),  # <-- THE FIX: Ensures a square image
+        T.CenterCrop(image_size),  # <-- This is the fix that ensures all images are square
         T.ToTensor(),
         T.Normalize(NORM_MEAN, NORM_DEV)
     ])
@@ -108,4 +121,10 @@ def loader(transform_fn, task, **kwargs):
     path = join(data_dir, 'coco')
     train_dataset = Text2Image(root=path, split='train', transform=final_transform)
     val_dataset = Text2Image(root=path, split='val', transform=final_transform)
-    return (None,), 0.0, train_dataset, val_dataset
+
+    # Define shapes for the framework
+    out_shape = (3, image_size, image_size)
+    in_shape = {'vocab_size': 30000}  # Placeholder, not used by CVAE models
+    class_names = None
+
+    return (in_shape, out_shape, class_names), 0.0, train_dataset, val_dataset
