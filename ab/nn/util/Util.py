@@ -227,9 +227,8 @@ def args():
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--config', type=str, default=default_config,
                         help="Configuration specifying the model training pipelines. The default value for all configurations.")
-    parser.add_argument('-p', '--nn_prm', type=json.loads, default=default_nn_hyperparameters,  # line 193
-                        help="JSON string with fixed hyperparameter values, e.g. -p '{\"lr\": 0.001}'")
-
+    parser.add_argument('-p', '--nn_prm', type=json.loads, default=default_nn_hyperparameters,
+                        help="JSON string with fixed hyperparameter values for neural network training, e.g. -p '{\"lr\": 0.0061, \"momentum\": 0.7549, \"batch\": 4}'")
     parser.add_argument('-e', '--epochs', type=int, default=default_epochs,
                         help="Numbers of training epochs.")
     parser.add_argument('-t', '--trials', type=int, default=default_trials,
