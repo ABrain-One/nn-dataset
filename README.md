@@ -142,9 +142,8 @@ The LEMUR API is designed for agents as well as for researches. By using `data()
 1.  **Data Access Scale:** Instantly retrieve performance benchmarks validated across a **large quantity** of diverse architectural and hyperparameter configurations.
 2.  **Focus on Generation:** Use `check_nn()` to automate the validation of your new, unique architectures.
 3.  **Computational Efficiency:** Prioritize allocation of high-cost computational resources (GPU/TPU) exclusively toward training novel architectures.
-<br/>
 
-### Docker
+### 🐳 Docker
 All versions of this project are compatible with <a href='https://hub.docker.com/r/abrainone/ai-linux' target='_blank'>AI Linux</a> and can be seamlessly executed within the AI Linux Docker container.
 
 <h4>Example of training LEMUR neural network within the AI Linux container (Linux host):</h4>
