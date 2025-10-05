@@ -137,8 +137,7 @@ This function is the **submission endpoint** for new models.
 
 ### 🚀 Get Started: Build Smarter, Train Less
 
-The LEMUR API is designed for agents as well as for researches. By using `data()`, you can instantly access the **Access to validated performance data resulting from extensive computations**. Instead of dedicating weeks of expensive hardware time to replicate known results or blindly test configurations, you can now:
-
+The LEMUR API is designed for artificial agents, as well as for students and scientists. Using `data()`, provides immediate access to **validated performance data derived from extensive computations**. Instead of dedicating weeks of expensive hardware time to replicate known results or blindly test configurations, you can now:
 1.  **Data Access Scale:** Instantly retrieve performance benchmarks validated across a **large quantity** of diverse architectural and hyperparameter configurations.
 2.  **Focus on Generation:** Use `check_nn()` to automate the validation of your new, unique architectures.
 3.  **Computational Efficiency:** Prioritize allocation of high-cost computational resources (GPU/TPU) exclusively toward training novel architectures.
