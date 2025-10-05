@@ -1,4 +1,4 @@
-# File: ab/nn/demo/Text-ImageCVAE.py
+# File: demo/Text-ImageCVAE.py
 # Description: A dedicated demo script for the ConditionalVAE4 model.
 
 import torch
@@ -29,7 +29,7 @@ model.eval()
 print(f"--- Model 'ConditionalVAE4' Ready ---")
 
 # --- 2. FastAPI Web Server ---
-OUTPUT_DIR = "ab/nn/demo/generated_images"
+OUTPUT_DIR = "out/generated_images"
 
 app = FastAPI()
 
@@ -49,7 +49,7 @@ class Prompt(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
-    return FileResponse('ab/nn/demo/index.html')
+    return FileResponse('demo/Text-ImageCVAE.html')
 
 
 @app.post("/generate")
