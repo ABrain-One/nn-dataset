@@ -50,14 +50,6 @@ and export/generate:
 python -m ab.stat.export
 ```
 
-## Environment for NN Dataset Contributors
-### Pip package manager
-Create a virtual environment, activate it, and run the following command to install all the project dependencies:
-```bash
-python -m pip install --upgrade pip
-pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu126
-```
-
 ## Usage
 
 Standard use cases:
@@ -96,6 +88,62 @@ where:
 . train.sh -h
 ```
 
+
+## 💻 API: Programmatic Access
+
+The **LEMUR NN Dataset API** (`ab.nn.api`) is the dedicated programmatic interface for both querying validated deep learning experiment data and submitting new neural network configurations for automatic training and archival. It is the essential layer supporting modern AutoML systems, including the NNGPT framework.
+
+### Why the API is Important
+
+The API solves the problem of **costly and time-consuming model validation**. By providing two distinct and powerful functions, it transforms the bottleneck of "waiting for results" into two key steps: instant query and automated validation.
+
+1.  **Enables Predictive Models:** Access to the full historical data allows researchers to train **performance prediction models** that can estimate a model's final accuracy *before* any training begins, saving massive amounts of compute time.
+2.  **Facilitates LLM Feedback:** The API acts as the crucial feedback mechanism for LLMs (like NNGPT). Generated architectures are validated via `check_nn`, and the results are immediately fed back into the dataset via `data()`, enabling the LLM to iteratively improve its quality based on its own outputs.
+
+### Data Extraction and Mechanism
+
+The core value of the API is the ability to retrieve complete, validated experimental records and submit new code for verification.
+
+#### 1. The `data()` Function for Data Retrieval
+
+```python
+def data(...) -> pandas.DataFrame
+```
+
+| Data Type Extracted | DataFrame Column Name | Description |
+| :--- | :--- | :--- |
+| **Model Python Code** | `'nn_code'` | The **exact Python code (as a string)** defining the neural network's architecture. |
+| **Hyperparameters** | `'prm'` | The **exact dictionary of hyperparameters** (e.g., `{'lr': 0.01, 'momentum': 0.9}`) used for this specific run. |
+| **Performance Metric** | `'accuracy'` | The **metric value** (e.g., accuracy) achieved in the experiment, recorded at the `'epoch'` specified. |
+| **Execution Time** | `'duration'` | The wall-clock time required for the training run, ns. |
+
+**Mechanism:** Users filter the database using optional arguments (`task`, `dataset`, `nn`, etc.). The returned DataFrame allows external programs (such as statistical models or benchmark scripts) to easily consume the structured data for large-scale analysis. The optional `only_best_accuracy=True` ensures efficiency by returning only the best-performing trial for each unique configuration.
+
+#### 2. The `check_nn()` Function for NN Validation
+
+```python
+def check_nn(nn_code: str, task: str, dataset: str, metric: str, prm: dict, ...) -> tuple[str, float, float, float]
+```
+
+This function is the **submission endpoint** for new models.
+
+1.  **Input:** An external program (e.g., an LLM agent) provides the new model's `nn_code` (as a string), the `prm` dictionary, and the context (`task`, `dataset`, `metric`).
+2.  **Process:** The function automatically initiates the full training pipeline, running the code under standardized conditions for a set duration (`epoch_limit_minutes`).
+3.  **Output:** It returns a tuple containing the key validated metrics, ready for consumption by an LLM or an external optimization loop:
+    * **NN Model Name (`str`):** An automatically generated unique ID for the archived model.
+    * **Accuracy (`float`):** The measured final performance.
+    * **Accuracy to Time Metric (`float`):** A single metric balancing performance against compute efficiency.
+    * **Quality of the Code Metric (`float`):** A score assessing the structural integrity of the submitted code.
+
+### 🚀 Get Started: Build Smarter, Train Less
+
+The LEMUR API is designed for agents as well as for researches. By using `data()`, you can instantly access the **Access to validated performance data resulting from extensive computations**. Instead of dedicating weeks of expensive hardware time to replicate known results or blindly test configurations, you can now:
+
+1.  **Data Access Scale:** Instantly retrieve performance benchmarks validated across a **large quantity** of diverse architectural and hyperparameter configurations.
+2.  **Focus on Generation:** Use `check_nn()` to automate the validation of your new, unique architectures.
+3.  **Computational Efficiency:** Prioritize allocation of high-cost computational resources (GPU/TPU) exclusively toward training novel architectures.
+<br/>
+
 ### Docker
 All versions of this project are compatible with <a href='https://hub.docker.com/r/abrainone/ai-linux' target='_blank'>AI Linux</a> and can be seamlessly executed within the AI Linux Docker container.
 
@@ -112,6 +160,15 @@ docker run --rm -u $(id -u):ab --shm-size=16G -v $(pwd)/nn-dataset:/a/mm abraino
 ```
 
 If recently added dependencies are missing in the <a href='https://hub.docker.com/r/abrainone/ai-linux' target='_blank'>AI Linux</a>, you can create a container from the Docker image ```abrainone/ai-linux:cv```, install the missing packages (preferably using ```pip install <package name>```), and then create a new image from the container using ```docker commit <container name> <new image name>```. You can use this new image locally or push it to the registry for deployment on the computer cluster.
+
+
+## Environment for NN Dataset Contributors
+### Pip package manager
+Create a virtual environment, activate it, and run the following command to install all the project dependencies:
+```bash
+python -m pip install --upgrade pip
+pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu126
+```
 
 ## Contribution
 
