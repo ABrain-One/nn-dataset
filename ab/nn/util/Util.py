@@ -1,4 +1,14 @@
-import argparse, json, datetime, gc, hashlib, inspect, random, re, importlib.util, torch
+import argparse
+import datetime
+import gc
+import hashlib
+import importlib.util
+import inspect
+import random
+import re
+import json
+
+import torch
 from os import makedirs, remove
 from os.path import exists
 
@@ -58,6 +68,11 @@ def order_configs(configs, random_config_order):
 def conf_to_names(c: str) -> tuple[str, ...]:
     return tuple(c.split(config_splitter))
 
+
+def add_categorical_if_absent(trial, prms, nm, fn, default=None):
+    if not (nm in prms and prms[nm]):
+        prms[nm] = trial.suggest_categorical(nm, default or fn())
+    return prms[nm]
 
 def is_full_config(l: list[str] | tuple[str, ...]):
     return 4 == len(l) and (nn_dir / (l[-1] + '.py')).exists()
@@ -181,18 +196,40 @@ def export_model_to_onnx(model, dummy_input):
     print(f"Exported neural network to ONNX format at {onnx_file}")
 
 
-def add_categorical_if_absent(trial, prms, nm, fn, default=None):
-    if not (nm in prms and prms[nm]):
-        prms[nm] = trial.suggest_categorical(nm, default or fn())
-    return prms[nm]
+
+   #  FUNCTIONS FOR SAVING AND LOADING WEIGHTS
+
+def export_torch_weights(model, path):
+    """
+    Saves the trained weights of a model's state_dict to the specified path.
+    This is a general function that can be used for any PyTorch model.
+    """
+    print(f"Exporting model weights to {path}...")
+    torch.save(model.state_dict(), path)
+    print(f"Export complete. Weights saved to {path}")
+
+
+def load_torch_weights(model, path):
+    """
+    Loads trained weights from a .pth file into a model instance.
+    This is a general function that can be used for any PyTorch model.
+    """
+    device = next(model.parameters()).device
+    if os.path.exists(path):
+        print(f"Loading weights from {path}...")
+        model.load_state_dict(torch.load(path, map_location=device))
+        print("Weights loaded successfully.")
+    else:
+        raise FileNotFoundError(f"Weights file not found at {path}. Cannot load model.")
 
 
 def args():
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--config', type=str, default=default_config,
                         help="Configuration specifying the model training pipelines. The default value for all configurations.")
-    parser.add_argument('-p', '--nn_prm', type=json.loads, default=default_nn_hyperparameters,
-                        help="JSON string with fixed hyperparameter values for neural network training, e.g. -p '{\"lr\": 0.0061, \"momentum\": 0.7549, \"batch\": 4}'")
+    parser.add_argument('-p', '--nn_prm', type=json.loads, default=default_nn_hyperparameters,  # line 193
+                        help="JSON string with fixed hyperparameter values, e.g. -p '{\"lr\": 0.001}'")
+
     parser.add_argument('-e', '--epochs', type=int, default=default_epochs,
                         help="Numbers of training epochs.")
     parser.add_argument('-t', '--trials', type=int, default=default_trials,

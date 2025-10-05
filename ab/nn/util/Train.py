@@ -1,14 +1,14 @@
-import importlib, sys
-
-import numpy as np
+import importlib
+import sys
 import time as time
-import ab.nn.util.CodeEval as codeEvaluator
-import ab.nn.util.db.Write as DB_Write
-
 from os.path import join
 from typing import Union
+
+import numpy as np
 from torch.cuda import OutOfMemoryError
 
+import ab.nn.util.CodeEval as codeEvaluator
+import ab.nn.util.db.Write as DB_Write
 from ab.nn.util.Classes import DataRoll
 from ab.nn.util.Exception import *
 from ab.nn.util.Loader import load_dataset
@@ -68,7 +68,6 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
                 return accuracy_duration
             else:
                 raise NNException()
-
 
 def train_loader_f(train_dataset, batch, num_workers):
     return torch.utils.data.DataLoader(train_dataset, batch_size=batch, shuffle=True,
@@ -166,12 +165,12 @@ class Train:
                                         f"Accuracy is too low: {accuracy}."
                                         f" The minimum accepted accuracy for the '{self.config[1]}"
                                         f"' dataset is {self.minimum_accuracy}.")
-            only_prm = {k: v for k, v in self.prm.items() if k not in {'uid', 'duration', 'accuracy', 'epoch'}}
+            only_prm = {k: v for k, v in self.prm.items() if  k not in {'uid', 'duration', 'accuracy', 'epoch'}}
             prm = merge_prm(self.prm, {'uid': uuid4(only_prm), 'duration': duration, 'accuracy': accuracy})
             if self.save_to_db:
                 if self.is_code:  # We don't want the filename to contain full codes
                     if self.save_path is None:
-                        print(f"[WARN]parameter `save_Path` set to null, the statics will not be saved into a file.")
+                        print(f"[WARN]parameter `save_Path` set to null, the staticis will not be saved into a file.")
                     else:
                         save_results(self.config + (epoch,), join(self.save_path, f"{epoch}.json"), prm)
                 else:  # Legacy save result codes in file
@@ -197,9 +196,7 @@ class Train:
 
         with torch.no_grad():
             for inputs, labels in test_loader:
-                inputs = inputs.to(self.device)
-                if torch.is_tensor(labels):
-                    labels = labels.to(self.device) #if statement for removing Image generation error
+                inputs, labels = inputs.to(self.device), labels.to(self.device)
                 outputs = self.model(inputs)
 
                 # Call the metric - all metrics now use the same interface
@@ -209,7 +206,7 @@ class Train:
         return self.metric_function.result()
 
 
-def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Union[str, None] = None, save_path: Union[str, None] = None, export_onnx=False, epoch_limit_minutes=default_epoch_limit_minutes, transform_dir= None):
+def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Union[str, None] = None, save_path: Union[str, None] = None, export_onnx=False, epoch_limit_minutes=default_epoch_limit_minutes):
     """
     train the model with the given code and hyperparameters and evaluate it.
 
@@ -240,7 +237,7 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             f.write(nn_code)  # write the code to the temp file
         res = codeEvaluator.evaluate_single_file(temp_file_path)
         # load dataset
-        out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset, prm['transform'], transform_dir)
+        out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset, prm['transform'])
         num_workers = prm.get('num_workers', 1)
         # initialize model and trainer
         trainer = Train(
