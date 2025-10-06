@@ -53,8 +53,8 @@ python -m ab.stat.export
 ## Usage
 
 Standard use cases:
-1. Add a new neural network model into the `ab/nn/nn` directory.
-2. Run the automated training process for this model (e.g., a new ComplexNet training pipeline configuration):
+
+Run the automated training process for this model (e.g., a new ComplexNet training pipeline configuration):
 ```bash
 python -m ab.nn.train -c img-classification_cifar-10_acc_ComplexNet
 ```
@@ -87,6 +87,8 @@ where:
 ```bash
 . train.sh -h
 ```
+
+**Add your new neural network model to the `ab/nn/nn` directory and proceed with your experiments (see [Contribution](#contribution) for details).**
 
 
 ## 💻 API: Programmatic Access
