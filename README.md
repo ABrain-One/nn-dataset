@@ -24,7 +24,7 @@ The original version of the <a href='https://github.com/ABrain-One/nn-dataset'>L
    - [The `data()` Function for Data Retrieval](#1-the-data-function-for-data-retrieval)
    - [The `check_nn()` Function for NN Validation](#2-the-check_nn-function-for-nn-validation)
    - [🚀 Get Started: Build Smarter, Train Less](#-get-started-build-smarter-train-less)
-5. [Docker](#docker)
+5. [🐳 Docker](#docker)
    - [Example of Training LEMUR Neural Network within AI Linux Container](#example-of-training-lemur-neural-network-within-ai-linux-container-linux-host)
 6. [Environment for NN Dataset Contributors](#environment-for-nn-dataset-contributors)
    - [Pip Package Manager](#pip-package-manager)
