@@ -163,7 +163,7 @@ This function is the **submission endpoint** for new models.
     * **Accuracy to Time Metric (`float`):** A single metric balancing performance against compute efficiency.
     * **Quality of the Code Metric (`float`):** A score assessing the structural integrity of the submitted code.
 
-### 🚀 Get Started: Build Smarter, Train Less
+#### 🚀 Get Started: Build Smarter, Train Less
 
 The LEMUR API is designed for artificial agents, as well as for students and scientists. Using `data()`, provides immediate access to **validated performance data derived from extensive computations**. Instead of dedicating weeks of expensive hardware time to replicate known results or blindly test configurations, you can now:
 1.  **Data Access Scale:** Instantly retrieve performance benchmarks validated across a **large quantity** of diverse architectural and hyperparameter configurations.
