@@ -1,3 +1,6 @@
+# File: Text2Image.py
+# Description: A unified and robust dataloader for text-to-image tasks,
+#              compatible with the LEMUR framework and all CVAE models.
 
 import os
 import random
@@ -113,6 +116,7 @@ def loader(transform_fn, task, **kwargs):
         T.ToTensor(),
         T.Normalize(NORM_MEAN, NORM_DEV)
     ])
+    # --- END OF FIX ---
 
     path = join(data_dir, 'coco')
     train_dataset = Text2Image(root=path, split='train', transform=final_transform)
