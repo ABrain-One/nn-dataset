@@ -1,14 +1,14 @@
-import importlib, sys
-
-import numpy as np
+import importlib
+import sys
 import time as time
-import ab.nn.util.CodeEval as codeEvaluator
-import ab.nn.util.db.Write as DB_Write
-
 from os.path import join
 from typing import Union
+
+import numpy as np
 from torch.cuda import OutOfMemoryError
 
+import ab.nn.util.CodeEval as codeEvaluator
+import ab.nn.util.db.Write as DB_Write
 from ab.nn.util.Classes import DataRoll
 from ab.nn.util.Exception import *
 from ab.nn.util.Loader import load_dataset
@@ -68,7 +68,6 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
                 return accuracy_duration
             else:
                 raise NNException()
-
 
 def train_loader_f(train_dataset, batch, num_workers):
     return torch.utils.data.DataLoader(train_dataset, batch_size=batch, shuffle=True,
@@ -166,7 +165,7 @@ class Train:
                                         f"Accuracy is too low: {accuracy}."
                                         f" The minimum accepted accuracy for the '{self.config[1]}"
                                         f"' dataset is {self.minimum_accuracy}.")
-            only_prm = {k: v for k, v in self.prm.items() if k not in {'uid', 'duration', 'accuracy', 'epoch'}}
+            only_prm = {k: v for k, v in self.prm.items() if  k not in {'uid', 'duration', 'accuracy', 'epoch'}}
             prm = merge_prm(self.prm, {'uid': uuid4(only_prm), 'duration': duration, 'accuracy': accuracy})
             if self.save_to_db:
                 if self.is_code:  # We don't want the filename to contain full codes
@@ -197,9 +196,7 @@ class Train:
 
         with torch.no_grad():
             for inputs, labels in test_loader:
-                inputs = inputs.to(self.device)
-                if torch.is_tensor(labels):
-                    labels = labels.to(self.device) #if statement for removing Image generation error
+                inputs, labels = inputs.to(self.device), labels.to(self.device)
                 outputs = self.model(inputs)
 
                 # Call the metric - all metrics now use the same interface
