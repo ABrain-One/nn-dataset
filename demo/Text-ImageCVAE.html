@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Text-to-Image Demo</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; display: flex; flex-direction: column; align-items: center; margin-top: 50px; background-color: #f4f4f9; color: #333; }
+        #container { max-width: 512px; width: 90%; padding: 25px; border: 1px solid #ddd; border-radius: 8px; background-color: white; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        h2 { text-align: center; color: #007bff; }
+        input { width: 100%; padding: 12px; margin-bottom: 12px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; font-size: 16px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.2s; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #aaa; cursor: not-allowed; }
+        #image-container { margin-top: 20px; min-height: 256px; border: 2px dashed #ddd; border-radius: 4px; display: flex; justify-content: center; align-items: center; overflow: hidden; }
+        img { max-width: 100%; display: none; }
+        #status { text-align: center; color: #555; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <h2>Image Generation Demo</h2>
+        <p>Enter a prompt to generate an image.</p>
+        <input type="text" id="prompt-input" placeholder="e.g., a photo of a car on a highway at sunset">
+        <button id="generate-btn" onclick="generateImage()">Generate Image</button>
+        <div id="image-container">
+            <p id="status">Your generated image will appear here.</p>
+            <img id="result-img" src="">
+        </div>
+    </div>
+
+    <script>
+        async function generateImage() {
+            const promptInput = document.getElementById('prompt-input');
+            const generateBtn = document.getElementById('generate-btn');
+            const resultImg = document.getElementById('result-img');
+            const statusText = document.getElementById('status');
+
+            if (!promptInput.value) {
+                alert('Please enter a prompt.');
+                return;
+            }
+
+            generateBtn.disabled = true;
+            generateBtn.innerText = 'Generating...';
+            resultImg.style.display = 'none';
+            statusText.style.display = 'block';
+            statusText.innerText = 'Generating image, this may take a moment...';
+
+            try {
+                // This relative path will work correctly with any host or port.
+                const response = await fetch('/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: promptInput.value })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                if (data.image_path) {
+                    resultImg.src = data.image_path + '?t=' + new Date().getTime();
+                    resultImg.style.display = 'block';
+                    statusText.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                statusText.innerText = 'An error occurred. Please check the server logs.';
+            } finally {
+                generateBtn.disabled = false;
+                generateBtn.innerText = 'Generate Image';
+            }
+        }
+    </script>
+</body>
+</html>

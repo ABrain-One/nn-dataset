@@ -37,10 +37,3 @@ def check_nn(nn_code: str, task: str, dataset: str, metric: str, prm: dict, save
     :return: Automatically generated name of NN model, its accuracy, accuracy to time metric, and quality of the code metric.
     """
     return Train.train_new(nn_code, task, dataset, metric, prm, save_to_db=save_to_db, prefix=prefix, save_path=save_path, export_onnx=export_onnx, epoch_limit_minutes=epoch_limit_minutes, transform_dir= transform_dir)
-
-
-def accuracy_to_time_metric(accuracy: float, training_duration: int, dataset: str) -> float:
-    """
-        Accuracy to time metric (for fixed number of training epochs) is essential for detecting the fastest accuracy improvements during neural network training.
-        """
-    return Util.accuracy_to_time_metric(accuracy, Util.min_accuracy(dataset), training_duration)
