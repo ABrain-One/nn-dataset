@@ -171,6 +171,7 @@ The LEMUR API is designed for artificial agents, as well as for students and sci
 3.  **Computational Efficiency:** Prioritize allocation of high-cost computational resources (GPU/TPU) exclusively toward training novel architectures.
 
 ###🐳 Docker
+
 All versions of this project are compatible with <a href='https://hub.docker.com/r/abrainone/ai-linux' target='_blank'>AI Linux</a> and can be seamlessly executed within the AI Linux Docker container.
 
 <h4>Example of training LEMUR neural network within the AI Linux container (Linux host):</h4>
