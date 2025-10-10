@@ -11,7 +11,7 @@ The original version of the <a href='https://github.com/ABrain-One/nn-dataset'>L
 ## Contents
 
 1. [📖 Overview](#-overview)
-2. [Installation](#installation)
+2. [Installation](#installation-or-update-of-the-nn-dataset-with-pip)
    - [Create and Activate a Virtual Environment](#create-and-activate-a-virtual-environment-recommended)
    - [Installation or Update of the NN Dataset with pip](#installation-or-update-of-the-nn-dataset-with-pip)
 3. [Usage](#usage)
