@@ -1,0 +1,92 @@
+import torch
+import torch.nn as nn
+from torch.nn import GELU
+
+def supported_hyperparameters():
+    return {'lr': 0.01, 'momentum': 0.9, 'dropout': 0.2}
+
+class DarkNetUnit(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, pointwise: bool, alpha: float):
+        super(DarkNetUnit, self).__init__()
+        self.activation = nn.LeakyReLU(negative_slope=alpha, inplace=True)
+        if pointwise:
+            self.conv = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, bias=False),
+                nn.BatchNorm2d(out_channels),
+                self.activation
+            )
+        else:
+            self.conv = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
+                nn.BatchNorm2d(out_channels),
+                self.activation
+            )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.conv(x)
+
+class Net(nn.Module):
+    def __init__(self, in_shape: tuple, out_shape: tuple, prm: dict, device: torch.device) -> None:
+        super(Net, self).__init__()
+        self.device = device
+        self.features = nn.Sequential(
+            nn.Conv2d(in_shape[1], 32, kernel_size=7, stride=3, padding=2),
+            nn.BatchNorm2d(32),
+            GELU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(32, 192, kernel_size=3, padding=2),
+            nn.BatchNorm2d(192),
+            GELU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(192, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            GELU(),
+            nn.Conv2d(256, 384, kernel_size=3, padding=1),
+            nn.BatchNorm2d(384),
+            GELU(),
+            nn.Conv2d(384, 192, kernel_size=3, padding=1),
+            nn.BatchNorm2d(192),
+            GELU(),
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
+        self.avgpool = nn.AdaptiveAvgPool2d((6, 6))
+        dropout_p = prm['dropout']
+        classifier_input_features = 192 * 6 * 6
+        self.classifier = nn.Sequential(
+            nn.Dropout(p=dropout_p),
+            nn.Linear(classifier_input_features, 3072),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=dropout_p),
+            nn.Linear(3072, 4096),
+            nn.ReLU(inplace=True),
+            nn.Linear(4096, out_shape[0])
+        )
+
+    def train_setup(self, prm):
+        self.to(self.device)
+        self.criteria = (nn.CrossEntropyLoss().to(self.device),)
+        self.optimizer = torch.optim.SGD(
+            self.parameters(),
+            lr=prm['lr'],
+            momentum=prm['momentum']
+        )
+
+    def learn(self, train_data):
+        self.train()
+        for inputs, labels in train_data:
+            inputs, labels = inputs.to(self.device), labels.to(self.device)
+            self.optimizer.zero_grad()
+            outputs = self(inputs)
+            loss = self.criteria[0](outputs, labels)
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.parameters(), 3)
+            self.optimizer.step()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.features(x)
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.classifier(x)
+        return x
+
+addon_accuracy: 0.9641
