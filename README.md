@@ -61,7 +61,7 @@ rm -rf db
 ```
 Installing the stable version:
 ```bash
-pip install nn-dataset --upgrade --extra-index-url https://download.pytorch.org/whl/cu126
+pip install --no-cache-dir nn-dataset --upgrade --extra-index-url https://download.pytorch.org/whl/cu126
 ```
 Installing from GitHub to get the most recent code and statistics updates:
 ```bash
