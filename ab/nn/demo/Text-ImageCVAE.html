@@ -7,7 +7,7 @@
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; display: flex; flex-direction: column; align-items: center; margin-top: 50px; background-color: #f4f4f9; color: #333; }
         #container { max-width: 512px; width: 90%; padding: 25px; border: 1px solid #ddd; border-radius: 8px; background-color: white; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
         h2 { text-align: center; color: #007bff; }
-        input { width: 100%; padding: 12px; margin-bottom: 12px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        input, select { width: 100%; padding: 12px; margin-bottom: 12px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
         button { width: 100%; padding: 12px; font-size: 16px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.2s; }
         button:hover { background-color: #0056b3; }
         button:disabled { background-color: #aaa; cursor: not-allowed; }
@@ -18,10 +18,18 @@
 </head>
 <body>
     <div id="container">
-        <h2>Image Generation Demo</h2>
-        <p>Enter a prompt to generate an image.</p>
-        <input type="text" id="prompt-input" placeholder="e.g., a photo of a car on a highway at sunset">
+        <h2>Multi-Model Image Generation</h2>
+        <p>Select a model and enter a prompt to generate an image.</p>
+
+        <label for="model-select">Choose a model:</label>
+        <select id="model-select">
+            <option value="ConditionalVAE4">ConditionalVAE4 (VAE-GAN)</option>
+            <option value="ConditionalVAE3">ConditionalVAE3 (VAE)</option>
+        </select>
+
+        <input type="text" id="prompt-input" placeholder="e.g., a photo of a car on a highway">
         <button id="generate-btn" onclick="generateImage()">Generate Image</button>
+
         <div id="image-container">
             <p id="status">Your generated image will appear here.</p>
             <img id="result-img" src="">
@@ -31,6 +39,7 @@
     <script>
         async function generateImage() {
             const promptInput = document.getElementById('prompt-input');
+            const modelSelect = document.getElementById('model-select');
             const generateBtn = document.getElementById('generate-btn');
             const resultImg = document.getElementById('result-img');
             const statusText = document.getElementById('status');
@@ -47,11 +56,14 @@
             statusText.innerText = 'Generating image, this may take a moment...';
 
             try {
-                // This relative path will work correctly with any host or port.
+                // --- THE FIX: Ensure this path is '/generate' ---
                 const response = await fetch('/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: promptInput.value })
+                    body: JSON.stringify({
+                        text: promptInput.value,
+                        model_choice: modelSelect.value
+                    })
                 });
 
                 if (!response.ok) {
@@ -64,6 +76,8 @@
                     resultImg.src = data.image_path + '?t=' + new Date().getTime();
                     resultImg.style.display = 'block';
                     statusText.style.display = 'none';
+                } else if (data.error) {
+                    statusText.innerText = `An error occurred: ${data.error}`;
                 }
             } catch (error) {
                 console.error('Error:', error);
