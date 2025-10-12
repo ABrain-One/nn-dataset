@@ -1,6 +1,3 @@
-# File: Text-ImageCVAE.py
-# Description: A dual-model demo script with robust weight downloading to handle
-#              different library versions and file paths.
 
 import torch
 import os
