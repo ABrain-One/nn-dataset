@@ -1,13 +1,13 @@
 import sys, shutil
 from os import remove, scandir
-from ab.nn.util.Const import model_script, stat_dir, db_dir
+from ab.nn.util.Const import model_script, stat_train_dir, db_dir
 
 
 def main(nn_name):
     model_path = model_script(nn_name)
     remove(model_path)
     print(f'Model deleted: {model_path}')
-    with scandir(stat_dir) as it:
+    with scandir(stat_train_dir) as it:
         for entry in it:
             if entry.name.endswith(f'_{nn_name}'):
                 shutil.rmtree(entry.path, ignore_errors=True)
