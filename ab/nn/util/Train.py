@@ -24,7 +24,8 @@ from ab.nn.util.Util import (
 debug = False
 
 def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout, max_dropout,
-                     min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, n_epochs, pretrained, epoch_limit_minutes):
+                     min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, n_epochs, pretrained,
+                     epoch_limit_minutes, save_tch_weights):
     task, dataset_name, metric, nn = config
     try:
         # Load model
@@ -53,7 +54,7 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
         # Load dataset
         out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset_name, transform_name)
         return Train(config, out_shape, minimum_accuracy, batch, nn_mod('nn', nn), task, train_set, test_set, metric,
-                     num_workers, prms).train_n_eval(n_epochs, epoch_limit_minutes)
+                     num_workers, prms).train_n_eval(n_epochs, epoch_limit_minutes, save_tch_weights)
     except Exception as e:
         accuracy_duration = 0.0, 0.0, 1
         if isinstance(e, OutOfMemoryError):
@@ -130,6 +131,7 @@ class Train:
 
         # Load model
         model_net = get_attr(nn_module, 'Net')
+        self.model_name = nn_module
         self.model = model_net(self.in_shape, out_shape, prm, self.device)
         self.model.to(self.device)
 
@@ -148,7 +150,7 @@ class Train:
             raise ValueError(f"Metric '{metric_name}' not found. Ensure a corresponding file and function exist. Ensure the metric module has create_metric()") \
                 from e
 
-    def train_n_eval(self, num_epochs, epoch_limit_minutes):
+    def train_n_eval(self, num_epochs, epoch_limit_minutes, save_tch_weights):
         """ Training and evaluation """
 
         start_time = time.time_ns()
@@ -165,8 +167,7 @@ class Train:
             duration = time.time_ns() - start_time
             # The accuracy-to-time metric is not stored in the database as it can change over time and can be quickly calculated from saved values.
             accuracy_to_time = accuracy_to_time_metric(accuracy, self.minimum_accuracy, duration)
-            if hasattr(self.model, 'save_if_best'):
-                self.model.save_if_best(accuracy)
+            if save_tch_weights: save_if_best(self.model, self.model_name, accuracy)
             if not good(accuracy, self.minimum_accuracy, duration):
                 raise AccuracyException(accuracy, duration,
                                         f"Accuracy is too low: {accuracy}."
@@ -263,7 +264,7 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             is_code=True,
             save_path=save_path)
         epoch = prm['epoch']
-        accuracy, accuracy_to_time, duration = trainer.train_n_eval(epoch, epoch_limit_minutes)
+        accuracy, accuracy_to_time, duration = trainer.train_n_eval(epoch, epoch_limit_minutes, False)
         if save_to_db:
             # If the result meets the requirements, save the model to the database.
             if good(accuracy, minimum_accuracy, duration):
