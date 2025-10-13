@@ -47,7 +47,8 @@ def model_script(name):
 default_nn_name = 'AlexNet'
 default_nn_path = model_script(default_nn_name)
 transform_dir = nn_path('transform')
-stat_dir = nn_path('stat/train')
+stat_dir = nn_path('stat')
+stat_train_dir = stat_dir / 'train'
 
 
 def __project_root_path():
