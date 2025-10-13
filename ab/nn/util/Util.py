@@ -263,6 +263,6 @@ def args():
                         help=f'Maximum duration per training epoch, minutes; default {default_epoch_limit_minutes} minutes')
     parser.add_argument('--train_missing_pipelines', type=bool, default=default_train_missing_pipelines,
                         help=f'Find and train all missing training pipelines for the provided configuration; default {default_train_missing_pipelines}')
-    parser.add_argument('--save_tch_weights', type=bool, default=default_save_tch_weights,
-                        help=f'Enable saving of the best model weights in PyTorch checkpoints; default {default_save_tch_weights}')
+    parser.add_argument('--save_pth_weights', type=bool, default=default_save_pth_weights,
+                        help=f'Enable saving of the best model weights in PyTorch checkpoints; default {default_save_pth_weights}')
     return parser.parse_args()

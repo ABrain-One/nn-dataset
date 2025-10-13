@@ -25,7 +25,7 @@ debug = False
 
 def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout, max_dropout,
                      min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, n_epochs, pretrained,
-                     epoch_limit_minutes, save_tch_weights):
+                     epoch_limit_minutes, save_pth_weights):
     task, dataset_name, metric, nn = config
     try:
         # Load model
@@ -54,7 +54,7 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
         # Load dataset
         out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset_name, transform_name)
         return Train(config, out_shape, minimum_accuracy, batch, nn_mod('nn', nn), task, train_set, test_set, metric,
-                     num_workers, prms).train_n_eval(n_epochs, epoch_limit_minutes, save_tch_weights)
+                     num_workers, prms).train_n_eval(n_epochs, epoch_limit_minutes, save_pth_weights)
     except Exception as e:
         accuracy_duration = 0.0, 0.0, 1
         if isinstance(e, OutOfMemoryError):
@@ -150,7 +150,7 @@ class Train:
             raise ValueError(f"Metric '{metric_name}' not found. Ensure a corresponding file and function exist. Ensure the metric module has create_metric()") \
                 from e
 
-    def train_n_eval(self, num_epochs, epoch_limit_minutes, save_tch_weights):
+    def train_n_eval(self, num_epochs, epoch_limit_minutes, save_pth_weights):
         """ Training and evaluation """
 
         start_time = time.time_ns()
@@ -167,12 +167,12 @@ class Train:
             duration = time.time_ns() - start_time
             # The accuracy-to-time metric is not stored in the database as it can change over time and can be quickly calculated from saved values.
             accuracy_to_time = accuracy_to_time_metric(accuracy, self.minimum_accuracy, duration)
-            if save_tch_weights: save_if_best(self.model, self.model_name, accuracy)
             if not good(accuracy, self.minimum_accuracy, duration):
                 raise AccuracyException(accuracy, duration,
                                         f"Accuracy is too low: {accuracy}."
                                         f" The minimum accepted accuracy for the '{self.config[1]}"
                                         f"' dataset is {self.minimum_accuracy}.")
+            if save_pth_weights: save_if_best(self.model, self.model_name, accuracy)
             only_prm = {k: v for k, v in self.prm.items() if  k not in {'uid', 'duration', 'accuracy', 'epoch'}}
             prm = merge_prm(self.prm, {'uid': uuid4(only_prm), 'duration': duration, 'accuracy': accuracy})
             if self.save_to_db:
