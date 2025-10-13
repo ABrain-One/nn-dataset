@@ -1,22 +1,19 @@
-# File: ConditionalVAE_GAN_Final_Optimized.py
-# Description: This is the final, optimized version of the VAE-GAN, incorporating all
-#              stability improvements including a weaker discriminator, robust checkpointing
-#              with score reset, asymmetrical learning rates, and re-balanced loss weights.
-
+# File: ConditionalVAE4.py
 import torch
 import torch.nn as nn
 import torchvision.models as models
 import torchvision.transforms as T
 import math
 import os
-import glob
 
+from ab.nn.util.Util import export_torch_weights
 from transformers import CLIPTextModel, CLIPTokenizer
 
 
 def supported_hyperparameters():
     """Returns the hyperparameters supported by this model."""
-    return {'lr', 'momentum', 'version', 'lr_g', 'lr_d'}
+    #'save_weights' flag to make checkpointing controllable.
+    return {'lr', 'momentum', 'version', 'lr_g', 'lr_d', 'save_weights'}
 
 
 class PerceptualLoss(nn.Module):
@@ -163,25 +160,24 @@ class Net(nn.Module):
         self.latent_dim = 512
         self.model_name = "ConditionalVAE4"
 
+        # --- ADDED ---
+        # Get the "input flag" from hyperparameters to control saving.
+        self.save_weights_on_improve = self.prm.get('save_weights', False)
+
         self.register_buffer('epoch_counter', torch.tensor(0))
         self.register_buffer('best_score_so_far', torch.tensor(-1.0))
 
         self.checkpoint_dir = os.path.join("checkpoints", self.model_name)
-        if not os.path.exists(self.checkpoint_dir):
-            os.makedirs(self.checkpoint_dir)
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
 
         image_channels, image_size = in_shape[1], in_shape[2]
         self.text_encoder = self.TextEncoder(out_size=self.text_embedding_dim).to(device)
         self.cvae = self.CVAE(self.latent_dim, self.text_embedding_dim, image_channels, image_size).to(device)
         self.discriminator = self.Discriminator(image_channels).to(device)
 
-        # --- THIS SECTION IS CORRECTED ---
-        # Asymmetrical learning rates for Generator and Discriminator
         lr_g = self.prm.get('lr_g', 2e-6)
         lr_d = self.prm.get('lr_d', 2e-7)
         beta1 = self.prm.get('momentum', 0.5)
-
-        print(f"--- Initializing VAE-GAN with G_LR: {lr_g} | D_LR: {lr_d} | Beta1: {beta1} ---")
 
         self.optimizer_g = torch.optim.Adam(self.cvae.parameters(), lr=lr_g, betas=(beta1, 0.999))
         self.optimizer_d = torch.optim.Adam(self.discriminator.parameters(), lr=lr_d, betas=(beta1, 0.999))
@@ -190,22 +186,20 @@ class Net(nn.Module):
         self.perceptual_loss = PerceptualLoss().to(device)
         self.adversarial_loss = nn.BCEWithLogitsLoss()
 
-        resume_flag = os.getenv('RESUME_TRAINING', 'true').lower()
         source_checkpoint_path = os.path.join("checkpoints", "ConditionalVAE3", "best_model.pth")
         gan_checkpoint_path = os.path.join(self.checkpoint_dir, "best_model.pth")
 
-        if resume_flag == 'true' and os.path.exists(gan_checkpoint_path):
+        if os.path.exists(gan_checkpoint_path):
             print(f"Resuming GAN training. Loading checkpoint from: {gan_checkpoint_path}")
             self.load_state_dict(torch.load(gan_checkpoint_path, map_location=device))
-            print(f"Resumed from Epoch {self.epoch_counter.item() + 1}. Best score so far: {self.best_score_so_far.item():.4f}")
-        elif resume_flag == 'true' and os.path.exists(source_checkpoint_path):
+            print(
+                f"Resumed from Epoch {self.epoch_counter.item() + 1}. Best score so far: {self.best_score_so_far.item():.4f}")
+        elif os.path.exists(source_checkpoint_path):
             print(f"No GAN checkpoint found. Initializing with VAE weights from: {source_checkpoint_path}")
             self.load_state_dict(torch.load(source_checkpoint_path, map_location=device), strict=False)
-
-            print(f"Loaded pre-trained VAE score of {self.best_score_so_far.item():.4f}. Resetting for new GAN training.")
+            print(
+                f"Loaded pre-trained VAE score of {self.best_score_so_far.item():.4f}. Resetting for new GAN training.")
             self.best_score_so_far = torch.tensor(-1.0)
-
-            print(f"Starting GAN fine-tuning from Epoch {self.epoch_counter.item() + 1}. New best score tracker initialized.")
         else:
             print("No checkpoint found. Starting a fresh training run.")
 
@@ -214,11 +208,12 @@ class Net(nn.Module):
 
     def learn(self, train_data, current_epoch=0):
         self.train()
+        self.epoch_counter = torch.tensor(current_epoch)
         total_g_loss = 0.0
         total_d_loss = 0.0
 
         recon_weight = 10.0
-        perc_weight =  1.0
+        perc_weight = 1.0
         kld_weight = 0.0000025
         adversarial_weight = 0.0001
 
@@ -226,7 +221,7 @@ class Net(nn.Module):
             real_images, text_prompts = batch
             real_images = real_images.to(self.device)
 
-            # --- (1) Train the Discriminator ---
+            #  Train the Discriminator
             self.optimizer_d.zero_grad()
 
             with torch.no_grad():
@@ -236,7 +231,6 @@ class Net(nn.Module):
                 reconstructed_images = self.cvae.decode(z, text_embeddings)
 
             real_output = self.discriminator(real_images)
-
             real_labels = torch.ones_like(real_output, device=self.device)
             fake_labels = torch.zeros_like(real_output, device=self.device)
 
@@ -249,7 +243,7 @@ class Net(nn.Module):
             self.optimizer_d.step()
             total_d_loss += d_loss.item()
 
-            # --- (2) Train the VAE (Generator) ---
+            #  Train the VAE (Generator)
             self.optimizer_g.zero_grad()
 
             text_embeddings = self.text_encoder(text_prompts)
@@ -264,7 +258,8 @@ class Net(nn.Module):
             fake_output_for_g = self.discriminator(reconstructed_images_for_g)
             g_loss_adv = self.adversarial_loss(fake_output_for_g, real_labels)
 
-            g_loss = (recon_weight * recon_loss) + (perc_weight * perc_loss) + (kld_weight * kld_loss) + (adversarial_weight * g_loss_adv)
+            g_loss = (recon_weight * recon_loss) + (perc_weight * perc_loss) + (kld_weight * kld_loss) + (
+                        adversarial_weight * g_loss_adv)
 
             g_loss.backward()
             self.optimizer_g.step()
@@ -288,7 +283,6 @@ class Net(nn.Module):
 
     @torch.no_grad()
     def forward(self, images, **kwargs):
-        self.epoch_counter += 1
         prompts_to_use = kwargs.get('prompts')
         if not prompts_to_use:
             batch_size = images.size(0)
@@ -298,8 +292,17 @@ class Net(nn.Module):
         return self.generate(prompts_to_use), prompts_to_use
 
     def save_if_best(self, current_score):
+
+        # 1. Check if the feature is enabled by the input flag.
+        if not self.save_weights_on_improve:
+            return
+
+        # Compare the current score with the best score recorded.
         if current_score > self.best_score_so_far.item():
             self.best_score_so_far = torch.tensor(current_score)
             best_checkpoint_path = os.path.join(self.checkpoint_dir, "best_model.pth")
-            print(f"\n--- New best score: {current_score:.4f} at epoch {self.epoch_counter.item()}! Saving checkpoint to {best_checkpoint_path} ---")
-            torch.save(self.state_dict(), best_checkpoint_path)
+            print(
+                f"\n--- New best score: {current_score:.4f} at epoch {self.epoch_counter.item()}! Saving checkpoint... ---")
+
+            # required function to save the PyTorch weights.
+            export_torch_weights(self, best_checkpoint_path)
