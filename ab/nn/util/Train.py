@@ -15,6 +15,11 @@ from ab.nn.util.Loader import load_dataset
 from ab.nn.util.Util import *
 from ab.nn.util.db.Calc import save_results
 from ab.nn.util.db.Read import supported_transformers
+from ab.nn.util.Util import (
+    args, torch_device, get_attr, get_obj_attr, nn_mod, merge_prm, uuid4,
+    model_stat_dir, accuracy_to_time_metric, good, max_batch, conf_to_names, order_configs,
+    get_ab_nn_attr, add_categorical_if_absent
+)
 
 debug = False
 
@@ -160,6 +165,8 @@ class Train:
             duration = time.time_ns() - start_time
             # The accuracy-to-time metric is not stored in the database as it can change over time and can be quickly calculated from saved values.
             accuracy_to_time = accuracy_to_time_metric(accuracy, self.minimum_accuracy, duration)
+            if hasattr(self.model, 'save_if_best'):
+                self.model.save_if_best(accuracy)
             if not good(accuracy, self.minimum_accuracy, duration):
                 raise AccuracyException(accuracy, duration,
                                         f"Accuracy is too low: {accuracy}."

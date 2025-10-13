@@ -10,8 +10,8 @@ The original version of the <a href='https://github.com/ABrain-One/nn-dataset'>L
 
 ## Contents
 
-1. [📖 Overview](#overview)
-2. [Installation](#installation)
+1. [📖 Overview](#-overview)
+2. [Installation](#installation-or-update-of-the-nn-dataset-with-pip)
    - [Create and Activate a Virtual Environment](#create-and-activate-a-virtual-environment-recommended)
    - [Installation or Update of the NN Dataset with pip](#installation-or-update-of-the-nn-dataset-with-pip)
 3. [Usage](#usage)
@@ -24,7 +24,7 @@ The original version of the <a href='https://github.com/ABrain-One/nn-dataset'>L
    - [The `data()` Function for Data Retrieval](#1-the-data-function-for-data-retrieval)
    - [The `check_nn()` Function for NN Validation](#2-the-check_nn-function-for-nn-validation)
    - [🚀 Get Started: Build Smarter, Train Less](#-get-started-build-smarter-train-less)
-5. [🐳 Docker](#docker)
+5. [🐳 Docker](#-docker)
    - [Example of Training LEMUR Neural Network within AI Linux Container](#example-of-training-lemur-neural-network-within-ai-linux-container-linux-host)
 6. [Environment for NN Dataset Contributors](#environment-for-nn-dataset-contributors)
    - [Pip Package Manager](#pip-package-manager)
@@ -61,7 +61,7 @@ rm -rf db
 ```
 Installing the stable version:
 ```bash
-pip install nn-dataset --upgrade --extra-index-url https://download.pytorch.org/whl/cu126
+pip install --no-cache-dir nn-dataset --upgrade --extra-index-url https://download.pytorch.org/whl/cu126
 ```
 Installing from GitHub to get the most recent code and statistics updates:
 ```bash
@@ -170,7 +170,8 @@ The LEMUR API is designed for artificial agents, as well as for students and sci
 2.  **Focus on Generation:** Use `check_nn()` to automate the validation of your new, unique architectures.
 3.  **Computational Efficiency:** Prioritize allocation of high-cost computational resources (GPU/TPU) exclusively toward training novel architectures.
 
-### 🐳 Docker
+###🐳 Docker
+
 All versions of this project are compatible with <a href='https://hub.docker.com/r/abrainone/ai-linux' target='_blank'>AI Linux</a> and can be seamlessly executed within the AI Linux Docker container.
 
 <h4>Example of training LEMUR neural network within the AI Linux container (Linux host):</h4>
