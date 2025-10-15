@@ -38,6 +38,7 @@ def data(
     nn: str | None = None,
     epoch: int | None = None,
     max_rows: int | None = None,
+    sql: str | None = None,
 ) -> tuple[
     dict[str, int | float | str | dict[str, int | float | str]], ...
 ]:
@@ -72,7 +73,7 @@ def data(
     try:
         if not only_best_accuracy:
             cur.execute(
-                f"""
+                f"""WITH all_data AS (
                 SELECT s.task, s.dataset, s.metric, m.code AS metric_code, m.id AS metric_id,
                        s.nn, n.code AS nn_code, n.id AS nn_id, s.epoch, s.accuracy, s.duration,
                        s.id   AS stat_id, s.prm  AS stat_prm,
@@ -83,13 +84,14 @@ def data(
                 LEFT JOIN transform t ON s.transform = t.name
                 {where_clause}
                 ORDER BY s.task, s.dataset, s.metric, s.nn, s.epoch
-                {str_not_none('LIMIT ', max_rows)};
+                {str_not_none('LIMIT ', max_rows)})
+                {sql if sql else 'SELECT * FROM all_data'}
                 """,
                 params,
             )
         else:
             cur.execute(
-                f"""
+                f"""WITH all_data AS (
                 WITH filtered AS (
                     SELECT s.task, s.dataset, s.metric, s.nn, s.transform,
                            s.epoch, s.accuracy, s.duration,
@@ -117,8 +119,8 @@ def data(
                 LEFT JOIN metric  m ON f.metric  = m.name
                 LEFT JOIN transform t ON f.transform = t.name
                 ORDER BY f.task, f.dataset, f.metric, f.nn, f.epoch
-                {str_not_none('LIMIT ', max_rows)};
-                """,
+                {str_not_none('LIMIT ', max_rows)})
+                {sql if sql else 'SELECT * FROM all_data'}""",
                 params,
             )
 

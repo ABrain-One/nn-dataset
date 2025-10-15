@@ -19,6 +19,7 @@ default_nn_hyperparameters = {}
 default_nn_fail_attempts = 30
 default_num_workers = 2
 default_random_config_order = False
+default_save_pth_weights = False
 
 default_epoch_limit_minutes = 30 # minutes
 
@@ -48,6 +49,7 @@ default_nn_name = 'AlexNet'
 default_nn_path = model_script(default_nn_name)
 transform_dir = nn_path('transform')
 stat_dir = nn_path('stat')
+stat_train_dir = stat_dir / 'train'
 
 
 def __project_root_path():

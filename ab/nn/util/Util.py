@@ -10,7 +10,7 @@ import json
 
 import torch
 from os import makedirs, remove
-from os.path import exists
+from os.path import exists, join
 
 from ab.nn.util.Const import *
 
@@ -89,7 +89,7 @@ def max_batch(binary_power):
 
 
 def model_stat_dir(config):
-    return stat_dir / config_splitter.join(config)
+    return stat_train_dir / config_splitter.join(config)
 
 
 def accuracy_to_time_metric(accuracy, min_accuracy, training_duration) -> float:
@@ -196,9 +196,21 @@ def export_model_to_onnx(model, dummy_input):
     print(f"Exported neural network to ONNX format at {onnx_file}")
 
 
+def save_if_best(model, model_name, current_score):
+    """
+    Called by the training framework to save weights if performance improves.
+    """
+    checkpoint_dir = out_dir / 'checkpoints' / model_name
+    makedirs(checkpoint_dir, exist_ok=True)
+    # Compare the current score with the best score recorded.
+    if current_score > getattr(model, "best_score", 0):
+        setattr(model, 'best_score', current_score)
+        best_checkpoint_path = join(checkpoint_dir, "best_model.pth")
+        print(f"\n--- New best score: {current_score:.4f}! Saving checkpoint... ---")
+         #Use the required function to save the PyTorch weights.
+        export_torch_weights(model, best_checkpoint_path)
 
-   #  FUNCTIONS FOR SAVING AND LOADING WEIGHTS
-
+#  FUNCTIONS FOR SAVING AND LOADING WEIGHTS
 def export_torch_weights(model, path):
     """
     Saves the trained weights of a model's state_dict to the specified path.
@@ -207,20 +219,6 @@ def export_torch_weights(model, path):
     print(f"Exporting model weights to {path}...")
     torch.save(model.state_dict(), path)
     print(f"Export complete. Weights saved to {path}")
-
-
-def load_torch_weights(model, path):
-    """
-    Loads trained weights from a .pth file into a model instance.
-    This is a general function that can be used for any PyTorch model.
-    """
-    device = next(model.parameters()).device
-    if os.path.exists(path):
-        print(f"Loading weights from {path}...")
-        model.load_state_dict(torch.load(path, map_location=device))
-        print("Weights loaded successfully.")
-    else:
-        raise FileNotFoundError(f"Weights file not found at {path}. Cannot load model.")
 
 
 def args():
@@ -265,4 +263,6 @@ def args():
                         help=f'Maximum duration per training epoch, minutes; default {default_epoch_limit_minutes} minutes')
     parser.add_argument('--train_missing_pipelines', type=bool, default=default_train_missing_pipelines,
                         help=f'Find and train all missing training pipelines for the provided configuration; default {default_train_missing_pipelines}')
+    parser.add_argument('--save_pth_weights', type=bool, default=default_save_pth_weights,
+                        help=f'Enable saving of the best model weights in PyTorch checkpoints; default {default_save_pth_weights}')
     return parser.parse_args()

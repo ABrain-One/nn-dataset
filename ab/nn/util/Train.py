@@ -15,11 +15,17 @@ from ab.nn.util.Loader import load_dataset
 from ab.nn.util.Util import *
 from ab.nn.util.db.Calc import save_results
 from ab.nn.util.db.Read import supported_transformers
+from ab.nn.util.Util import (
+    args, torch_device, get_attr, get_obj_attr, nn_mod, merge_prm, uuid4,
+    model_stat_dir, accuracy_to_time_metric, good, max_batch, conf_to_names, order_configs,
+    get_ab_nn_attr, add_categorical_if_absent
+)
 
 debug = False
 
 def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout, max_dropout,
-                     min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, n_epochs, pretrained, epoch_limit_minutes):
+                     min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, n_epochs, pretrained,
+                     epoch_limit_minutes, save_pth_weights):
     task, dataset_name, metric, nn = config
     try:
         # Load model
@@ -48,7 +54,7 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
         # Load dataset
         out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset_name, transform_name)
         return Train(config, out_shape, minimum_accuracy, batch, nn_mod('nn', nn), task, train_set, test_set, metric,
-                     num_workers, prms).train_n_eval(n_epochs, epoch_limit_minutes)
+                     num_workers, prms).train_n_eval(n_epochs, epoch_limit_minutes, save_pth_weights)
     except Exception as e:
         accuracy_duration = 0.0, 0.0, 1
         if isinstance(e, OutOfMemoryError):
@@ -125,6 +131,7 @@ class Train:
 
         # Load model
         model_net = get_attr(nn_module, 'Net')
+        self.model_name = nn_module
         self.model = model_net(self.in_shape, out_shape, prm, self.device)
         self.model.to(self.device)
 
@@ -143,7 +150,7 @@ class Train:
             raise ValueError(f"Metric '{metric_name}' not found. Ensure a corresponding file and function exist. Ensure the metric module has create_metric()") \
                 from e
 
-    def train_n_eval(self, num_epochs, epoch_limit_minutes):
+    def train_n_eval(self, num_epochs, epoch_limit_minutes, save_pth_weights):
         """ Training and evaluation """
 
         start_time = time.time_ns()
@@ -165,6 +172,7 @@ class Train:
                                         f"Accuracy is too low: {accuracy}."
                                         f" The minimum accepted accuracy for the '{self.config[1]}"
                                         f"' dataset is {self.minimum_accuracy}.")
+            if save_pth_weights: save_if_best(self.model, self.model_name, accuracy)
             only_prm = {k: v for k, v in self.prm.items() if  k not in {'uid', 'duration', 'accuracy', 'epoch'}}
             prm = merge_prm(self.prm, {'uid': uuid4(only_prm), 'duration': duration, 'accuracy': accuracy})
             if self.save_to_db:
@@ -256,7 +264,7 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             is_code=True,
             save_path=save_path)
         epoch = prm['epoch']
-        accuracy, accuracy_to_time, duration = trainer.train_n_eval(epoch, epoch_limit_minutes)
+        accuracy, accuracy_to_time, duration = trainer.train_n_eval(epoch, epoch_limit_minutes, False)
         if save_to_db:
             # If the result meets the requirements, save the model to the database.
             if good(accuracy, minimum_accuracy, duration):
