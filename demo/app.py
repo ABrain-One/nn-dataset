@@ -11,7 +11,7 @@ from torchvision.utils import save_image
 from transformers import CLIPTokenizer
 from huggingface_hub import hf_hub_download
 
-# Add the project root to the Python path to allow importing from 'ab'
+# Add the project root to the Python path to allow importing  'ab'
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 sys.path.insert(0, project_root)
 

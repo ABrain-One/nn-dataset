@@ -8,7 +8,7 @@ import argparse
 import importlib
 from ab.nn.util.Util import out_dir
 
-# --- Make sure this import path is correct for your project ---
+# --- Make sure this import path is correct for  project ---
 from ab.nn.util.Util import export_torch_weights
 
 

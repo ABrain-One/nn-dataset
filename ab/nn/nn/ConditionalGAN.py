@@ -273,6 +273,6 @@ class Net(nn.Module):
             generated_tensors = self.generator(noise, tokenized_prompts)
             generated_tensors = (generated_tensors * 0.5 + 0.5).clamp(0, 1)  # Denormalize
 
-        # Convert tensors to a list of PIL Images
+        # Convert tensors to a list of PIL
         pil_images = [to_pil_image(tensor) for tensor in generated_tensors]
         return pil_images
