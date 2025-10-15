@@ -88,3 +88,6 @@ dependent_tables = code_tables + param_tables
 all_tables = main_tables + dependent_tables
 index_colum = ('task', 'dataset') + dependent_tables
 extra_main_columns = ('duration', 'accuracy')
+
+tmp_data = 'temp_data'
+all_data = 'all_data'

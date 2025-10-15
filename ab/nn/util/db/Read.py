@@ -1,4 +1,4 @@
-from ab.nn.util.Const import main_columns, main_columns_ext
+from ab.nn.util.Const import *
 from ab.nn.util.Util import is_full_config, str_not_none
 from ab.nn.util.db.Init import sql_conn, close_conn
 from ab.nn.util.db.Write import init_population
@@ -71,9 +71,10 @@ def data(
     # Execute a *single* query for the main stat rows
     conn, cur = sql_conn()
     try:
+        cur.execute(f'DROP TABLE IF EXISTS {tmp_data}')
         if not only_best_accuracy:
             cur.execute(
-                f"""WITH all_data AS (
+                f"""WITH {all_data} AS (
                 SELECT s.task, s.dataset, s.metric, m.code AS metric_code, m.id AS metric_id,
                        s.nn, n.code AS nn_code, n.id AS nn_id, s.epoch, s.accuracy, s.duration,
                        s.id   AS stat_id, s.prm  AS stat_prm,
@@ -85,13 +86,13 @@ def data(
                 {where_clause}
                 ORDER BY s.task, s.dataset, s.metric, s.nn, s.epoch
                 {str_not_none('LIMIT ', max_rows)})
-                {sql if sql else 'SELECT * FROM all_data'}
+                {sql if sql else f'SELECT * FROM {all_data}'}
                 """,
                 params,
             )
         else:
             cur.execute(
-                f"""WITH all_data AS (
+                f"""WITH {all_data} AS (
                 WITH filtered AS (
                     SELECT s.task, s.dataset, s.metric, s.nn, s.transform,
                            s.epoch, s.accuracy, s.duration,
@@ -120,7 +121,7 @@ def data(
                 LEFT JOIN transform t ON f.transform = t.name
                 ORDER BY f.task, f.dataset, f.metric, f.nn, f.epoch
                 {str_not_none('LIMIT ', max_rows)})
-                {sql if sql else 'SELECT * FROM all_data'}""",
+                {sql if sql else f'SELECT * FROM {all_data}'}""",
                 params,
             )
 
