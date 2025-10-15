@@ -71,7 +71,7 @@ def data(
     # Execute a *single* query for the main stat rows
     conn, cur = sql_conn()
     try:
-        cur.execute(f'DROP TABLE IF EXISTS {tmp_data}')
+        if sql: cur.execute(f'DROP TABLE IF EXISTS {tmp_data}')
         if not only_best_accuracy:
             cur.execute(
                 f"""WITH {all_data} AS (
