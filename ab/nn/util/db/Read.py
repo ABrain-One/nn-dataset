@@ -1,3 +1,4 @@
+import json
 from ab.nn.util.Const import *
 from ab.nn.util.Util import is_full_config, str_not_none
 from ab.nn.util.db.Init import sql_conn, close_conn
@@ -167,6 +168,54 @@ def data(
 
         return tuple(results)
 
+    finally:
+        close_conn(conn)
+
+
+def mobile_data(
+    model_name: str | None = None,
+    device_type: str | None = None,
+    max_rows: int | None = None,
+):
+    """
+    Query mobile runtime analytics from the `mobile` table with optional filters.
+    Returns a tuple of dicts with columns and parsed device_analytics JSON.
+    """
+    params = []
+    filters = []
+    if model_name is not None:
+        filters.append('model_name = ?'); params.append(model_name)
+    if device_type is not None:
+        filters.append('device_type = ?'); params.append(device_type)
+
+    where_clause = (' WHERE ' + ' AND '.join(filters)) if filters else ''
+    limit_clause = (' LIMIT ' + str(max_rows)) if max_rows else ''
+
+    conn, cur = sql_conn()
+    try:
+        cur.execute(
+            f"""
+            SELECT id, model_name, device_type, os_version, valid, emulator, error_message, duration, device_analytics_json
+            FROM {mobile_table}
+            {where_clause}
+            ORDER BY model_name
+            {limit_clause}
+            """,
+            params,
+        )
+        rows = cur.fetchall()
+        columns = [c[0] for c in cur.description]
+        results = []
+        for r in rows:
+            rec = dict(zip(columns, r))
+            try:
+                if rec.get('device_analytics_json'):
+                    rec['device_analytics'] = json.loads(rec['device_analytics_json'])
+            except Exception:
+                rec['device_analytics'] = None
+            rec.pop('device_analytics_json', None)
+            results.append(rec)
+        return tuple(results)
     finally:
         close_conn(conn)
 
