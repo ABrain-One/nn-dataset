@@ -2,7 +2,7 @@ import sqlite3
 from os import makedirs
 from pathlib import Path
 
-from ab.nn.util.Const import param_tables, db_file, db_dir, main_tables, code_tables, dependent_tables, all_tables, index_colum
+from ab.nn.util.Const import param_tables, db_file, db_dir, main_tables, code_tables, dependent_tables, all_tables, index_colum, mobile_table
 
 
 def sql_conn():
@@ -67,6 +67,25 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_accuracy_desc ON stat (accuracy DESC);")
     for nm in index_colum:
         cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{nm} ON stat ({nm});")
+
+    # Create mobile analytics table (runtime stats)
+    cursor.execute(f"""
+    CREATE TABLE IF NOT EXISTS {mobile_table} (
+        id TEXT PRIMARY KEY,
+        model_name TEXT NOT NULL,
+        device_type TEXT,
+        os_version TEXT,
+        valid BOOLEAN,
+        emulator BOOLEAN,
+        error_message TEXT,
+        duration INTEGER,
+        device_analytics_json TEXT,
+        FOREIGN KEY (model_name) REFERENCES nn (name) ON DELETE CASCADE
+    )
+    """)
+    # Indexes for mobile analytics
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{mobile_table}_model ON {mobile_table} (model_name);")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{mobile_table}_device ON {mobile_table} (device_type);")
     close_conn(conn)
     print(f"Database initialized at {db_file}")
 
