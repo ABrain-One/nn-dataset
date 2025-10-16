@@ -91,10 +91,10 @@ index_colum = ('task', 'dataset') + dependent_tables
 extra_main_columns = ('duration', 'accuracy')
 
 # Mobile analytics (runtime) table
-mobile_table = 'mobile'
+run_table = 'run'
 # optional columns follow similar naming style; allow NULLs where data is not available
-mobile_main_index = ('task', 'dataset', 'metric', 'nn')
-mobile_extra_columns = (
+run_main_index = ('task', 'dataset', 'metric', 'nn')
+run_extra_columns = (
     'device_type', 'os_version', 'valid', 'emulator', 'error_message',
     'duration', 'device_analytics_json'
 )

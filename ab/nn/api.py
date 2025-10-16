@@ -31,9 +31,9 @@ def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None
 
 
 @functools.lru_cache(maxsize=10)
-def mobile_data(model_name=None, device_type=None, max_rows=None) -> DataFrame:
+def run_data(model_name=None, device_type=None, max_rows=None) -> DataFrame:
     """
-    Get mobile runtime analytics as a pandas DataFrame.
+    Get runtime analytics as a pandas DataFrame.
 
     Parameters:
       - model_name (str | None): filter by model name (FK to nn.name)
@@ -44,7 +44,7 @@ def mobile_data(model_name=None, device_type=None, max_rows=None) -> DataFrame:
       - A pandas DataFrame with columns:
         'id', 'model_name', 'device_type', 'os_version', 'valid', 'emulator', 'error_message', 'duration', 'device_analytics'
     """
-    dt: tuple[dict, ...] = DB_Read.mobile_data(model_name=model_name, device_type=device_type, max_rows=max_rows)
+    dt: tuple[dict, ...] = DB_Read.run_data(model_name=model_name, device_type=device_type, max_rows=max_rows)
     return DataFrame.from_records(dt)
 
 def check_nn(nn_code: str, task: str, dataset: str, metric: str, prm: dict, save_to_db=True, prefix=None, save_path=None, export_onnx=False,

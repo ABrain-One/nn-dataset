@@ -2,7 +2,7 @@ import sqlite3
 from os import makedirs
 from pathlib import Path
 
-from ab.nn.util.Const import param_tables, db_file, db_dir, main_tables, code_tables, dependent_tables, all_tables, index_colum, mobile_table
+from ab.nn.util.Const import param_tables, db_file, db_dir, main_tables, code_tables, dependent_tables, all_tables, index_colum, run_table
 
 
 def sql_conn():
@@ -70,7 +70,7 @@ def init_db():
 
     # Create mobile analytics table (runtime stats)
     cursor.execute(f"""
-    CREATE TABLE IF NOT EXISTS {mobile_table} (
+    CREATE TABLE IF NOT EXISTS {run_table} (
         id TEXT PRIMARY KEY,
         model_name TEXT NOT NULL,
         device_type TEXT,
@@ -84,8 +84,8 @@ def init_db():
     )
     """)
     # Indexes for mobile analytics
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{mobile_table}_model ON {mobile_table} (model_name);")
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{mobile_table}_device ON {mobile_table} (device_type);")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{run_table}_model ON {run_table} (model_name);")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{run_table}_device ON {run_table} (device_type);")
     close_conn(conn)
     print(f"Database initialized at {db_file}")
 

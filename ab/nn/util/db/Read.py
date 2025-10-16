@@ -172,7 +172,7 @@ def data(
         close_conn(conn)
 
 
-def mobile_data(
+def run_data(
     model_name: str | None = None,
     device_type: str | None = None,
     max_rows: int | None = None,
@@ -196,7 +196,7 @@ def mobile_data(
         cur.execute(
             f"""
             SELECT id, model_name, device_type, os_version, valid, emulator, error_message, duration, device_analytics_json
-            FROM {mobile_table}
+            FROM {run_table}
             {where_clause}
             ORDER BY model_name
             {limit_clause}

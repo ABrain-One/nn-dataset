@@ -1,8 +1,5 @@
 from tqdm import tqdm
-import json
-from pathlib import Path
 
-from ab.nn.util.Const import stat_run_dir, config_splitter, mobile_table
 from ab.nn.util.Util import *
 from ab.nn.util.db.Init import init_db, sql_conn, close_conn
 
@@ -12,9 +9,9 @@ def init_population():
         init_db()
         json_n_code_to_db()
         try:
-            json_run_to_mobile()
+            json_run_to_db()
         except Exception as e:
-            print(f"mobile analytics import failed: {e}")
+            print(f"Runtime analytics import failed: {e}")
 
 
 def code_to_db(cursor, table_name, code=None, code_file=None, force_name = None):
@@ -117,7 +114,7 @@ def json_n_code_to_db():
     print("All statistics reloaded successfully.")
 
 
-def json_run_to_mobile():
+def json_run_to_db():
     """
     Import runtime analytics from JSON files in stat/run into the `mobile` table.
     The run directory layout encodes task/dataset/metric/nn in the parent folder name as
@@ -163,7 +160,7 @@ def json_run_to_mobile():
             id_val = uuid4([run_dir.name, json_file.name, model_name, device_type, os_version, duration])
             cursor.execute(
                 f"""
-                INSERT OR REPLACE INTO {mobile_table}
+                INSERT OR REPLACE INTO {run_table}
                 (id, model_name, device_type, os_version, valid, emulator, error_message, duration, device_analytics_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
