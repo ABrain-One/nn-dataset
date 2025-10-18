@@ -41,7 +41,7 @@ def data(
         epoch: int | None = None,
         max_rows: int | None = None,
         sql: str | list | None = None,
-        prefix_list: list | None = None,
+        prefix_list: tuple | None = None,
 ) -> tuple[
     dict[str, int | float | str | dict[str, int | float | str]], ...
 ]:
