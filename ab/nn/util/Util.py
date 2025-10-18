@@ -161,7 +161,7 @@ def read_py_file_as_string(file_path):
 
 def str_not_none(prefix, value):
     if value:
-        return prefix + str(value)
+        return ' ' + prefix + str(value)
     else:
         return ''
 

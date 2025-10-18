@@ -100,4 +100,3 @@ run_extra_columns = (
 )
 
 tmp_data = 'temp_data'
-all_data = 'all_data'
