@@ -72,7 +72,7 @@ def data(
     params, where_clause = sql_where([task, dataset, metric, nn, epoch])
 
     if prefix_list:
-        where_clause += f" AND ({' OR '.join([f"nn LIKE '{prefix}%'" for prefix in prefix_list])})"
+        where_clause += ' AND (' + ' OR '.join([f"nn LIKE '{prefix}%'" for prefix in prefix_list]) + ')'
 
     source = f'(SELECT s.* FROM stat s {where_clause})'
 
