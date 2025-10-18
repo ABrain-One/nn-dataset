@@ -40,7 +40,7 @@ def data(
         nn: str | None = None,
         epoch: int | None = None,
         max_rows: int | None = None,
-        sql: str | list | None = None,
+        sql: str | None = None,
         prefix_list: tuple | None = None,
 ) -> tuple[
     dict[str, int | float | str | dict[str, int | float | str]], ...
@@ -108,15 +108,13 @@ def data(
         conn, cur = sql_conn()
 
         if sql:
-            if isinstance(sql, str): sql = [sql]
-            sql[-1] = sql[-1] + limit_clause
+            sql = sql + limit_clause
             cur.execute(f'DROP TABLE IF EXISTS {tmp_data}')
 
         cur.execute(f'CREATE TEMP TABLE {tmp_data} AS {base_query}' if sql else f'{base_query}{limit_clause}',
                     params)
 
-        if sql:
-            for q in sql: cur.execute(q)
+        if sql: cur.execute(sql)
 
         rows = cur.fetchall()
         columns = [c[0] for c in cur.description]
