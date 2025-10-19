@@ -97,8 +97,7 @@ def data(
         FROM {source} s
         LEFT JOIN nn       n ON s.nn = n.name
         LEFT JOIN metric   m ON s.metric = m.name
-        LEFT JOIN transform t ON s.transform = t.name
-       ORDER BY s.task, s.dataset, s.metric, s.nn, s.epoch
+        LEFT JOIN transform t ON s.transform = t.name       
     """.format(source=source)
 
     limit_clause = str_not_none('LIMIT ', max_rows)
@@ -111,7 +110,10 @@ def data(
             sql = sql + limit_clause
             cur.execute(f'DROP TABLE IF EXISTS {tmp_data}')
 
-        cur.execute(f'CREATE TEMP TABLE {tmp_data} AS {base_query}' if sql else f'{base_query}{limit_clause}',
+        cur.execute(f'CREATE TEMP TABLE {tmp_data} AS {base_query} ORDER BY RANDOM()' if sql else
+                    f'''{base_query} 
+                        ORDER BY s.task, s.dataset, s.metric, s.nn, s.epoch 
+                        {limit_clause}''',
                     params)
 
         if sql:
