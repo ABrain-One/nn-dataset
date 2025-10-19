@@ -120,6 +120,8 @@ def data(
             cur.execute(f'CREATE INDEX IF NOT EXISTS i_dataset ON {tmp_data}(dataset)')
             cur.execute(f'CREATE INDEX IF NOT EXISTS i_nn ON {tmp_data}(nn)')
             cur.execute(f'CREATE INDEX IF NOT EXISTS i_accuracy ON {tmp_data}(accuracy)')
+            cur.execute(f'CREATE INDEX idx_task_dataset_accuracy_nn ON {tmp_data}(task, dataset, nn)')
+            cur.execute(f'CREATE INDEX idx_task_dataset_accuracy_nn ON {tmp_data}(task, dataset, nn, accuracy)')
             cur.execute(sql)
 
         rows = cur.fetchall()
