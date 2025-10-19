@@ -7,7 +7,7 @@ from ab.nn.util.db.Init import init_db, sql_conn, close_conn
 def init_population():
     if not db_file.exists():
         init_db()
-        json_n_code_to_db()
+        json_train_to_db()
         try:
             json_run_to_db()
         except Exception as e:
@@ -85,7 +85,7 @@ def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
     """, (uuid4(all_values), *all_values))
 
 
-def json_n_code_to_db():
+def json_train_to_db():
     """
     Reload all statistics into the database for all subconfigs and epochs.
     """

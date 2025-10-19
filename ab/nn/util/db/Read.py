@@ -90,9 +90,9 @@ def data(
         )""".format(source=source)
 
     base_query = """
-        SELECT s.task, s.dataset, s.metric, m.code AS metric_code, m.id AS metric_id,
-               s.nn, n.code AS nn_code, n.id AS nn_id, s.epoch, s.accuracy, s.duration,
-               s.id AS stat_id, s.prm AS stat_prm,
+        SELECT s.id, s.task, s.dataset, s.metric, m.code AS metric_code, m.id AS metric_id,
+               s.nn, n.code AS nn_code, s.epoch, s.accuracy, s.duration,
+               s.prm AS stat_prm,
                t.code AS transform_code, t.id AS transform_id, s.transform
         FROM {source} s
         LEFT JOIN nn       n ON s.nn = n.name
@@ -114,7 +114,13 @@ def data(
         cur.execute(f'CREATE TEMP TABLE {tmp_data} AS {base_query}' if sql else f'{base_query}{limit_clause}',
                     params)
 
-        if sql: cur.execute(sql)
+        if sql:
+            cur.execute(f'CREATE INDEX IF NOT EXISTS i_id ON {tmp_data}(id)')
+            cur.execute(f'CREATE INDEX IF NOT EXISTS i_task ON {tmp_data}(task)')
+            cur.execute(f'CREATE INDEX IF NOT EXISTS i_dataset ON {tmp_data}(dataset)')
+            cur.execute(f'CREATE INDEX IF NOT EXISTS i_nn ON {tmp_data}(nn)')
+            cur.execute(f'CREATE INDEX IF NOT EXISTS i_accuracy ON {tmp_data}(accuracy)')
+            cur.execute(sql)
 
         rows = cur.fetchall()
         columns = [c[0] for c in cur.description]
@@ -147,7 +153,7 @@ def data(
             rec = dict(zip(columns, r))
             uid = rec['stat_prm']
             rec['prm'] = prm_by_uid.get(uid, {})
-            rec.pop('stat_id', None)
+            rec.pop('id', None)
             rec.pop('transform', None)
             # ensure epoch is int
             try:
@@ -174,10 +180,10 @@ def run_data(
     params = []
     filters = []
     if model_name is not None:
-        filters.append('model_name = ?');
+        filters.append('model_name = ?')
         params.append(model_name)
     if device_type is not None:
-        filters.append('device_type = ?');
+        filters.append('device_type = ?')
         params.append(device_type)
 
     where_clause = (' WHERE ' + ' AND '.join(filters)) if filters else ''
