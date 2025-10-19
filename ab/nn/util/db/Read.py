@@ -92,7 +92,7 @@ def data(
     base_query = """
         SELECT s.id, s.task, s.dataset, s.metric, m.code AS metric_code, m.id AS metric_id,
                s.nn, n.code AS nn_code, s.epoch, s.accuracy, s.duration,
-               s.prm AS stat_prm, t.code AS transform_code, t.id AS transform_id, s.transform
+               s.prm AS prm_id, t.code AS transform_code, t.id AS transform_id, s.transform
         FROM {source} s
         LEFT JOIN nn       n ON s.nn = n.name
         LEFT JOIN metric   m ON s.metric = m.name
@@ -132,7 +132,7 @@ def data(
             return tuple()
 
         # Bulk-load *all* hyperparameters for the retrieved stat_ids
-        stat_id_idx = columns.index("stat_prm")
+        stat_id_idx = columns.index("prm_id")
         uids = [r[stat_id_idx] for r in rows]
 
         from collections import defaultdict
@@ -154,7 +154,7 @@ def data(
         results: list[dict] = []
         for r in rows:
             rec = dict(zip(columns, r))
-            uid = rec['stat_prm']
+            uid = rec['prm_id']
             rec['prm'] = prm_by_uid.get(uid, {})
             rec.pop('id', None)
             rec.pop('transform', None)
