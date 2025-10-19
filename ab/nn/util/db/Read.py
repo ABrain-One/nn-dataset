@@ -92,8 +92,7 @@ def data(
     base_query = """
         SELECT s.id, s.task, s.dataset, s.metric, m.code AS metric_code, m.id AS metric_id,
                s.nn, n.code AS nn_code, s.epoch, s.accuracy, s.duration,
-               s.prm AS stat_prm,
-               t.code AS transform_code, t.id AS transform_id, s.transform
+               s.prm AS stat_prm, t.code AS transform_code, t.id AS transform_id, s.transform
         FROM {source} s
         LEFT JOIN nn       n ON s.nn = n.name
         LEFT JOIN metric   m ON s.metric = m.name
