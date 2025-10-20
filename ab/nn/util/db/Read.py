@@ -154,9 +154,10 @@ def data(
         results: list[dict] = []
         for r in rows:
             rec = dict(zip(columns, r))
-            uid = rec['prm_id']
-            rec['prm'] = prm_by_uid.get(uid, {})
-            rec.pop('id', None)
+            rec['prm'] = prm_by_uid.get(rec['prm_id'], {})
+            if 'prm_id_2' in rec:
+                rec['prm_2'] = prm_by_uid.get(rec['prm_id_2'], {})
+            # rec.pop('id', None)
             rec.pop('transform', None)
             # ensure epoch is int
             try:
