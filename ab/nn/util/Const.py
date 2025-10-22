@@ -22,6 +22,8 @@ default_random_config_order = False
 
 default_epoch_limit_minutes = 30 # minutes
 
+default_save_onnx_weights = 0
+
 base_module = 'ab'
 to_nn = (base_module, 'nn')
 

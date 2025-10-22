@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text-to-Image Generation Demo</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            background-color: #f7f7f7;
+            color: #333;
+            box-sizing: border-box;
+        }
+        h1 {
+            margin-bottom: 30px;
+        }
+        .container {
+            display: flex;
+            width: 100%;
+            max-width: 1000px;
+            gap: 40px;
+            justify-content: center;
+        }
+        .left, .right {
+            width: 45%;
+            display: flex;
+            flex-direction: column;
+        }
+        #prompt {
+            width: 100%;
+            height: 120px;
+            margin-bottom: 20px;
+            font-size: 16px;
+            padding: 10px;
+            box-sizing: border-box;
+            resize: vertical;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+        }
+        #generate-btn {
+            padding: 12px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border: none;
+            background-color: #007bff;
+            color: white;
+            border-radius: 8px;
+            transition: background-color 0.3s;
+        }
+        #generate-btn:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #generate-btn:hover:not(:disabled) {
+            background-color: #0056b3;
+        }
+        #image-container {
+            margin-top: 20px;
+            width: 100%;
+            padding-top: 100%; /* Aspect ratio 1:1 */
+            position: relative;
+            background-color: #e9e9e9;
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        #image {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        .placeholder-text {
+            color: #888;
+            font-size: 18px;
+            text-align: center;
+        }
+        #loading-spinner {
+            display: none;
+            position: absolute;
+            width: 60px;
+            height: 60px;
+            border: 6px solid #f3f3f3;
+            border-top: 6px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        #error-message {
+            color: #d9534f;
+            margin-top: 15px;
+            font-weight: bold;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Text-to-Image Generation</h1>
+
+    <div class="container">
+        <div class="left">
+            <textarea id="prompt" placeholder="Enter a descriptive prompt... e.g., a red car on the street"></textarea>
+            <button id="generate-btn">Generate</button>
+            <p id="error-message"></p>
+        </div>
+
+        <div class="right">
+            <div id="image-container">
+                <div id="loading-spinner"></div>
+                <img id="image" src="" alt="">
+                <div id="placeholder" class="placeholder-text">Your generated image will appear here</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const generateButton = document.getElementById('generate-btn');
+        const promptTextarea = document.getElementById('prompt');
+        const imageElement = document.getElementById('image');
+        const imageContainer = document.getElementById('image-container');
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const placeholder = document.getElementById('placeholder');
+        const errorMessage = document.getElementById('error-message');
+
+        // Dynamically determine the backend URL from the browser's current address
+        const backendUrl = window.location.origin;
+
+        generateButton.addEventListener('click', async () => {
+            const prompt = promptTextarea.value;
+            if (!prompt) {
+                alert('Please enter a prompt.');
+                return;
+            }
+
+            // --- UI Updates for Loading ---
+            generateButton.disabled = true;
+            loadingSpinner.style.display = 'block';
+            imageElement.src = ''; // Clear previous image
+            placeholder.style.display = 'none';
+            errorMessage.style.display = 'none';
+
+            try {
+                const response = await fetch(`${backendUrl}/generate_image`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt }),
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                imageElement.src = `${backendUrl}/${data.image_path}`;
+
+            } catch (error) {
+                console.error('Fetch error:', error);
+                errorMessage.textContent = `An error occurred: ${error.message}`;
+                errorMessage.style.display = 'block';
+                placeholder.style.display = 'block'; // Show placeholder again on error
+            } finally {
+                // --- Reset UI ---
+                generateButton.disabled = false;
+                loadingSpinner.style.display = 'none';
+            }
+        });
+    </script>
+
+</body>
+</html>
