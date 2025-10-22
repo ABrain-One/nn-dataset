@@ -7,8 +7,6 @@ from tqdm import tqdm
 import os
 import glob
 import math
-import random
-from torch.utils.checkpoint import checkpoint
 from copy import deepcopy
 import argparse
 
@@ -28,8 +26,7 @@ CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
 
 
 def supported_hyperparameters():
-    return {'lr': (float, 1e-4), 'timesteps': (int, 1000), 'model_channels': (int, 128), 'epochs': (int, 100),
-            'onnx': (bool, False)}
+    return {'lr', 'timesteps', 'model_channels', 'epochs'}
 
 
 def cosine_beta_schedule(timesteps, s=0.008):
@@ -264,18 +261,18 @@ class Net(nn.Module):
         betas = cosine_beta_schedule(self.num_timesteps).to(device);
         self.alphas_cumprod = torch.cumprod(1. - betas, axis=0);
         self.tensor_to_pil = ToPILImage();
-        self.checkpoint_dir = "checkpoints";
-        os.makedirs(self.checkpoint_dir, exist_ok=True);
+        # self.checkpoint_dir = "checkpoints";
+        # os.makedirs(self.checkpoint_dir, exist_ok=True);
         self.best_train_loss = float('inf')
         print("Pre-compiling and warming up the U-Net...");
-        list_of_files = glob.glob(os.path.join(self.checkpoint_dir, 'latest_model.pth'))
-        if not list_of_files:
-            list_of_files = glob.glob(os.path.join(self.checkpoint_dir, 'best_model.pth'))
-
-        if list_of_files:
-            print(f"Resuming from checkpoint: {list_of_files[0]}");
-            self.unet._orig_mod.load_state_dict(torch.load(list_of_files[0], map_location=device), strict=True);
-            self.ema = EMA(self.unet)
+        # list_of_files = glob.glob(os.path.join(self.checkpoint_dir, 'latest_model.pth'))
+        # if not list_of_files:
+        #     list_of_files = glob.glob(os.path.join(self.checkpoint_dir, 'best_model.pth'))
+        #
+        # if list_of_files:
+        #     print(f"Resuming from checkpoint: {list_of_files[0]}");
+        #     self.unet._orig_mod.load_state_dict(torch.load(list_of_files[0], map_location=device), strict=True);
+        #     self.ema = EMA(self.unet)
         self.scaler = torch.amp.GradScaler('cuda');
         self.null_text_context = self.text_encoder([""], self.device)
 
@@ -329,44 +326,43 @@ class Net(nn.Module):
         print(f"\nEpoch {self.current_epoch} finished. Average Loss: {avg_epoch_loss:.4f}")
         if avg_epoch_loss < self.best_train_loss:
             self.best_train_loss = avg_epoch_loss;
-            print(f"New best training loss: {self.best_train_loss:.4f}. Saving best model checkpoint...");
-            torch.save(self.unet._orig_mod.state_dict(), os.path.join(self.checkpoint_dir, "best_model.pth"))
-            if self.export_onnx:
-                print("Exporting best model to ONNX format...")
-                try:
-                    dummy_image = torch.randn(1, 3, self.image_size, self.image_size, device=self.device)
-                    dummy_time = torch.tensor([500], device=self.device, dtype=torch.long)
-                    dummy_ctx = torch.randn(1, 77, 512, device=self.device)
-                    dummy_global_emb = torch.randn(1, 512, device=self.device)
-                    onnx_path = os.path.join(self.checkpoint_dir, "best_model.onnx")
-
-                    torch.onnx.export(
-                        self.unet._orig_mod,
-                        (dummy_image, dummy_time, dummy_ctx, dummy_global_emb),
-                        onnx_path,
-                        input_names=['image', 'time', 'context', 'global_text_emb'],
-                        output_names=['noise_pred'],
-                        dynamic_axes={
-                            'image': {0: 'batch_size'}, 'context': {0: 'batch_size'},
-                            'global_text_emb': {0: 'batch_size'}, 'noise_pred': {0: 'batch_size'}
-                        },
-                        opset_version=14
-                    )
-                    print(f"Model successfully exported to {onnx_path}")
-                except Exception as e:
-                    print(f"Failed to export model to ONNX: {e}")
+            # print(f"New best training loss: {self.best_train_loss:.4f}. Saving best model checkpoint...");
+            # torch.save(self.unet._orig_mod.state_dict(), os.path.join(self.checkpoint_dir, "best_model.pth"))
+            # if self.export_onnx:
+            #     print("Exporting best model to ONNX format...")
+            #     try:
+            #         dummy_image = torch.randn(1, 3, self.image_size, self.image_size, device=self.device)
+            #         dummy_time = torch.tensor([500], device=self.device, dtype=torch.long)
+            #         dummy_ctx = torch.randn(1, 77, 512, device=self.device)
+            #         dummy_global_emb = torch.randn(1, 512, device=self.device)
+            #         onnx_path = os.path.join(self.checkpoint_dir, "best_model.onnx")
+            #
+            #         torch.onnx.export(
+            #             self.unet._orig_mod,
+            #             (dummy_image, dummy_time, dummy_ctx, dummy_global_emb),
+            #             onnx_path,
+            #             input_names=['image', 'time', 'context', 'global_text_emb'],
+            #             output_names=['noise_pred'],
+            #             dynamic_axes={
+            #                 'image': {0: 'batch_size'}, 'context': {0: 'batch_size'},
+            #                 'global_text_emb': {0: 'batch_size'}, 'noise_pred': {0: 'batch_size'}
+            #             },
+            #             opset_version=14
+            #         )
+            #         print(f"Model successfully exported to {onnx_path}")
+            #     except Exception as e:
+            #         print(f"Failed to export model to ONNX: {e}")
         else:
             print(f"Training loss did not improve from {self.best_train_loss:.4f}.")
 
-        print("\nSaving latest model checkpoint (end of epoch)...")
-        try:
-            latest_pth_path = os.path.join(self.checkpoint_dir, "latest_model.pth")
-            torch.save(self.unet._orig_mod.state_dict(), latest_pth_path)
-            print(f"Latest PyTorch checkpoint saved to {latest_pth_path}")
-        except Exception as e:
-            print(f"An error occurred during final checkpointing: {e}")
+        # print("\nSaving latest model checkpoint (end of epoch)...")
+        # try:
+        #     latest_pth_path = os.path.join(self.checkpoint_dir, "latest_model.pth")
+        #     torch.save(self.unet._orig_mod.state_dict(), latest_pth_path)
+        #     print(f"Latest PyTorch checkpoint saved to {latest_pth_path}")
+        # except Exception as e:
+        #     print(f"An error occurred during final checkpointing: {e}")
 
-        return 0.0
 
     @torch.no_grad()
     def generate(self, text_prompts, num_inference_steps=None):

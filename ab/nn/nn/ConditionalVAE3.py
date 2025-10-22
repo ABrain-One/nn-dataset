@@ -1,7 +1,3 @@
-# File: ConditionalVAE3_1.py
-# Description: This version includes a robust, controllable resume feature
-#              and an improved decoder architecture using Pixel Shuffle. It is
-#              now corrected to be compatible with the training framework.
 
 import torch
 import torch.nn as nn
@@ -9,14 +5,15 @@ import torchvision.models as models
 import torchvision.transforms as T
 import math
 import os
-import glob
-
+# Import the required function for saving weights from the framework's utility file.
+from ab.nn.util.Util import export_torch_weights
 from transformers import CLIPTextModel, CLIPTokenizer
 
 
 def supported_hyperparameters():
     """Returns the hyperparameters supported by this model."""
-    return {'lr', 'momentum', 'version'}
+    # 'save_weights' flag to make checkpointing controllable.
+    return {'lr', 'momentum', 'version', 'save_weights'}
 
 
 class PerceptualLoss(nn.Module):
@@ -149,14 +146,7 @@ class Net(nn.Module):
         self.text_embedding_dim = 128
         self.latent_dim = 512
         self.model_name = "ConditionalVAE3"
-
         self.register_buffer('epoch_counter', torch.tensor(0))
-        self.register_buffer('best_score_so_far', torch.tensor(-1.0))
-
-        self.checkpoint_dir = os.path.join("checkpoints", self.model_name)
-        if not os.path.exists(self.checkpoint_dir):
-            os.makedirs(self.checkpoint_dir)
-
         image_channels, image_size = in_shape[1], in_shape[2]
         self.text_encoder = self.TextEncoder(out_size=self.text_embedding_dim).to(device)
         self.cvae = self.CVAE(self.latent_dim, self.text_embedding_dim, image_channels, image_size).to(device)
@@ -167,33 +157,17 @@ class Net(nn.Module):
         self.reconstruction_loss = nn.L1Loss()
         self.perceptual_loss = PerceptualLoss().to(device)
 
-        resume_flag = os.getenv('RESUME_TRAINING', 'true').lower()
-        best_checkpoint_path = os.path.join(self.checkpoint_dir, "best_model.pth")
-
-        if resume_flag == 'true' and os.path.exists(best_checkpoint_path):
-            print(f"RESUME_TRAINING=true. Loading checkpoint from: {best_checkpoint_path}")
-            self.load_state_dict(torch.load(best_checkpoint_path, map_location=device))
-            print(
-                f"Resuming from Epoch {self.epoch_counter.item() + 1}. Best score so far: {self.best_score_so_far.item():.4f}")
-        else:
-            if resume_flag == 'false':
-                print("RESUME_TRAINING=false. Starting a fresh training run.")
-            else:
-                print("No checkpoint found. Starting a fresh training run.")
 
     def train_setup(self, prm):
         pass
 
-    # --- THIS IS THE CORRECTED METHOD ---
     def learn(self, train_data, current_epoch=0):
         self.train()
-        # The model's internal epoch counter is updated here, once per training epoch
         self.epoch_counter = torch.tensor(current_epoch)
         total_loss = 0.0
         kld_warmup_epochs = 25
         max_kld_weight = 0.0000025
 
-        # Use the epoch passed in by the training framework for KLD warmup
         if current_epoch < kld_warmup_epochs:
             kld_weight = max_kld_weight * ((current_epoch + 1) / kld_warmup_epochs)
         else:
@@ -229,7 +203,6 @@ class Net(nn.Module):
 
     @torch.no_grad()
     def forward(self, images, **kwargs):
-        # The epoch counter is now handled in the 'learn' method
         prompts_to_use = kwargs.get('prompts')
         if not prompts_to_use:
             batch_size = images.size(0)
@@ -238,11 +211,3 @@ class Net(nn.Module):
 
         generated_images = self.generate(prompts_to_use)
         return generated_images, prompts_to_use
-
-    def save_if_best(self, current_score):
-        if current_score > self.best_score_so_far.item():
-            self.best_score_so_far = torch.tensor(current_score)
-            best_checkpoint_path = os.path.join(self.checkpoint_dir, "best_model.pth")
-            print(
-                f"\n--- New best score: {current_score:.4f} at epoch {self.epoch_counter.item()}! Saving checkpoint to {best_checkpoint_path} ---")
-            torch.save(self.state_dict(), best_checkpoint_path)

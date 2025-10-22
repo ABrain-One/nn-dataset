@@ -1,40 +1,76 @@
-# File: demo/Text-ImageCVAE.py
-# Description: A dedicated demo script for the ConditionalVAE4 model.
+import os
 
 import torch
-import os
-from fastapi import FastAPI
-from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-from ab.nn.util.Util import out_dir
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
+from huggingface_hub import hf_hub_download
+from pydantic import BaseModel
 
-# --- 1. Load Your Custom ConditionalVAE4 Model ---
-print("--- Loading Your Custom ConditionalVAE4 Model ---")
-from ab.nn.nn.ConditionalVAE4 import Net
+# --- 1. Import Both Model Architectures ---
+from ab.nn.nn.ConditionalVAE3 import Net as NetV3
+from ab.nn.nn.ConditionalVAE4 import Net as NetV4
+from ab.nn.util.Const import ab_root_path
 
-WEIGHTS_PATH = out_dir / 'checkpoints' / 'ConditionalVAE4' / 'best_model.pth'
+# --- 2. Configuration and Weight Downloading for BOTH models ---
+REPO_ID = "NN-Dataset/ConditionalVAE4-checkpoints"
+MODELS_TO_LOAD = {
+    "ConditionalVAE3": {
+        "class": NetV3,
+        "filename": "ConditionalVAE3/best_model.pth"
+    },
+    "ConditionalVAE4": {
+        "class": NetV4,
+        "filename": "ConditionalVAE4/best_model.pth"
+    }
+}
+
+models = {}
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Load your CVAE-GAN architecture and weights
-model = Net(in_shape=(1, 3, 256, 256), out_shape=None, prm={}, device=device).to(device)
+demo_dir = ab_root_path / 'demo'
 
-if not os.path.exists(WEIGHTS_PATH):
-    raise FileNotFoundError(
-        f"ConditionalVAE4 weights not found at {WEIGHTS_PATH}. Please ensure the checkpoint file exists.")
+for model_name, config in MODELS_TO_LOAD.items():
+    print(f"--- Loading Model: {model_name} ---")
+    checkpoint_dir = demo_dir / 'checkpoints' /  model_name
+    # This is the ideal path, but we'll verify it after download
+    weights_path = checkpoint_dir / "best_model.pth"
 
-model.load_state_dict(torch.load(WEIGHTS_PATH, map_location=device))
-model.eval()
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-print(f"--- Model 'ConditionalVAE4' Ready ---")
+    if not os.path.exists(weights_path):
+        print(f"Weights for {model_name} not found locally. Downloading...")
+        try:
+            # --- THE FIX: Capture the returned path from the download function ---
+            # This works with older library versions by omitting 'local_file'
+            downloaded_path = hf_hub_download(
+                repo_id=REPO_ID,
+                filename=config["filename"],
+                local_dir=checkpoint_dir,
+                local_dir_use_symlinks=False
+            )
+            # Use the actual path where the file was saved
+            weights_path = downloaded_path
+            print("Download complete.")
+        except Exception as e:
+            raise RuntimeError(f"Failed to download weights for {model_name}. Error: {e}")
 
-# --- 2. FastAPI Web Server ---
-OUTPUT_DIR = out_dir / 'generated_images'
+    # Instantiate the correct model class
+    model_instance = config["class"](in_shape=(1, 3, 256, 256), out_shape=None, prm={}, device=device).to(device)
+
+    # Load weights from the verified path
+    model_instance.load_state_dict(torch.load(weights_path, map_location=device), strict=False)
+    model_instance.eval()
+
+    models[model_name] = model_instance
+    print(f"--- Model '{model_name}' Ready ---")
+
+# --- 3. FastAPI Web Server ---
+OUTPUT_DIR = demo_dir / 'generated_images'
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI()
-
-# Add CORS middleware to allow browser connections
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -46,37 +82,36 @@ app.add_middleware(
 
 class Prompt(BaseModel):
     text: str
+    model_choice: str
 
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
-    return FileResponse('demo/Text-ImageCVAE.html')
+    return FileResponse(demo_dir / 'Text-ImageCVAE.html')
 
 
 @app.post("/generate")
 async def generate_image_api(prompt: Prompt):
-    print(f"Received prompt: {prompt.text}")
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
+    print(f"Received prompt: '{prompt.text}' for model: '{prompt.model_choice}'")
 
-    # Use the loaded model to generate an image
-    generated_image = model.generate([prompt.text])[0]
+    model_to_use = models.get(prompt.model_choice)
+    if not model_to_use:
+        return {"error": f"Model '{prompt.model_choice}' not found."}
 
-    # Save the generated image
+    generated_image = model_to_use.generate([prompt.text])[0]
+
     safe_filename = "".join(c for c in prompt.text if c.isalnum() or c in (' ', '_')).rstrip()
-    image_filename = f"{safe_filename.replace(' ', '_')[:30]}.png"
+    image_filename = f"{prompt.model_choice}_{safe_filename.replace(' ', '_')[:30]}_{os.urandom(4).hex()}.png"
     image_path = os.path.join(OUTPUT_DIR, image_filename)
     generated_image.save(image_path)
     print(f"Image saved to {image_path}")
+    return {"image_path": demo_dir / 'generated_images' / image_filename}
 
-    return {"image_path": image_path.replace("ab/nn/", "")}
-
-
-@app.get("/demo/generated_images/{image_name}")
+@app.get(str(demo_dir / 'generated_images/{image_name}'))
 async def get_generated_image(image_name: str):
     return FileResponse(os.path.join(OUTPUT_DIR, image_name))
 
 
-# --- 3. Server Launch ---
+# --- 4. Server Launch ---
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app)
