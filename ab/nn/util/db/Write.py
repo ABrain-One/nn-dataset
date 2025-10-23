@@ -1,3 +1,5 @@
+import sys
+
 from tqdm import tqdm
 
 from ab.nn.util.Util import *
@@ -94,6 +96,8 @@ def json_train_to_db():
     sub_configs = [d.name for d in stat_base_path.iterdir() if d.is_dir()]
 
     print(f"Import all statistics from JSON files in {stat_train_dir} into database {db_file}")
+
+    last_error = None
     for sub_config_str in tqdm(sub_configs):
         model_stat_dir = stat_base_path / sub_config_str
 
@@ -102,15 +106,19 @@ def json_train_to_db():
             epoch = int(epoch_file.stem)
 
             with open(model_stat_file, 'r') as f:
-                trials = json.load(f)
-
-            for trial in trials:
-                _, _, metric, nn = sub_config = conf_to_names(sub_config_str)
-                populate_code_table('nn', cursor, name=nn)
-                populate_code_table('metric', cursor, name=metric)
-                populate_code_table('transform', cursor, name=trial['transform'])
-                save_stat(sub_config + (epoch,), trial, cursor)
+                try:
+                    for trial in json.load(f):
+                        _, _, metric, nn = sub_config = conf_to_names(sub_config_str)
+                        populate_code_table('nn', cursor, name=nn)
+                        populate_code_table('metric', cursor, name=metric)
+                        populate_code_table('transform', cursor, name=trial['transform'])
+                        save_stat(sub_config + (epoch,), trial, cursor)
+                except Exception as e:
+                    last_error = e
+                    print(f"Error: JSON file {model_stat_file}, Exception {e}", file=sys.stderr)
     close_conn(conn)
+    if last_error:
+        raise last_error
     print("All statistics reloaded successfully.")
 
 

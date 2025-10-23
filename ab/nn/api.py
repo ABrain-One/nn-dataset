@@ -1,6 +1,5 @@
 import ab.nn.util.db.Read as DB_Read
 import ab.nn.util.Train as Train
-import ab.nn.util.Util as Util
 from ab.nn.util.Const import default_epoch_limit_minutes
 from pandas import DataFrame
 import functools
