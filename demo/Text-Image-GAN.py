@@ -12,7 +12,7 @@ from torchvision.utils import save_image
 from transformers import CLIPTokenizer
 from huggingface_hub import hf_hub_download
 
-from ab.nn.util.Const import out_dir, ab_root_path
+from ab.nn.util.Const import demo_dir
 
 # Add the project root to the Python path to allow importing from 'ab'
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -37,7 +37,6 @@ os.makedirs(IMAGE_DIR, exist_ok=True)
 
 model_name = 'ConditionalGAN'
 REPO_ID = "NN-Dataset/ConditionalGAN-checkpoints"
-demo_dir = ab_root_path / 'demo'
 checkpoint_dir = demo_dir / 'checkpoints' / model_name
 ch_file = 'generator.pth'
 checkpoint_file = checkpoint_dir / ch_file
@@ -156,4 +155,5 @@ async def get_image(image_path: str):
 
 # --- 4. Server Launch ---
 if __name__ == "__main__":
-    uvicorn.run(app)
+    # Listen on 0.0.0.0 to be accessible remotely
+    uvicorn.run(app, host="0.0.0.0", port=8000)

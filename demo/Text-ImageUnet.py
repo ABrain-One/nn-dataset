@@ -1,30 +1,19 @@
 import os
-import sys
 import uuid
+
 import torch
 import uvicorn
 from fastapi import FastAPI
-from pydantic import BaseModel
 from fastapi.responses import FileResponse, JSONResponse
-from starlette.middleware.cors import CORSMiddleware
 from huggingface_hub import hf_hub_download
+from pydantic import BaseModel
+from starlette.middleware.cors import CORSMiddleware
 
-# Add the project root to the Python path to allow importing from 'ab'
-# This assumes your project structure is like 'Project/ab' and 'Project/demo'
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, project_root)
-
-# --- Model & Tokenizer Configuration ---
-try:
-    # --- Import the Net class from your Unet_D.py file ---
-    from ab.nn.nn.Unet_D import Net as UnetD_Net
-except ImportError as e:
-    print(f"Error importing Unet-D: {e}")
-    print("Please ensure 'Unet_D.py' exists in 'ab/nn/nn/' and the project root is in PYTHONPATH.")
-    UnetD_Net = None
+from ab.nn.nn.UnetD import Net as UnetD_Net
+from ab.nn.util.Const import demo_dir
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-IMAGE_DIR = "generated_images"
+IMAGE_DIR = demo_dir / 'generated_images'
 
 os.makedirs(IMAGE_DIR, exist_ok=True)
 
@@ -33,7 +22,7 @@ model_name = 'Unet-D'
 REPO_ID = "NN-Dataset/Unet-D-checkpoints"
 
 # This assumes the script is run from a 'demo' directory inside the project
-checkpoint_dir = os.path.join(os.path.dirname(__file__), 'checkpoints', model_name)
+checkpoint_dir = os.path.join(demo_dir, 'checkpoints', model_name)
 
 # --- Point to the 'best_model.pth' file your script saves ---
 ch_file = 'best_model.pth'
@@ -104,7 +93,7 @@ class ImageRequest(BaseModel):
 async def serve_index():
     """Serves the main index.html file."""
     # --- THIS LINE IS UPDATED ---
-    return FileResponse('Text-ImageUnet.html')
+    return FileResponse(demo_dir / 'Text-ImageUnet.html')
 
 
 @app.post("/generate_image")
@@ -155,6 +144,5 @@ async def get_image(image_path: str):
 
 # --- Server Launch ---
 if __name__ == "__main__":
-    # --- THIS LINE IS UPDATED ---
     # Listen on 0.0.0.0 to be accessible remotely
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8002)

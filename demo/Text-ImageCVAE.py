@@ -11,7 +11,7 @@ from pydantic import BaseModel
 # --- 1. Import Both Model Architectures ---
 from ab.nn.nn.ConditionalVAE3 import Net as NetV3
 from ab.nn.nn.ConditionalVAE4 import Net as NetV4
-from ab.nn.util.Const import ab_root_path
+from ab.nn.util.Const import demo_dir
 
 # --- 2. Configuration and Weight Downloading for BOTH models ---
 REPO_ID = "NN-Dataset/ConditionalVAE4-checkpoints"
@@ -29,7 +29,6 @@ MODELS_TO_LOAD = {
 models = {}
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-demo_dir = ab_root_path / 'demo'
 
 for model_name, config in MODELS_TO_LOAD.items():
     print(f"--- Loading Model: {model_name} ---")
@@ -114,4 +113,5 @@ async def get_generated_image(image_name: str):
 
 # --- 4. Server Launch ---
 if __name__ == "__main__":
-    uvicorn.run(app)
+    # Listen on 0.0.0.0 to be accessible remotely
+    uvicorn.run(app, host="0.0.0.0", port=8001)
