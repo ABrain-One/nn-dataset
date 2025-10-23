@@ -146,17 +146,7 @@ class Net(nn.Module):
         self.text_embedding_dim = 128
         self.latent_dim = 512
         self.model_name = "ConditionalVAE3"
-
-
-        # Get the "input flag" from hyperparameters to control saving.
-        self.save_weights_on_improve = self.prm.get('save_weights', False)
-
         self.register_buffer('epoch_counter', torch.tensor(0))
-        self.register_buffer('best_score_so_far', torch.tensor(-1.0))
-
-        self.checkpoint_dir = os.path.join("checkpoints", self.model_name)
-        os.makedirs(self.checkpoint_dir, exist_ok=True)
-
         image_channels, image_size = in_shape[1], in_shape[2]
         self.text_encoder = self.TextEncoder(out_size=self.text_embedding_dim).to(device)
         self.cvae = self.CVAE(self.latent_dim, self.text_embedding_dim, image_channels, image_size).to(device)
@@ -167,16 +157,6 @@ class Net(nn.Module):
         self.reconstruction_loss = nn.L1Loss()
         self.perceptual_loss = PerceptualLoss().to(device)
 
-        # --- MODIFIED ---
-        # Removed the environment variable logic and simplified checkpoint loading.
-        best_checkpoint_path = os.path.join(self.checkpoint_dir, "best_model.pth")
-        if os.path.exists(best_checkpoint_path):
-            print(f"Loading checkpoint from: {best_checkpoint_path}")
-            self.load_state_dict(torch.load(best_checkpoint_path, map_location=device))
-            print(
-                f"Resumed from Epoch {self.epoch_counter.item() + 1}. Best score so far: {self.best_score_so_far.item():.4f}")
-        else:
-            print("No checkpoint found. Starting a fresh training run.")
 
     def train_setup(self, prm):
         pass
@@ -231,22 +211,3 @@ class Net(nn.Module):
 
         generated_images = self.generate(prompts_to_use)
         return generated_images, prompts_to_use
-
-
-    def save_if_best(self, current_score):
-        """
-        Called by the training framework to save weights if performance improves.
-        """
-        # 1. Check if the feature is enabled by the input flag.
-        if not self.save_weights_on_improve:
-            return
-
-        # Compare the current score with the best score recorded.
-        if current_score > self.best_score_so_far.item():
-            self.best_score_so_far = torch.tensor(current_score)
-            best_checkpoint_path = os.path.join(self.checkpoint_dir, "best_model.pth")
-            print(
-                f"\n--- New best score: {current_score:.4f} at epoch {self.epoch_counter.item()}! Saving checkpoint... ---")
-
-             #Use the required function to save the PyTorch weights.
-            export_torch_weights(self, best_checkpoint_path)
