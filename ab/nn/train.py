@@ -72,7 +72,7 @@ def main(config: str | tuple | list = default_config, nn_prm:dict = default_nn_h
                             accuracy, accuracy_to_time, duration = optuna_objective(trial, sub_config, nn_prm, num_workers, min_learning_rate, max_learning_rate,
                                                                                     min_momentum, max_momentum, min_dropout, max_dropout,
                                                                                     min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, n_epochs,
-                                                                                    pretrained, epoch_limit_minutes)
+                                                                                    pretrained, epoch_limit_minutes, save_onnx_weights)
                             if good(accuracy, min_accuracy(dataset), duration):
                                 fail_iterations = nn_fail_attempts
                             return accuracy

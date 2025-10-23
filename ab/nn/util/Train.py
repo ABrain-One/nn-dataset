@@ -115,7 +115,7 @@ class Train:
         self.batch = batch
         self.task = task
         self.prm = prm
-        self.save_onnx_weights = save_onnx_weights  # <-- Stored the flag
+        self.save_onnx_weights = save_onnx_weights  # <-- Stored flag
 
         self.metric_name = metric
         self.metric_function = self.load_metric_function(metric)

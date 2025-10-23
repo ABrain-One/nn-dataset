@@ -174,7 +174,7 @@ def export_model_to_onnx(model, dummy_input, path):
         if isinstance(layer, (torch.nn.AdaptiveAvgPool2d, torch.nn.AdaptiveMaxPool2d)):
             if layer.output_size not in [(1, 1), 1, None]:
                 hasAdaptivePoolingLayer = True
-    # Ensure the directory exists
+    # Ensure if the directory exists
     onnx_directory = dirname(path)
     makedirs(onnx_directory, exist_ok=True)
     with torch.no_grad():
@@ -196,8 +196,6 @@ def export_model_to_onnx(model, dummy_input, path):
                     "input": {0: "batch_size", 2: "height", 3: "width"},
                     "output": {0: "batch_size"}})
     print(f"Exported neural network to ONNX format at {path}")
-
-
 
 #  FUNCTIONS FOR SAVING AND LOADING WEIGHTS
 
