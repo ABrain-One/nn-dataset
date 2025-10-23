@@ -7,7 +7,7 @@ import functools
 
 
 @functools.lru_cache(maxsize=10)
-def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None, epoch=None, max_rows=None, sql=None) -> DataFrame:
+def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None, epoch=None, max_rows=None, sql=None, prefix_list=None) -> DataFrame:
     """
     Get the NN model code and all related statistics as a pandas DataFrame.
 
@@ -26,7 +26,8 @@ def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None
           'nn', 'nn_code', 'epoch', 'accuracy', 'duration',
           'prm', and 'transform_code'.
     """
-    dt: tuple[dict, ...] = DB_Read.data(only_best_accuracy, task=task, dataset=dataset, metric=metric, nn=nn, epoch=epoch, max_rows=max_rows, sql=sql)
+    dt: tuple[dict, ...] = DB_Read.data(only_best_accuracy, task=task, dataset=dataset, metric=metric, nn=nn, epoch=epoch, max_rows=max_rows,
+                                        sql=sql, prefix_list=prefix_list)
     return DataFrame.from_records(dt)
 
 
