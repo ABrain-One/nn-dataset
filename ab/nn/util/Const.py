@@ -77,6 +77,7 @@ out = 'out'
 out_dir = ab_root_path / out
 data_dir = ab_root_path / 'data'
 db_dir = ab_root_path / 'db'
+demo_dir = ab_root_path / 'demo'
 db_file = db_dir / 'ab.nn.db'
 
 onnx_dir = out_dir / 'onnx'
