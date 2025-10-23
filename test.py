@@ -90,6 +90,17 @@ class Testing(unittest.TestCase):
         )
 
     # ------------------------------------------------------------------
+    #  1 · Basic data sanity check
+    # ------------------------------------------------------------------
+    def test_run_data(self):
+        # Fetch first 10 rows from `run`
+        df = api.run_data(max_rows=10)
+
+        print("Total rows available:", len(api.run_data()))
+        print("Showing first 10 rows:")
+        print(df.to_string(index=False))
+
+    # ------------------------------------------------------------------
     #  2 · check_nn with trainer stubbed out
     # ------------------------------------------------------------------
     def test_check_nn(self):

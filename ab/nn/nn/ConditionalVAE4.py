@@ -160,15 +160,7 @@ class Net(nn.Module):
         self.latent_dim = 512
         self.model_name = "ConditionalVAE4"
 
-        # --- ADDED ---
-        # Get the "input flag" from hyperparameters to control saving.
-        self.save_weights_on_improve = self.prm.get('save_weights', False)
-
         self.register_buffer('epoch_counter', torch.tensor(0))
-        self.register_buffer('best_score_so_far', torch.tensor(-1.0))
-
-        self.checkpoint_dir = os.path.join("checkpoints", self.model_name)
-        os.makedirs(self.checkpoint_dir, exist_ok=True)
 
         image_channels, image_size = in_shape[1], in_shape[2]
         self.text_encoder = self.TextEncoder(out_size=self.text_embedding_dim).to(device)
@@ -186,22 +178,6 @@ class Net(nn.Module):
         self.perceptual_loss = PerceptualLoss().to(device)
         self.adversarial_loss = nn.BCEWithLogitsLoss()
 
-        source_checkpoint_path = os.path.join("checkpoints", "ConditionalVAE3", "best_model.pth")
-        gan_checkpoint_path = os.path.join(self.checkpoint_dir, "best_model.pth")
-
-        if os.path.exists(gan_checkpoint_path):
-            print(f"Resuming GAN training. Loading checkpoint from: {gan_checkpoint_path}")
-            self.load_state_dict(torch.load(gan_checkpoint_path, map_location=device))
-            print(
-                f"Resumed from Epoch {self.epoch_counter.item() + 1}. Best score so far: {self.best_score_so_far.item():.4f}")
-        elif os.path.exists(source_checkpoint_path):
-            print(f"No GAN checkpoint found. Initializing with VAE weights from: {source_checkpoint_path}")
-            self.load_state_dict(torch.load(source_checkpoint_path, map_location=device), strict=False)
-            print(
-                f"Loaded pre-trained VAE score of {self.best_score_so_far.item():.4f}. Resetting for new GAN training.")
-            self.best_score_so_far = torch.tensor(-1.0)
-        else:
-            print("No checkpoint found. Starting a fresh training run.")
 
     def train_setup(self, prm):
         pass
@@ -290,19 +266,3 @@ class Net(nn.Module):
             prompts_to_use = [default_prompts[i % len(default_prompts)] for i in range(batch_size)]
 
         return self.generate(prompts_to_use), prompts_to_use
-
-    def save_if_best(self, current_score):
-
-        # 1. Check if the feature is enabled by the input flag.
-        if not self.save_weights_on_improve:
-            return
-
-        # Compare the current score with the best score recorded.
-        if current_score > self.best_score_so_far.item():
-            self.best_score_so_far = torch.tensor(current_score)
-            best_checkpoint_path = os.path.join(self.checkpoint_dir, "best_model.pth")
-            print(
-                f"\n--- New best score: {current_score:.4f} at epoch {self.epoch_counter.item()}! Saving checkpoint... ---")
-
-            # required function to save the PyTorch weights.
-            export_torch_weights(self, best_checkpoint_path)
