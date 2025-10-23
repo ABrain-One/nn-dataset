@@ -95,7 +95,7 @@ def json_train_to_db():
     stat_base_path = Path(stat_train_dir)
     sub_configs = [d.name for d in stat_base_path.iterdir() if d.is_dir()]
 
-    print(f"Import all statistics from JSON files in {stat_train_dir} into database {db_file}")
+    print(f"Importing all statistics from JSON files in {stat_train_dir} into database {db_file} ...")
 
     last_error = None
     for sub_config_str in tqdm(sub_configs):
