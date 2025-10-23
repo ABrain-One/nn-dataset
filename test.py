@@ -90,7 +90,7 @@ class Testing(unittest.TestCase):
         )
 
     # ------------------------------------------------------------------
-    #  1 · Basic data sanity check
+    #  1 · Basic 'run' data sanity check
     # ------------------------------------------------------------------
     def test_run_data(self):
         # Fetch first 10 rows from `run`
