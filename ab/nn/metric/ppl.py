@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 
 from .base import BaseMetric
-from .utils import flatten_logits_and_labels
+from ab.nn.metric.base.utils import flatten_logits_and_labels
 
 PPL_MIN = 1
 PPL_MAX = 1_000

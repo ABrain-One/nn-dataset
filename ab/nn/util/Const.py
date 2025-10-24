@@ -20,7 +20,7 @@ default_nn_fail_attempts = 30
 default_num_workers = 2
 default_random_config_order = False
 default_save_pth_weights = False
-default_save_onnx_weights = 0
+default_save_onnx_weights = False
 
 default_epoch_limit_minutes = 30 # minutes
 
