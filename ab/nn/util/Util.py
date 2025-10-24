@@ -89,7 +89,7 @@ def max_batch(binary_power):
 
 
 def model_stat_dir(config):
-    return stat_dir / config_splitter.join(config)
+    return stat_train_dir / config_splitter.join(config)
 
 
 def accuracy_to_time_metric(accuracy, min_accuracy, training_duration) -> float:
