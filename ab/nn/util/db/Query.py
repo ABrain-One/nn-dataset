@@ -40,11 +40,12 @@ class JoinConf:
 
         # You can add more validation for the newly added parameter if needed
 
+
 def join_nn_query(sql: JoinConf, limit_clause: Optional[str], cur):
     cur.execute(f'CREATE INDEX IF NOT EXISTS i_id ON {tmp_data}(id)')
     if sql.same_columns or sql.diff_columns or sql.enhance_nn:
-        cur.execute(f'CREATE INDEX idx_tmp_join ON {tmp_data}{tuple({*(sql.same_columns or set()), *(sql.diff_columns or set())})
-                                                              + (('accuracy',) if sql.enhance_nn else ())}')
+        cur.execute(f'CREATE INDEX idx_tmp_join ON {tmp_data}{(tuple({*(sql.same_columns or set()), *(sql.diff_columns or set())})
+                                                               + (('accuracy',) if sql.enhance_nn else ()))}')
 
     q_list = []
     for c in sql.same_columns:
@@ -83,7 +84,6 @@ LEFT JOIN {tmp_data} d2 ON d2.id = m.matched_id {limit_clause}''')
     return fill_hyper_prm(cur, sql.num_joint_nns)
 
 
-
 def fill_hyper_prm(cur: Cursor, num_joint_nns=1) -> list[dict]:
     rows = cur.fetchall()
     if not rows: return []  # short-circuit for an empty result
@@ -108,5 +108,3 @@ def fill_hyper_prm(cur: Cursor, num_joint_nns=1) -> list[dict]:
         rec.pop('transform', None)
         results.append(rec)
     return results
-
-
