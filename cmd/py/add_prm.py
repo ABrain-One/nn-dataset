@@ -1,15 +1,16 @@
 import json
 import os.path
-from pathlib import Path
 
+from ab.nn.util.Const import stat_train_dir
 from ab.nn.util.Util import merge_prm
+
 
 def gpu_type():
     return None
 def cpu_type():
     return None
 
-for p in Path(".").iterdir():
+for p in stat_train_dir.iterdir():
     if not os.path.isdir(p):
         continue
     for epoch_file in p.iterdir():

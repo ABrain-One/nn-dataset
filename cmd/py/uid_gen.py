@@ -1,5 +1,3 @@
-import json
-from pathlib import Path
 from ab.nn.util.Util import *
 
 def generate_checksum(obj):
@@ -7,9 +5,7 @@ def generate_checksum(obj):
     obj_copy = {k: v for k, v in obj.items() if k != 'uid'}
     return uuid4(obj_copy)
 
-# Path to the 'stat' folder (same directory as the script)
-base_dir = Path(__file__).resolve().parent / "stat"
-for p in base_dir.iterdir():
+for p in stat_train_dir.iterdir():
     if not p.is_dir():
         continue
     for epoch_file in p.iterdir():
