@@ -244,8 +244,8 @@ If you find the LEMUR Neural Network Dataset to be useful for your research, ple
 This project is distributed under the following licensing terms:
 <ul><li>for neural network models adopted from other projects
   <ul>
-    <li> Python code under the legacy <a href="https://github.com/ABrain-One/nn-dataset/blob/main/Doc/Licenses/LICENSE-MIT-NNs">MIT</a> or <a href="https://github.com/ABrain-One/nn-dataset/blob/main/Doc/Licenses/LICENSE-BSD-NNs">BSD 3-Clause</a> license</li>
-    <li> models with pretrained weights under the legacy <a href="https://github.com/ABrain-One/nn-dataset/blob/main/Doc/Licenses/LICENSE-DEEPSEEK-LLM-V2">DeepSeek LLM V2</a> license</li>
+    <li> Python code under the legacy <a href="https://github.com/ABrain-One/nn-dataset/blob/main/doc/licenses/LICENSE-MIT-NNs">MIT</a> or <a href="https://github.com/ABrain-One/nn-dataset/blob/main/doc/licenses/LICENSE-BSD-NNs">BSD 3-Clause</a> license</li>
+    <li> models with pretrained weights under the legacy <a href="https://github.com/ABrain-One/nn-dataset/blob/main/doc/licenses/LICENSE-DEEPSEEK-LLM-V2">DeepSeek LLM V2</a> license</li>
   </ul></li>
 <li> all neural network models and their weights not covered by the above licenses, as well as all other files and assets in this project, are subject to the <a href="https://github.com/ABrain-One/nn-dataset/blob/main/LICENSE">MIT license</a></li> 
 </ul>

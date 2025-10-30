@@ -1,12 +1,16 @@
+from typing import Optional
+
 import ab.nn.util.db.Read as DB_Read
 import ab.nn.util.Train as Train
 from ab.nn.util.Const import default_epoch_limit_minutes
 from pandas import DataFrame
 import functools
 
+from ab.nn.util.db.Query import JoinConf
+
 
 @functools.lru_cache(maxsize=10)
-def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None, epoch=None, max_rows=None, sql=None, prefix_list=None) -> DataFrame:
+def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None, epoch=None, max_rows=None, sql: Optional[JoinConf] = None, nn_prefixes=None) -> DataFrame:
     """
     Get the NN model code and all related statistics as a pandas DataFrame.
 
@@ -26,7 +30,7 @@ def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None
           'prm', and 'transform_code'.
     """
     dt: tuple[dict, ...] = DB_Read.data(only_best_accuracy, task=task, dataset=dataset, metric=metric, nn=nn, epoch=epoch, max_rows=max_rows,
-                                        sql=sql, prefix_list=prefix_list)
+                                        sql=sql, nn_prefixes=nn_prefixes)
     return DataFrame.from_records(dt)
 
 
@@ -46,6 +50,7 @@ def run_data(model_name=None, device_type=None, max_rows=None) -> DataFrame:
     """
     dt: tuple[dict, ...] = DB_Read.run_data(model_name=model_name, device_type=device_type, max_rows=max_rows)
     return DataFrame.from_records(dt)
+
 
 def check_nn(nn_code: str, task: str, dataset: str, metric: str, prm: dict, save_to_db=True, prefix=None, save_path=None, export_onnx=False,
              epoch_limit_minutes=default_epoch_limit_minutes, transform_dir=None) -> tuple[str, float, float, float]:
