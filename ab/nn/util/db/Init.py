@@ -49,7 +49,7 @@ def init_db():
     for nm in param_tables:
         create_param_table(nm, cursor)
         # NEW: index for fast uid look-ups
-        cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{nm}_uid ON {nm}(uid, name, value);")
+        cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{nm}_uid ON {nm}(uid, name, value)")
 
 
     # Create main stat tables
@@ -61,12 +61,15 @@ def init_db():
             epoch INTEGER,
             duration INTEGER,
             {', '.join(index_colum)},         
-        """ + ',\n'.join([f"FOREIGN KEY ({nm}) REFERENCES {nm} (name) ON DELETE CASCADE" for nm in dependent_tables]) + ')')
+        """
+                       + ',\n'.join([f"FOREIGN KEY ({nm}) REFERENCES {nm} (name) ON DELETE CASCADE" for nm in code_tables] +
+                                    [f"FOREIGN KEY ({nm}) REFERENCES {nm} (uid) ON DELETE CASCADE" for nm in param_tables])
+                       + ')')
 
     # Add indexes for optimized reads
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_accuracy_desc ON stat (accuracy DESC);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_accuracy_desc ON stat (accuracy DESC)")
     for nm in index_colum:
-        cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{nm} ON stat ({nm});")
+        cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{nm} ON stat ({nm})")
 
     # Create mobile analytics table (runtime stats)
     cursor.execute(f"""

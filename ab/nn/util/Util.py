@@ -219,13 +219,13 @@ def save_if_best(model, model_name, current_score, save_pth_weights, save_onnx_w
     if current_score > getattr(model, "best_score", 0):
         setattr(model, 'best_score', current_score)
         best_checkpoint_path = join(checkpoint_dir, "best_model.pth")
-        print(f"\n--- New best score: {current_score:.4f}! Saving checkpoint... ---")
+        print(f"\n--- New best score: {current_score:.4f} Saving checkpoint... ---")
         # Use the required function to save the PyTorch weights.
         if save_pth_weights: export_torch_weights(model, best_checkpoint_path)
         if save_onnx_weights:
             for input_tensor, _ in train_loader_f(train_set, 1, num_workers):
                 t = input_tensor.to(torch_device())
-                export_model_to_onnx(model, t, join(save_path, "best_model.onnx") if save_path else onnx_file)
+                export_model_to_onnx(model, t, join(checkpoint_dir, "best_model.onnx") if save_path else onnx_file)
                 break
 
 
