@@ -16,6 +16,7 @@ from ab.nn.util.Const import (
     param_tables,
 )
 from ab.nn.util.Util import read_py_file_as_string
+from ab.nn.api import JoinConf
 
 
 class Testing(unittest.TestCase):
@@ -75,7 +76,7 @@ class Testing(unittest.TestCase):
         DB_Init.close_conn(conn)
 
     # ------------------------------------------------------------------
-    #  1 · Basic data sanity check
+    #  Basic data sanity check
     # ------------------------------------------------------------------
     def test_data(self):
         all_rows = DB_Read.data()
@@ -90,7 +91,20 @@ class Testing(unittest.TestCase):
         )
 
     # ------------------------------------------------------------------
-    #  1 · Basic 'run' data sanity check
+    #  Basic data join check
+    # ------------------------------------------------------------------
+    def test_data_join(self):
+        df = api.data(only_best_accuracy=True, task="img-classification",
+                        nn_prefixes=('rag-',), max_rows=500,
+                        sql=JoinConf(num_joint_nns=2,
+                                     same_columns=('task', 'dataset', 'metric', 'epoch'),
+                                     diff_columns=('nn',),
+                                     enhance_nn=True))
+        print(f"Total join rows: {len(df)} ")
+        print(df.head(10).to_string(index=False))
+
+    # ------------------------------------------------------------------
+    #  Basic 'run' data sanity check
     # ------------------------------------------------------------------
     def test_run_data(self):
         # Fetch first 10 rows from `run`
@@ -101,7 +115,7 @@ class Testing(unittest.TestCase):
         print(df.to_string(index=False))
 
     # ------------------------------------------------------------------
-    #  2 · check_nn with trainer stubbed out
+    #  check_nn with trainer stubbed out
     # ------------------------------------------------------------------
     def test_check_nn(self):
         code = read_py_file_as_string(default_nn_path)
@@ -145,7 +159,7 @@ class Testing(unittest.TestCase):
         self.assertEqual(result, ("mock-nn", 0.0, 0.0))
 
     # ------------------------------------------------------------------
-    #  3 · Native-typing round-trip
+    #  Native-typing round-trip
     # ------------------------------------------------------------------
     def test_native_param_types(self):
         rows = DB_Read.data(task="unit-task", nn=self.dummy_cfg_ext[3])
@@ -157,7 +171,7 @@ class Testing(unittest.TestCase):
         self.assertIn(prm["flag"], (0, 1))
 
     # ------------------------------------------------------------------
-    #  5 · Performance guard (dynamic budget)
+    #  Performance guard (dynamic budget)
     # ------------------------------------------------------------------
     def test_fetch_time_budget(self):
         start = time.perf_counter()
@@ -173,7 +187,7 @@ class Testing(unittest.TestCase):
         )
 
     # ------------------------------------------------------------------
-    #  6 · remaining_trials logic
+    #  remaining_trials logic
     # ------------------------------------------------------------------
     def test_remaining_trials(self):
         cfg = self.dummy_cfg_ext
@@ -189,7 +203,7 @@ class Testing(unittest.TestCase):
         self.assertEqual((rem3, passed3), (7, 0))
 
     # ------------------------------------------------------------------
-    #  7 · supported_transformers
+    #  supported_transformers
     # ------------------------------------------------------------------
     def test_supported_transformers(self):
         tr = DB_Read.supported_transformers()
@@ -198,7 +212,7 @@ class Testing(unittest.TestCase):
         print("Transformers sample:", tr[:5])
 
     # ------------------------------------------------------------------
-    #  8 · unique_configs behaviour
+    #  unique_configs behaviour
     # ------------------------------------------------------------------
     def test_unique_configs(self):
         some = DB_Read.unique_configs(["img"])
@@ -208,7 +222,7 @@ class Testing(unittest.TestCase):
         self.assertEqual(none, [])
 
     # ------------------------------------------------------------------
-    #  9 · DataFrame creation for a filtered query
+    #  DataFrame creation for a filtered query
     # ------------------------------------------------------------------
     def test_fetch_all_data_filters(self):
         df = pd.DataFrame(DB_Read.data(metric="acc"))
@@ -216,7 +230,7 @@ class Testing(unittest.TestCase):
         self.assertIn("metric", df.columns)
 
     # ------------------------------------------------------------------
-    #  9 · Training
+    #  Training
     # ------------------------------------------------------------------
     def test_nn_train(self):
         train.main('img-classification_cifar-10_acc_' + default_nn_name, {}, 1,
