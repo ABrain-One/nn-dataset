@@ -1,8 +1,11 @@
 import json
+
 from ab.nn.util.Const import *
 from ab.nn.util.Util import is_full_config, str_not_none
 from ab.nn.util.db.Init import sql_conn, close_conn
 from ab.nn.util.db.Write import init_population
+
+from ab.nn.util.db.Query import *
 
 init_population()
 
@@ -32,17 +35,16 @@ def query_cols_rows(q) -> tuple[list, list]:
     return columns, rows
 
 
-def data(
-        only_best_accuracy: bool = False,
-        task: str | None = None,
-        dataset: str | None = None,
-        metric: str | None = None,
-        nn: str | None = None,
-        epoch: int | None = None,
-        max_rows: int | None = None,
-        sql: str | None = None,
-        prefix_list: tuple | None = None,
-) -> tuple[
+def data(only_best_accuracy: bool = False,
+         task: Optional[str] = None,
+         dataset: Optional[str] = None,
+         metric: Optional[str] = None,
+         nn: Optional[str] = None,
+         epoch: Optional[int] = None,
+         max_rows: Optional[int] = None,
+         nn_prefixes: Optional[tuple] = None,
+         sql: Optional[JoinConf] = None,
+         ) -> tuple[
     dict[str, int | float | str | dict[str, int | float | str]], ...
 ]:
     """
@@ -71,8 +73,8 @@ def data(
     # Build filtering conditions based on provided parameters.
     params, where_clause = sql_where([task, dataset, metric, nn, epoch])
 
-    if prefix_list:
-        where_clause += ' AND (' + ' OR '.join([f"nn LIKE '{prefix}%'" for prefix in prefix_list]) + ')'
+    if nn_prefixes:
+        where_clause += ' AND (' + ' OR '.join([f"nn LIKE '{prefix}%'" for prefix in nn_prefixes]) + ')'
 
     source = f'(SELECT s.* FROM stat s {where_clause})'
 
@@ -102,75 +104,22 @@ def data(
     limit_clause = str_not_none('LIMIT ', max_rows)
 
     # Execute a *single* query for the main stat rows
+    conn = None
     try:
         conn, cur = sql_conn()
-
-        if sql:
-            sql = sql + limit_clause
-            cur.execute(f'DROP TABLE IF EXISTS {tmp_data}')
-
+        if sql: cur.execute(f'DROP TABLE IF EXISTS {tmp_data}')
         cur.execute(f'CREATE TEMP TABLE {tmp_data} AS {base_query} ORDER BY RANDOM()' if sql else
                     f'''{base_query} 
                         ORDER BY s.task, s.dataset, s.metric, s.nn, s.epoch 
                         {limit_clause}''',
                     params)
-
         if sql:
-            cur.execute(f'CREATE INDEX IF NOT EXISTS i_id ON {tmp_data}(id)')
-            cur.execute(f'CREATE INDEX IF NOT EXISTS i_task ON {tmp_data}(task)')
-            cur.execute(f'CREATE INDEX IF NOT EXISTS i_dataset ON {tmp_data}(dataset)')
-            cur.execute(f'CREATE INDEX IF NOT EXISTS i_nn ON {tmp_data}(nn)')
-            cur.execute(f'CREATE INDEX IF NOT EXISTS i_accuracy ON {tmp_data}(accuracy)')
-            cur.execute(f'CREATE INDEX idx_task_dataset_nn ON {tmp_data}(task, dataset, nn)')
-            cur.execute(f'CREATE INDEX idx_task_dataset_nn_accuracy ON {tmp_data}(task, dataset, nn, accuracy)')
-            cur.execute(sql)
-
-        rows = cur.fetchall()
-        columns = [c[0] for c in cur.description]
-
-        if not rows:  # short-circuit for an empty result
-            return tuple()
-
-        # Bulk-load *all* hyperparameters for the retrieved stat_ids
-        stat_id_idx = columns.index("prm_id")
-        uids = [r[stat_id_idx] for r in rows]
-
-        from collections import defaultdict
-        prm_by_uid: dict[str, dict[str, int | float | str]] = defaultdict(dict)
-
-        if uids:
-            CHUNK = 900  # keep well below SQLite’s 999 limit
-            for offset in range(0, len(uids), CHUNK):
-                chunk = uids[offset: offset + CHUNK]
-                placeholders = ",".join("?" * len(chunk))
-                cur.execute(
-                    f"SELECT uid, name, value FROM prm "
-                    f"WHERE uid IN ({placeholders})",
-                    chunk,
-                )
-                for uid, name, value in cur.fetchall():
-                    prm_by_uid[uid][name] = value
-        # Assemble the final result
-        results: list[dict] = []
-        for r in rows:
-            rec = dict(zip(columns, r))
-            rec['prm'] = prm_by_uid.get(rec['prm_id'], {})
-            if 'prm_id_2' in rec:
-                rec['prm_2'] = prm_by_uid.get(rec['prm_id_2'], {})
-            # rec.pop('id', None)
-            rec.pop('transform', None)
-            # ensure epoch is int
-            try:
-                rec['epoch'] = int(rec['epoch'])
-            except (ValueError, TypeError):
-                pass
-            results.append(rec)
-
+            results = join_nn_query(sql, limit_clause, cur)
+        else:
+            results = fill_hyper_prm(cur)
         return tuple(results)
-
     finally:
-        close_conn(conn)
-
+        if conn: close_conn(conn)
 
 def run_data(
         model_name: str | None = None,
