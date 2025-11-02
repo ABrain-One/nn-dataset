@@ -10,7 +10,7 @@ import json
 
 import torch
 from os import makedirs, remove
-from os.path import exists
+from os.path import exists, dirname, join
 
 from ab.nn.util.Const import *
 
@@ -89,7 +89,7 @@ def max_batch(binary_power):
 
 
 def model_stat_dir(config):
-    return stat_dir / config_splitter.join(config)
+    return stat_train_dir / config_splitter.join(config)
 
 
 def accuracy_to_time_metric(accuracy, min_accuracy, training_duration) -> float:
@@ -161,12 +161,12 @@ def read_py_file_as_string(file_path):
 
 def str_not_none(prefix, value):
     if value:
-        return prefix + str(value)
+        return ' ' + prefix + str(value)
     else:
         return ''
 
 
-def export_model_to_onnx(model, dummy_input):
+def export_model_to_onnx(model, dummy_input, path):
     model.eval()
     assert isinstance(model, torch.nn.Module)
     hasAdaptivePoolingLayer = False
@@ -174,53 +174,73 @@ def export_model_to_onnx(model, dummy_input):
         if isinstance(layer, (torch.nn.AdaptiveAvgPool2d, torch.nn.AdaptiveMaxPool2d)):
             if layer.output_size not in [(1, 1), 1, None]:
                 hasAdaptivePoolingLayer = True
-    makedirs(onnx_dir, exist_ok=True)
+    # Ensure if the directory exists
+    makedirs(dirname(path), exist_ok=True)
     with torch.no_grad():
         if hasAdaptivePoolingLayer:
             torch.onnx.export(
                 model,
                 dummy_input,
-                onnx_file,
+                path,
                 input_names=["input"],
                 output_names=["output"])
         else:
             torch.onnx.export(
                 model,
                 dummy_input,
-                onnx_file,
+                path,  # Use the provided path
                 input_names=["input"],
                 output_names=["output"],
                 dynamic_axes={
                     "input": {0: "batch_size", 2: "height", 3: "width"},
                     "output": {0: "batch_size"}})
-    print(f"Exported neural network to ONNX format at {onnx_file}")
+    print(f"Exported neural network to ONNX format at {path}")
 
 
+def train_loader_f(train_dataset, batch, num_workers):
+    return torch.utils.data.DataLoader(train_dataset, batch_size=batch, shuffle=True,
+                                       num_workers=get_obj_attr(train_dataset, 'num_workers', default=num_workers),
+                                       collate_fn=get_obj_attr(train_dataset, 'collate_fn'))
 
-   #  FUNCTIONS FOR SAVING AND LOADING WEIGHTS
+
+def test_loader_f(test_dataset, batch, num_workers):
+    return torch.utils.data.DataLoader(test_dataset, batch_size=batch, shuffle=False,
+                                       num_workers=get_obj_attr(test_dataset, 'num_workers', default=num_workers),
+                                       collate_fn=get_obj_attr(test_dataset, 'collate_fn'))
+
+
+def save_if_best(model, model_name, current_score, save_pth_weights, save_onnx_weights, train_set, num_workers, save_path=None):
+    """
+    Called by the training framework to save weights if performance improves.
+    """
+    checkpoint_dir = out_dir / 'checkpoints' / model_name
+    makedirs(checkpoint_dir, exist_ok=True)
+    # Compare the current score with the best score recorded.
+    if current_score > getattr(model, "best_score", 0):
+        setattr(model, 'best_score', current_score)
+        best_checkpoint_path = join(checkpoint_dir, "best_model.pth")
+        print(f"\n--- New best score: {current_score:.4f} Saving checkpoint... ---")
+        # Use the required function to save the PyTorch weights.
+        if save_pth_weights: export_torch_weights(model, best_checkpoint_path)
+        if save_onnx_weights:
+            for input_tensor, _ in train_loader_f(train_set, 1, num_workers):
+                t = input_tensor.to(torch_device())
+                export_model_to_onnx(model, t, join(checkpoint_dir, "best_model.onnx") if save_path else onnx_file)
+                break
+
+
+#  FUNCTIONS FOR SAVING AND LOADING WEIGHTS
 
 def export_torch_weights(model, path):
     """
     Saves the trained weights of a model's state_dict to the specified path.
     This is a general function that can be used for any PyTorch model.
     """
+    # Ensure the directory exists
+    makedirs(dirname(path), exist_ok=True)
     print(f"Exporting model weights to {path}...")
     torch.save(model.state_dict(), path)
     print(f"Export complete. Weights saved to {path}")
-
-
-def load_torch_weights(model, path):
-    """
-    Loads trained weights from a .pth file into a model instance.
-    This is a general function that can be used for any PyTorch model.
-    """
-    device = next(model.parameters()).device
-    if os.path.exists(path):
-        print(f"Loading weights from {path}...")
-        model.load_state_dict(torch.load(path, map_location=device))
-        print("Weights loaded successfully.")
-    else:
-        raise FileNotFoundError(f"Weights file not found at {path}. Cannot load model.")
 
 
 def args():
@@ -245,12 +265,10 @@ def args():
                         help="Minimum value of momentum.")
     parser.add_argument('-m', '--max_momentum', type=float, default=default_max_momentum,
                         help="Maximum value of momentum.")
-
     parser.add_argument('--min_dropout', type=float, default=default_min_dropout,
                         help="Minimum value of dropout.")
     parser.add_argument('-d', '--max_dropout', type=float, default=default_max_dropout,
                         help="Maximum value of dropout.")
-
     parser.add_argument('-f', '--transform', type=str, default=default_transform,
                         help="The transformation algorithm name. If None (default), all available algorithms are used by Optuna.")
     parser.add_argument('-a', '--nn_fail_attempts', type=int, default=default_nn_fail_attempts,
@@ -265,4 +283,8 @@ def args():
                         help=f'Maximum duration per training epoch, minutes; default {default_epoch_limit_minutes} minutes')
     parser.add_argument('--train_missing_pipelines', type=bool, default=default_train_missing_pipelines,
                         help=f'Find and train all missing training pipelines for the provided configuration; default {default_train_missing_pipelines}')
+    parser.add_argument('--save_pth_weights', type=bool, default=default_save_pth_weights,
+                        help=f'Enable saving of the best model weights in PyTorch checkpoints; default {default_save_pth_weights}')
+    parser.add_argument('--save_onnx_weights', type=bool, default=default_save_onnx_weights,
+                        help=f'Enable saving of the best model weights in ONNX format; default {default_save_onnx_weights}')
     return parser.parse_args()

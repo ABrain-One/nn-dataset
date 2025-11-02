@@ -1,3 +1,5 @@
+import sys
+
 from tqdm import tqdm
 
 from ab.nn.util.Util import *
@@ -7,7 +9,11 @@ from ab.nn.util.db.Init import init_db, sql_conn, close_conn
 def init_population():
     if not db_file.exists():
         init_db()
-        json_n_code_to_db()
+        json_train_to_db()
+        try:
+            json_run_to_db()
+        except Exception as e:
+            print(f"Runtime analytics import failed: {e}")
 
 
 def code_to_db(cursor, table_name, code=None, code_file=None, force_name = None):
@@ -81,15 +87,17 @@ def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
     """, (uuid4(all_values), *all_values))
 
 
-def json_n_code_to_db():
+def json_train_to_db():
     """
     Reload all statistics into the database for all subconfigs and epochs.
     """
     conn, cursor = sql_conn()
-    stat_base_path = Path(stat_dir)
+    stat_base_path = Path(stat_train_dir)
     sub_configs = [d.name for d in stat_base_path.iterdir() if d.is_dir()]
 
-    print(f"Import all statistics from JSON files in {stat_dir} into database {db_file}")
+    print(f"Importing all statistics from JSON files in {stat_train_dir} into database {db_file} ...")
+
+    last_error = None
     for sub_config_str in tqdm(sub_configs):
         model_stat_dir = stat_base_path / sub_config_str
 
@@ -98,16 +106,85 @@ def json_n_code_to_db():
             epoch = int(epoch_file.stem)
 
             with open(model_stat_file, 'r') as f:
-                trials = json.load(f)
-
-            for trial in trials:
-                _, _, metric, nn = sub_config = conf_to_names(sub_config_str)
-                populate_code_table('nn', cursor, name=nn)
-                populate_code_table('metric', cursor, name=metric)
-                populate_code_table('transform', cursor, name=trial['transform'])
-                save_stat(sub_config + (epoch,), trial, cursor)
+                try:
+                    for trial in json.load(f):
+                        _, _, metric, nn = sub_config = conf_to_names(sub_config_str)
+                        populate_code_table('nn', cursor, name=nn)
+                        populate_code_table('metric', cursor, name=metric)
+                        populate_code_table('transform', cursor, name=trial['transform'])
+                        save_stat(sub_config + (epoch,), trial, cursor)
+                except Exception as e:
+                    last_error = e
+                    print(f"Error: JSON file {model_stat_file}, Exception {e}", file=sys.stderr)
     close_conn(conn)
+    if last_error:
+        raise last_error
     print("All statistics reloaded successfully.")
+
+
+def json_run_to_db():
+    """
+    Import runtime analytics from JSON files in stat/run into the `mobile` table.
+    The run directory layout encodes task/dataset/metric/nn in the parent folder name as
+    "task_dataset_nn". We parse those names using the existing config splitter, and store
+    device info and analytics payload as JSON text.
+    """
+    conn, cursor = sql_conn()
+    run_base_path = Path(stat_run_dir)
+    if not run_base_path.exists():
+        close_conn(conn)
+        return
+
+    run_dirs = [d for d in run_base_path.iterdir() if d.is_dir()]
+    for run_dir in tqdm(run_dirs):
+        # Extract model name from directory suffix if possible: e.g., '..._<model>'
+        parts = run_dir.name.split(config_splitter)
+        nn_name = parts[-1] if len(parts) > 1 else None
+
+        for json_file in run_dir.glob('*.json'):
+            try:
+                with open(json_file, 'r') as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+
+            # Ensure code tables have entries for the nn if we can resolve it
+            model_name = data.get('model_name') or nn_name
+            if model_name:
+                try:
+                    populate_code_table('nn', cursor, name=model_name)
+                except Exception:
+                    pass
+
+            device_type = data.get('device_type')
+            os_version = data.get('os_version')
+            valid = bool(data.get('valid')) if 'valid' in data else None
+            emulator = bool(data.get('emulator')) if 'emulator' in data else None
+            error_message = data.get('error_message')
+            duration = data.get('duration')
+            device_analytics = data.get('device_analytics')
+            analytics_json = json.dumps(device_analytics) if device_analytics is not None else None
+
+            id_val = uuid4([run_dir.name, json_file.name, model_name, device_type, os_version, duration])
+            cursor.execute(
+                f"""
+                INSERT OR REPLACE INTO {run_table}
+                (id, model_name, device_type, os_version, valid, emulator, error_message, duration, device_analytics_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    id_val,
+                    model_name,
+                    device_type,
+                    os_version,
+                    valid,
+                    emulator,
+                    error_message,
+                    duration,
+                    analytics_json,
+                ),
+            )
+    close_conn(conn)
 
 
 def save_results(config_ext: tuple[str, str, str, str, int], prm: dict):

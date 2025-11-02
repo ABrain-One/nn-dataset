@@ -1,7 +1,11 @@
-from ab.nn.util.Const import main_columns, main_columns_ext
+import json
+
+from ab.nn.util.Const import *
 from ab.nn.util.Util import is_full_config, str_not_none
 from ab.nn.util.db.Init import sql_conn, close_conn
 from ab.nn.util.db.Write import init_population
+
+from ab.nn.util.db.Query import *
 
 init_population()
 
@@ -30,15 +34,17 @@ def query_cols_rows(q) -> tuple[list, list]:
     columns = [row[0] for row in rows]
     return columns, rows
 
-def data(
-    only_best_accuracy: bool = False,
-    task: str | None = None,
-    dataset: str | None = None,
-    metric: str | None = None,
-    nn: str | None = None,
-    epoch: int | None = None,
-    max_rows: int | None = None,
-) -> tuple[
+
+def data(only_best_accuracy: bool = False,
+         task: Optional[str] = None,
+         dataset: Optional[str] = None,
+         metric: Optional[str] = None,
+         nn: Optional[str] = None,
+         epoch: Optional[int] = None,
+         max_rows: Optional[int] = None,
+         nn_prefixes: Optional[tuple] = None,
+         sql: Optional[JoinConf] = None,
+         ) -> tuple[
     dict[str, int | float | str | dict[str, int | float | str]], ...
 ]:
     """
@@ -67,105 +73,103 @@ def data(
     # Build filtering conditions based on provided parameters.
     params, where_clause = sql_where([task, dataset, metric, nn, epoch])
 
+    if nn_prefixes:
+        where_clause += ' AND (' + ' OR '.join([f"nn LIKE '{prefix}%'" for prefix in nn_prefixes]) + ')'
+
+    source = f'(SELECT s.* FROM stat s {where_clause})'
+
+    if only_best_accuracy:
+        source = """
+            (WITH filtered_stat AS {source}
+            SELECT f.* FROM filtered_stat f
+            JOIN (
+                SELECT task, dataset, metric, nn, epoch, MAX(accuracy) AS max_accuracy
+                FROM filtered_stat
+                GROUP BY task, dataset, metric, nn, epoch
+            ) b
+            ON f.task = b.task AND f.dataset = b.dataset AND f.metric = b.metric
+               AND f.nn = b.nn AND f.epoch = b.epoch AND f.accuracy = b.max_accuracy
+        )""".format(source=source)
+
+    base_query = """
+        SELECT s.id, s.task, s.dataset, s.metric, m.code AS metric_code, m.id AS metric_id,
+               s.nn, n.code AS nn_code, n.id AS nn_id, s.epoch, s.accuracy, s.duration,
+               s.prm AS prm_id, t.code AS transform_code, t.id AS transform_id, s.transform
+        FROM {source} s
+        LEFT JOIN nn       n ON s.nn = n.name
+        LEFT JOIN metric   m ON s.metric = m.name
+        LEFT JOIN transform t ON s.transform = t.name       
+    """.format(source=source)
+
+    limit_clause = str_not_none('LIMIT ', max_rows)
+
     # Execute a *single* query for the main stat rows
+    conn = None
+    try:
+        conn, cur = sql_conn()
+        if sql: cur.execute(f'DROP TABLE IF EXISTS {tmp_data}')
+        cur.execute(f'CREATE TEMP TABLE {tmp_data} AS {base_query} ORDER BY RANDOM()' if sql else
+                    f'''{base_query} 
+                        ORDER BY s.task, s.dataset, s.metric, s.nn, s.epoch 
+                        {limit_clause}''',
+                    params)
+        if sql:
+            results = join_nn_query(sql, limit_clause, cur)
+        else:
+            results = fill_hyper_prm(cur)
+        return tuple(results)
+    finally:
+        if conn: close_conn(conn)
+
+def run_data(
+        model_name: str | None = None,
+        device_type: str | None = None,
+        max_rows: int | None = None,
+):
+    """
+    Query mobile runtime analytics from the `mobile` table with optional filters.
+    Returns a tuple of dicts with columns and parsed device_analytics JSON.
+    """
+    params = []
+    filters = []
+    if model_name is not None:
+        filters.append('model_name = ?')
+        params.append(model_name)
+    if device_type is not None:
+        filters.append('device_type = ?')
+        params.append(device_type)
+
+    where_clause = (' WHERE ' + ' AND '.join(filters)) if filters else ''
+    limit_clause = (' LIMIT ' + str(max_rows)) if max_rows else ''
+
     conn, cur = sql_conn()
     try:
-        if not only_best_accuracy:
-            cur.execute(
-                f"""
-                SELECT s.task, s.dataset, s.metric, m.code AS metric_code, m.id AS metric_id,
-                       s.nn, n.code AS nn_code, n.id AS nn_id, s.epoch, s.accuracy, s.duration,
-                       s.id   AS stat_id, s.prm  AS stat_prm,
-                       t.code AS transform_code, t.id AS transform_id, s.transform
-                FROM   stat s
-                LEFT JOIN nn      n ON s.nn      = n.name
-                LEFT JOIN metric  m ON s.metric  = m.name
-                LEFT JOIN transform t ON s.transform = t.name
-                {where_clause}
-                ORDER BY s.task, s.dataset, s.metric, s.nn, s.epoch
-                {str_not_none('LIMIT ', max_rows)};
-                """,
-                params,
-            )
-        else:
-            cur.execute(
-                f"""
-                WITH filtered AS (
-                    SELECT s.task, s.dataset, s.metric, s.nn, s.transform,
-                           s.epoch, s.accuracy, s.duration,
-                           s.id AS stat_id, s.prm AS stat_prm
-                    FROM   stat s
-                    {where_clause}
-                ),
-                best AS (
-                    SELECT task, dataset, metric, nn, epoch,
-                           MAX(accuracy) AS max_accuracy
-                    FROM   filtered
-                    GROUP  BY task, dataset, metric, nn, epoch
-                )
-                SELECT f.task, f.dataset, f.metric, m.code AS metric_code,  m.id AS metric_id,
-                       f.nn, n.code AS nn_code, n.id AS nn_id, f.epoch, f.accuracy, f.duration,
-                       f.stat_id, f.stat_prm, t.code AS transform_code, t.id AS transform_id, f.transform
-                FROM   filtered  f
-                JOIN   best      b ON f.task = b.task
-                                   AND f.dataset = b.dataset
-                                   AND f.metric  = b.metric
-                                   AND f.nn      = b.nn
-                                   AND f.epoch   = b.epoch
-                                   AND f.accuracy= b.max_accuracy
-                LEFT JOIN nn      n ON f.nn      = n.name
-                LEFT JOIN metric  m ON f.metric  = m.name
-                LEFT JOIN transform t ON f.transform = t.name
-                ORDER BY f.task, f.dataset, f.metric, f.nn, f.epoch
-                {str_not_none('LIMIT ', max_rows)};
-                """,
-                params,
-            )
-
+        cur.execute(
+            f"""
+            SELECT id, model_name, device_type, os_version, valid, emulator, error_message, duration, device_analytics_json
+            FROM {run_table}
+            {where_clause}
+            ORDER BY model_name
+            {limit_clause}
+            """,
+            params,
+        )
         rows = cur.fetchall()
         columns = [c[0] for c in cur.description]
-
-        if not rows:  # short-circuit for an empty result
-            return tuple()
-
-        # Bulk-load *all* hyperparameters for the retrieved stat_ids
-        stat_id_idx = columns.index("stat_prm")
-        uids = [r[stat_id_idx] for r in rows]
-
-        from collections import defaultdict
-        prm_by_uid: dict[str, dict[str, int | float | str]] = defaultdict(dict)
-
-        if uids:
-            CHUNK = 900                       # keep well below SQLite’s 999 limit
-            for offset in range(0, len(uids), CHUNK):
-                chunk = uids[offset : offset + CHUNK]
-                placeholders = ",".join("?" * len(chunk))
-                cur.execute(
-                    f"SELECT uid, name, value FROM prm "
-                    f"WHERE uid IN ({placeholders})",
-                    chunk,
-                )
-                for uid, name, value in cur.fetchall():
-                    prm_by_uid[uid][name] = value
-        # Assemble the final result
-        results: list[dict] = []
+        results = []
         for r in rows:
             rec = dict(zip(columns, r))
-            uid = rec['stat_prm']
-            rec['prm'] = prm_by_uid.get(uid, {})
-            rec.pop('stat_id', None)
-            rec.pop('transform', None)
-            # ensure epoch is int
             try:
-                rec['epoch'] = int(rec['epoch'])
-            except (ValueError, TypeError):
-                pass
+                if rec.get('device_analytics_json'):
+                    rec['device_analytics'] = json.loads(rec['device_analytics_json'])
+            except Exception:
+                rec['device_analytics'] = None
+            rec.pop('device_analytics_json', None)
             results.append(rec)
-
         return tuple(results)
-
     finally:
         close_conn(conn)
+
 
 def sql_where(value_list):
     filters = []

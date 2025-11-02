@@ -18,8 +18,9 @@ from ab.nn.util.db.Read import supported_transformers
 
 debug = False
 
-def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout, max_dropout,
-                     min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, n_epochs, pretrained, epoch_limit_minutes):
+def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout,
+                     max_dropout, min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, n_epochs,
+                     pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights):
     task, dataset_name, metric, nn = config
     try:
         # Load model
@@ -41,6 +42,7 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
                         prms[prm] = trial.suggest_float(prm, 0.0, 1.0)
         batch = add_categorical_if_absent(trial, prms, 'batch', lambda: [max_batch(x) for x in range(min_batch_binary_power, max_batch_binary_power_local + 1)])
         transform_name = add_categorical_if_absent(trial, prms, 'transform', supported_transformers, default=transform)
+
         prm_str = ''
         for k, v in prms.items():
             prm_str += f", {k}: {v}"
@@ -48,7 +50,8 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
         # Load dataset
         out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset_name, transform_name)
         return Train(config, out_shape, minimum_accuracy, batch, nn_mod('nn', nn), task, train_set, test_set, metric,
-                     num_workers, prms).train_n_eval(n_epochs, epoch_limit_minutes)
+                     num_workers, prms).train_n_eval(n_epochs, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set)
+
     except Exception as e:
         accuracy_duration = 0.0, 0.0, 1
         if isinstance(e, OutOfMemoryError):
@@ -69,21 +72,10 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
             else:
                 raise NNException()
 
-def train_loader_f(train_dataset, batch, num_workers):
-    return torch.utils.data.DataLoader(train_dataset, batch_size=batch, shuffle=True,
-                                       num_workers=get_obj_attr(train_dataset, 'num_workers', default=num_workers),
-                                       collate_fn=get_obj_attr(train_dataset, 'collate_fn'))
-
-
-def test_loader_f(test_dataset, batch, num_workers):
-    return torch.utils.data.DataLoader(test_dataset, batch_size=batch, shuffle=False,
-                                       num_workers=get_obj_attr(test_dataset, 'num_workers', default=num_workers),
-                                       collate_fn=get_obj_attr(test_dataset, 'collate_fn'))
-
 
 class Train:
     def __init__(self, config: tuple[str, str, str, str], out_shape: tuple, minimum_accuracy: float, batch: int, nn_module, task,
-                 train_dataset, test_dataset, metric, num_workers, prm: dict, save_to_db=True, is_code=False, save_path: Union[str, Path] = None):
+                 train_dataset, test_dataset, metric, num_workers, prm: dict, save_to_db=True, is_code=False):
         """
         Universal class for training CV, Text Generation and other models.
         :param config: Tuple of names (Task, Dataset, Metric, Model).
@@ -113,8 +105,8 @@ class Train:
         self.metric_function = self.load_metric_function(metric)
         self.save_to_db = save_to_db
         self.is_code = is_code
-        self.save_path = save_path
 
+        self.num_workers = num_workers
         self.train_loader = train_loader_f(self.train_dataset, self.batch, num_workers)
         self.test_loader = test_loader_f(self.test_dataset, self.batch, num_workers)
 
@@ -125,6 +117,7 @@ class Train:
 
         # Load model
         model_net = get_attr(nn_module, 'Net')
+        self.model_name = nn_module
         self.model = model_net(self.in_shape, out_shape, prm, self.device)
         self.model.to(self.device)
 
@@ -143,7 +136,7 @@ class Train:
             raise ValueError(f"Metric '{metric_name}' not found. Ensure a corresponding file and function exist. Ensure the metric module has create_metric()") \
                 from e
 
-    def train_n_eval(self, num_epochs, epoch_limit_minutes):
+    def train_n_eval(self, num_epochs, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set, save_path: Union[str, Path] = None):
         """ Training and evaluation """
 
         start_time = time.time_ns()
@@ -165,18 +158,20 @@ class Train:
                                         f"Accuracy is too low: {accuracy}."
                                         f" The minimum accepted accuracy for the '{self.config[1]}"
                                         f"' dataset is {self.minimum_accuracy}.")
+            if save_pth_weights or save_onnx_weights:
+                save_if_best(self.model, self.model_name, accuracy, save_pth_weights, save_onnx_weights, train_set, self.num_workers, save_path=save_path)
             only_prm = {k: v for k, v in self.prm.items() if  k not in {'uid', 'duration', 'accuracy', 'epoch'}}
             prm = merge_prm(self.prm, {'uid': uuid4(only_prm), 'duration': duration, 'accuracy': accuracy})
             if self.save_to_db:
                 if self.is_code:  # We don't want the filename to contain full codes
-                    if self.save_path is None:
-                        print(f"[WARN]parameter `save_Path` set to null, the statics will not be saved into a file.")
+                    if save_path:
+                        save_results(self.config + (epoch,), join(save_path, f"{epoch}.json"), prm)
                     else:
-                        save_results(self.config + (epoch,), join(self.save_path, f"{epoch}.json"), prm)
+                        print(f"[WARN]parameter `save_Path` set to null, the statics will not be saved into a file.")
                 else:  # Legacy save result codes in file
-                    if self.save_path is None:
-                        self.save_path = model_stat_dir(self.config)
-                    save_results(self.config + (epoch,), join(self.save_path, f"{epoch}.json"), prm)
+                    if save_path is None:
+                        save_path = model_stat_dir(self.config)
+                    save_results(self.config + (epoch,), join(save_path, f"{epoch}.json"), prm)
                     DB_Write.save_results(self.config + (epoch,), prm)  # Separated from Calc.save_results()
         return accuracy, accuracy_to_time, duration
 
@@ -253,10 +248,9 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             num_workers=num_workers,
             prm=prm,
             save_to_db=save_to_db,
-            is_code=True,
-            save_path=save_path)
+            is_code=True)
         epoch = prm['epoch']
-        accuracy, accuracy_to_time, duration = trainer.train_n_eval(epoch, epoch_limit_minutes)
+        accuracy, accuracy_to_time, duration = trainer.train_n_eval(epoch, epoch_limit_minutes, False, export_onnx, train_set, save_path=save_path)
         if save_to_db:
             # If the result meets the requirements, save the model to the database.
             if good(accuracy, minimum_accuracy, duration):
@@ -264,11 +258,6 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
                 print(f"Model saved to database with accuracy: {accuracy}")
             else:
                 print(f"Model accuracy {accuracy} is below the minimum threshold {minimum_accuracy}. Not saved.")
-        if export_onnx:
-            for input_tensor, _ in train_loader_f(train_set, 1, num_workers):
-                t = input_tensor.to(torch_device())
-                export_model_to_onnx(trainer.model, t)
-                break
     except Exception as e:
         print(f"Error during training: {e}")
         raise

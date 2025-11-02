@@ -7,14 +7,15 @@ from ab.nn.util.db.Calc import patterns_to_configs
 from ab.nn.util.db.Read import remaining_trials
 from types import MappingProxyType
 
-def main(config: str | tuple | list = default_config, nn_prm:dict = default_nn_hyperparameters, n_epochs: int = default_epochs, n_optuna_trials: int | str = default_trials,
+
+def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_hyperparameters, n_epochs: int = default_epochs, n_optuna_trials: int | str = default_trials,
          min_batch_binary_power: int = default_min_batch_power, max_batch_binary_power: int = default_max_batch_power,
          min_learning_rate: float = default_min_lr, max_learning_rate: float = default_max_lr,
          min_momentum: float = default_min_momentum, max_momentum: float = default_max_momentum,
          min_dropout: float = default_min_dropout, max_dropout: float = default_max_dropout,
          transform: str | tuple = None, nn_fail_attempts: int = default_nn_fail_attempts, random_config_order: bool = default_random_config_order,
          num_workers: int = default_num_workers, pretrained: int = default_pretrained, epoch_limit_minutes: int = default_epoch_limit_minutes,
-         train_missing_pipelines: bool = default_train_missing_pipelines):
+         train_missing_pipelines: bool = default_train_missing_pipelines, save_pth_weights: bool = default_save_pth_weights, save_onnx_weights: int = default_save_onnx_weights):
     """
     Main function for training models using Optuna optimization.
 
@@ -46,6 +47,8 @@ def main(config: str | tuple | list = default_config, nn_prm:dict = default_nn_h
     :param pretrained: Control use of NN pretrained weights: 1 (always use), 0 (never use), or default (let Optuna decide).
     :param epoch_limit_minutes: Maximum duration per training epoch, minutes.
     :param train_missing_pipelines: Find and train all missing training pipelines for provided configuration.
+    :param save_pth_weights: Enable saving of the best model weights in PyTorch checkpoints.
+    :param save_onnx_weights: Save the best model in ONNX format: 1 (save), 0 (don't save).
     """
 
     validate_prm(min_batch_binary_power, max_batch_binary_power, min_learning_rate, max_learning_rate, min_momentum, max_momentum, min_dropout, max_dropout)
@@ -86,7 +89,7 @@ def main(config: str | tuple | list = default_config, nn_prm:dict = default_nn_h
                             accuracy, accuracy_to_time, duration = optuna_objective(trial, sub_config, nn_prm, num_workers, min_learning_rate, max_learning_rate,
                                                                                     min_momentum, max_momentum, min_dropout, max_dropout,
                                                                                     min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, n_epochs,
-                                                                                    pretrained, epoch_limit_minutes)
+                                                                                    pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights)
                             if good(accuracy, min_accuracy(dataset), duration):
                                 fail_iterations = nn_fail_attempts
                             return accuracy
@@ -115,4 +118,5 @@ if __name__ == "__main__":
     a = args()
     main(a.config, a.nn_prm, a.epochs, a.trials, a.min_batch_binary_power, a.max_batch_binary_power,
          a.min_learning_rate, a.max_learning_rate, a.min_momentum, a.max_momentum, a.min_dropout, a.max_dropout, a.transform,
-         a.nn_fail_attempts, a.random_config_order, a.workers, a.pretrained, a.epoch_limit_minutes, a.train_missing_pipelines)
+         a.nn_fail_attempts, a.random_config_order, a.workers, a.pretrained, a.epoch_limit_minutes, a.train_missing_pipelines,
+         a.save_pth_weights, a.save_onnx_weights)

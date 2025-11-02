@@ -2,7 +2,7 @@ import sqlite3
 from os import makedirs
 from pathlib import Path
 
-from ab.nn.util.Const import param_tables, db_file, db_dir, main_tables, code_tables, dependent_tables, all_tables, index_colum
+from ab.nn.util.Const import param_tables, db_file, db_dir, main_tables, code_tables, dependent_tables, all_tables, index_colum, run_table
 
 
 def sql_conn():
@@ -49,7 +49,7 @@ def init_db():
     for nm in param_tables:
         create_param_table(nm, cursor)
         # NEW: index for fast uid look-ups
-        cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{nm}_uid ON {nm}(uid, name, value);")
+        cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{nm}_uid ON {nm}(uid, name, value)")
 
 
     # Create main stat tables
@@ -61,12 +61,34 @@ def init_db():
             epoch INTEGER,
             duration INTEGER,
             {', '.join(index_colum)},         
-        """ + ',\n'.join([f"FOREIGN KEY ({nm}) REFERENCES {nm} (name) ON DELETE CASCADE" for nm in dependent_tables]) + ')')
+        """
+                       + ',\n'.join([f"FOREIGN KEY ({nm}) REFERENCES {nm} (name) ON DELETE CASCADE" for nm in code_tables] +
+                                    [f"FOREIGN KEY ({nm}) REFERENCES {nm} (uid) ON DELETE CASCADE" for nm in param_tables])
+                       + ')')
 
     # Add indexes for optimized reads
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_accuracy_desc ON stat (accuracy DESC);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_accuracy_desc ON stat (accuracy DESC)")
     for nm in index_colum:
-        cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{nm} ON stat ({nm});")
+        cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{nm} ON stat ({nm})")
+
+    # Create mobile analytics table (runtime stats)
+    cursor.execute(f"""
+    CREATE TABLE IF NOT EXISTS {run_table} (
+        id TEXT PRIMARY KEY,
+        model_name TEXT NOT NULL,
+        device_type TEXT,
+        os_version TEXT,
+        valid BOOLEAN,
+        emulator BOOLEAN,
+        error_message TEXT,
+        duration INTEGER,
+        device_analytics_json TEXT,
+        FOREIGN KEY (model_name) REFERENCES nn (name) ON DELETE CASCADE
+    )
+    """)
+    # Indexes for mobile analytics
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{run_table}_model ON {run_table} (model_name);")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{run_table}_device ON {run_table} (device_type);")
     close_conn(conn)
     print(f"Database initialized at {db_file}")
 

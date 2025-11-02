@@ -1,5 +1,3 @@
-import torch
-
 class BaseMetric:
     """Base class for all evaluation metrics"""
     
