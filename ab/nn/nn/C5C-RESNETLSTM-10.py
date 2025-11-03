@@ -1,0 +1,208 @@
+C5C-RESNETLSTM-from typing import Any, Dict, Optional, Tuple
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor
+
+
+def supported_hyperparameters():
+    # Kept for harnesses that call the module-level function
+    return {"lr", "momentum"}
+
+
+# ---------------- Encoder ----------------
+class SpatialEncoder(nn.Module):
+    """
+    Lightweight CNN that maps an image to a sequence of feature tokens [B, S, H].
+    No torchvision dependency.
+    """
+    def __init__(self, in_channels: int = 3, hidden_dim: int = 768, dropout: float = 0.1) -> None:
+        super().__init__()
+        c = [64, 192, 384, hidden_dim]
+        self.cnn = nn.Sequential(
+            nn.Conv2d(in_channels, c[0], kernel_size=7, stride=2, padding=3, bias=False),
+            nn.BatchNorm2d(c[0]),
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(c[0], c[1], kernel_size=3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(c[1]),
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(c[1], c[2], kernel_size=3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(c[2]),
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(c[2], c[3], kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(c[3]),
+            nn.ReLU(inplace=True),
+
+            nn.Dropout2d(dropout),
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        # x: [B, C, H, W] -> feats: [B, H, S] where S = h*w tokens
+        x = self.cnn(x)
+        b, h, ph, pw = x.shape
+        x = x.permute(0, 2, 3, 1).reshape(b, ph * pw, h)  # [B, S, H]
+        return x
+
+
+# ---------------- Decoder ----------------
+class TransformerDecoder(nn.Module):
+    """
+    Transformer decoder that consumes target tokens and cross-attends to image tokens.
+    """
+    def __init__(
+        self,
+        vocab_size: int,
+        hidden_size: int = 768,
+        num_layers: int = 3,
+        num_heads: int = 8,
+        dropout: float = 0.1,
+        pad_idx: int = 0,
+    ) -> None:
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.pad_idx = pad_idx
+
+        self.embedding = nn.Embedding(vocab_size, hidden_size, padding_idx=pad_idx)
+        self.drop = nn.Dropout(dropout)
+
+        layer = nn.TransformerDecoderLayer(
+            d_model=hidden_size,
+            nhead=num_heads,
+            dim_feedforward=min(3072, hidden_size * 4),
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.decoder = nn.TransformerDecoder(layer, num_layers=num_layers)
+        self.out = nn.Linear(hidden_size, vocab_size)
+
+    def _causal_mask(self, T: int, device: torch.device) -> Tensor:
+        # True masks out (prevent attention) above the diagonal
+        return torch.triu(torch.ones(T, T, dtype=torch.bool, device=device), diagonal=1)
+
+    def forward(self, memory: Tensor, captions: Tensor) -> Tuple[Tensor, Optional[Tensor]]:
+        # memory: [B, S, H], captions: [B, T]
+        emb = self.drop(self.embedding(captions))  # [B, T, H]
+        tgt_mask = self._causal_mask(emb.size(1), emb.device)
+        logits = self.decoder(tgt=emb, memory=memory, tgt_mask=tgt_mask)  # [B, T, H]
+        logits = self.out(logits)  # [B, T, V]
+        return logits, None
+
+
+# ---------------- Net wrapper ----------------
+class Net(nn.Module):
+    """
+    Minimal image-captioning style network with expected harness API.
+
+    Required methods:
+      - __init__(in_shape, out_shape, prm, device, *_, **__)
+      - train_setup(prm)
+      - learn(train_data)
+      - forward(images, captions=None, hidden_state=None) -> (logits, hidden)
+    """
+    def __init__(self, in_shape: tuple, out_shape: tuple, prm: Dict[str, float], device: torch.device, *_, **__) -> None:
+        super().__init__()
+        self.device = device
+        self.prm = prm or {}
+
+        self.in_channels = self._infer_in_channels(in_shape)
+        self.vocab_size = self._first_int(out_shape)
+        self.hidden_size = int(self.prm.get("hidden_size", 768))
+        self.num_heads = int(self.prm.get("num_heads", 8))
+        self.num_layers = int(self.prm.get("num_layers", 3))
+        self.pad_idx = int(self.prm.get("pad_idx", 0))
+        self.sos_idx = int(self.prm.get("sos_idx", 1))
+
+        assert self.hidden_size % self.num_heads == 0, "hidden_size must be divisible by num_heads"
+
+        # Modules
+        self.encoder = SpatialEncoder(in_channels=self.in_channels, hidden_dim=self.hidden_size, dropout=float(self.prm.get("dropout", 0.1)))
+        self.decoder = TransformerDecoder(
+            vocab_size=self.vocab_size,
+            hidden_size=self.hidden_size,
+            num_layers=self.num_layers,
+            num_heads=self.num_heads,
+            dropout=float(self.prm.get("decoder_dropout", 0.1)),
+            pad_idx=self.pad_idx,
+        )
+
+        self.to(self.device)
+
+    @staticmethod
+    def supported_hyperparameters():
+        # Kept for harnesses that call Net.supported_hyperparameters()
+        return {"lr", "momentum"}
+
+    # ---- training helpers ----
+    def train_setup(self, prm: Dict[str, float]):
+        prm = prm or {}
+        self.to(self.device)
+        self.criterion = nn.CrossEntropyLoss(ignore_index=self.pad_idx).to(self.device)
+        lr = float(prm.get("lr", self.prm.get("lr", 1e-3)))
+        beta1 = float(prm.get("momentum", self.prm.get("momentum", 0.9)))
+        self.optimizer = torch.optim.AdamW(self.parameters(), lr=lr, betas=(beta1, 0.999))
+
+    def learn(self, train_data):
+        # Prepare once
+        self.train_setup(getattr(train_data, "prm", self.prm))
+        self.train()
+
+        for images, captions in train_data:
+            images = images.to(self.device)
+            captions = captions.to(self.device).long()
+
+            # Some loaders provide [B, 1, T]
+            if captions.dim() == 3:
+                captions = captions[:, 0, :]
+
+            if captions.size(1) <= 1:
+                continue
+
+            # teacher forcing: predict t given 0..t-1
+            inputs = captions[:, :-1]
+            targets = captions[:, 1:]
+
+            logits, _ = self.forward(images, inputs)  # [B, T-1, V]
+            loss = self.criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+
+            self.optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.parameters(), 3.0)
+            self.optimizer.step()
+
+    # ---- forward ----
+    def forward(
+        self,
+        images: Tensor,
+        captions: Optional[Tensor] = None,
+        hidden_state: Optional[Any] = None,
+    ) -> Tuple[Tensor, Any]:
+        # Encode image into memory tokens
+        memory = self.encoder(images.to(self.device))  # [B, S, H]
+
+        # If no captions provided, do a single-step logits from <SOS>
+        if captions is None:
+            captions = torch.full((images.size(0), 1), self.sos_idx, dtype=torch.long, device=self.device)
+
+        captions = captions.long().to(self.device)
+        logits, _ = self.decoder(memory, captions)  # [B, T, V]
+        return logits, hidden_state
+
+    # ---- small utils ----
+    @staticmethod
+    def _infer_in_channels(in_shape: Any) -> int:
+        # in_shape could be (B, C, H, W) or nested; default to 3 if unknown
+        if isinstance(in_shape, (tuple, list)) and len(in_shape) >= 2 and isinstance(in_shape[1], int):
+            return in_shape[1]
+        return 3
+
+    @staticmethod
+    def _first_int(x: Any) -> int:
+        if isinstance(x, int):
+            return x
+        if isinstance(x, (tuple, list)) and len(x) > 0:
+            return Net._first_int(x[0])
+        return int(x)
