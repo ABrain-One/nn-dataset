@@ -237,6 +237,13 @@ If you find the LEMUR Neural Network Dataset to be useful for your research, ple
   journal={arXiv preprint arXiv:2504.10552},
   year={2025}
 }
+
+@article{ABrain.LEMUR2,
+  title={LEMUR 2: Unlocking Neural Network Diversity for AI},
+  author={... and Ignatov, Dmitry and Timofte, Radu},
+  journal={arXiv preprint},
+  year={2025}
+}
 ```
 
 ## Licenses
