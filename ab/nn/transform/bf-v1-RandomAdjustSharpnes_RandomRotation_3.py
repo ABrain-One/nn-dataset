@@ -1,0 +1,11 @@
+import torch
+import torchvision.transforms as transforms
+
+def transform(norm):
+    return transforms.Compose([
+    transforms.RandomAdjustSharpness(sharpness_factor=1.23, p=0.68),
+    transforms.RandomRotation(degrees=2),
+    transforms.Resize((64,64)),
+    transforms.ToTensor(),
+    transforms.Normalize(*norm)
+])
