@@ -9,9 +9,9 @@ try:
     from torchvision.models import AlexNet_Weights
     ALEXNET_W = AlexNet_Weights.IMAGENET1K_V1
 except Exception:
-    ALEXNET_W = None  # fallback: will use pretrained=True on older torchvision
+    ALEXNET_W = None  # fallback: use pretrained=True on older torchvision
 
-# Optional: discover PAD/BOS/EOS ids from loader
+# Optional: dynamic special-token ids (if dataset loader sets them)
 try:
     from ab.nn.loader.coco_.Caption import GLOBAL_CAPTION_VOCAB
 except Exception:
@@ -55,9 +55,9 @@ class CNNEncoder(nn.Module):
     AlexNet conv feature extractor.
     Output: (B, 256, h, w)
     """
-    def __init__(self, in_ch: int, feat_ch: int = 256):  # feat_ch kept for signature
+    def __init__(self, in_ch: int, feat_ch: int = 256):  # feat_ch kept for signature compatibility
         super().__init__()
-        # torchvision AlexNet expects 3-channel RGB, repo's transforms should handle normalization/resize
+        # torchvision AlexNet expects 3-channel RGB; repo transforms handle resize/normalize
         if ALEXNET_W is None:
             self.backbone = tv.alexnet(pretrained=True).features
         else:
@@ -66,7 +66,7 @@ class CNNEncoder(nn.Module):
     def forward(self, x):
         return self.backbone(x)  # (B, 256, h, w)
 
-# ---------- decoder ----------
+# ---------- decoder (Transformer) ----------
 class TransformerDecoder(nn.Module):
     def __init__(self, vocab_size: int, d_model: int = 512, nhead: int = 8, num_layers: int = 4,
                  dropout: float = 0.1, pad_idx: int = 0):
@@ -74,15 +74,25 @@ class TransformerDecoder(nn.Module):
         self.pad_idx = pad_idx
         self.embed = nn.Embedding(vocab_size, d_model, padding_idx=pad_idx)
         self.pos   = PositionalEncoding(d_model, dropout=dropout)
-        layer = nn.TransformerDecoderLayer(d_model=d_model, nhead=nhead,
-                                           dim_feedforward=2048, batch_first=True,
-                                           dropout=dropout, activation='gelu')
+        layer = nn.TransformerDecoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=2048,
+            batch_first=True,
+            dropout=dropout,
+            activation='gelu',
+        )
         self.dec = nn.TransformerDecoder(layer, num_layers=num_layers)
         self.fc  = nn.Linear(d_model, vocab_size)
 
     @staticmethod
-    def _causal_mask(L, device, dtype):
-        m = torch.full((L, L), float('-inf'), device=device, dtype=dtype)
+    def _causal_mask(L: int, device: torch.device) -> torch.Tensor:
+        """
+        Boolean causal mask (True = blocked) to match key_padding_mask dtype,
+        avoiding 'mismatched key_padding_mask and attn_mask' warning.
+        Shape: (L, L)
+        """
+        m = torch.ones((L, L), dtype=torch.bool, device=device)
         return torch.triu(m, diagonal=1)
 
     def forward(self, tgt_tokens: torch.Tensor, memory: torch.Tensor) -> torch.Tensor:
@@ -93,8 +103,8 @@ class TransformerDecoder(nn.Module):
         B, T = tgt_tokens.shape
         x = self.embed(tgt_tokens)                    # (B,T,D)
         x = self.pos(x)
-        tgt_mask = self._causal_mask(T, x.device, x.dtype)  # (T,T) float mask
-        tgt_kpm  = (tgt_tokens == self.pad_idx)              # (B,T) bool
+        tgt_mask = self._causal_mask(T, x.device)     # (T,T) bool
+        tgt_kpm  = (tgt_tokens == self.pad_idx)       # (B,T) bool
         y = self.dec(tgt=x, memory=memory,
                      tgt_mask=tgt_mask,
                      tgt_key_padding_mask=tgt_kpm)
@@ -132,8 +142,14 @@ class Net(nn.Module):
         self.enc_drop = nn.Dropout(self.dropout_p)
 
         # Transformer decoder
-        self.decoder = TransformerDecoder(self.vocab_size, d_model=d_model, nhead=8,
-                                          num_layers=4, dropout=self.dropout_p, pad_idx=self.pad_idx)
+        self.decoder = TransformerDecoder(
+            self.vocab_size,
+            d_model=d_model,
+            nhead=8,
+            num_layers=4,
+            dropout=self.dropout_p,
+            pad_idx=self.pad_idx,
+        )
 
         # Training attrs init in train_setup
         self.criteria = None
@@ -178,7 +194,7 @@ class Net(nn.Module):
         for _ in range(self.max_len):
             step_logits = self.decoder(cur, memory)[:, -1:, :]  # (B,1,V)
             steps.append(step_logits)
-            next_tok = step_logits.argmax(dim=-1)                # (B,1)
+            next_tok = step_logits.argmax(dim=-1)               # (B,1)
             cur = torch.cat([cur, next_tok], dim=1)
             if (next_tok.squeeze(1) == self.eos_id).all():
                 break
@@ -192,10 +208,12 @@ class Net(nn.Module):
         self.criteria = (nn.CrossEntropyLoss(ignore_index=self.pad_idx, label_smoothing=0.1).to(self.device),)
         # Map "momentum" → AdamW beta1 to keep CLI semantics
         beta1 = float(prm.get('momentum', 0.9))
-        self.optimizer = torch.optim.AdamW(self.parameters(),
-                                           lr=float(prm['lr']),
-                                           betas=(beta1, 0.999),
-                                           weight_decay=1e-4)
+        self.optimizer = torch.optim.AdamW(
+            self.parameters(),
+            lr=float(prm['lr']),
+            betas=(beta1, 0.999),
+            weight_decay=1e-4,
+        )
         # AMP (PyTorch 2.x API)
         self.scaler = torch.amp.GradScaler('cuda', enabled=(self.device.type == 'cuda'))
 
@@ -220,7 +238,7 @@ class Net(nn.Module):
                     captions = captions[:, 0, :]
                 logits = self.forward(images, captions)          # (B,T-1,V)
                 targets = captions[:, 1:]                        # (B,T-1)
-                loss = self.criteria[0](logits.reshape(-1, logits.size(-1)),
+                loss = self.criteria[0](logits.reshape(-1,logits.size(-1)),
                                         targets.reshape(-1))
 
             self.optimizer.zero_grad(set_to_none=True)
