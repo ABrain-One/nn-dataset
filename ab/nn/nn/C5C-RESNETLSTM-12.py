@@ -14,7 +14,7 @@ class Net(nn.Module):
         self.device = device
         self.prm = prm or {}
 
-        # ---- Shapes / sizes ----
+        # ---- shapes / sizes ----
         self.in_shape = in_shape
         self.out_shape = out_shape
         self.in_channels = self._infer_in_channels(in_shape)
@@ -27,7 +27,10 @@ class Net(nn.Module):
         self.max_len = int(self.prm.get("max_length", self.prm.get("max_len", 50)))
         self.grad_clip_value = float(self.prm.get("grad_clip", 3.0))
 
-        # ---- Modules ----
+        self.out_dim = self.vocab_size
+        self.num_classes = self.vocab_size
+
+        # ---- modules ----
         self.encoder = NetEncoder(self.in_channels, self.hidden_size, device)
         self.decoder = NetDecoder(
             vocab_size=self.vocab_size,
@@ -41,42 +44,64 @@ class Net(nn.Module):
         )
 
         # training helpers (populated in train_setup)
-        self.criteria = None
-        self.criterion = None
-        self.optimizer = None
+        self.criteria: Optional[Tuple[nn.Module]] = None
+        self.criterion: Optional[nn.Module] = None
+        self.optimizer: Optional[torch.optim.Optimizer] = None
 
         self.to(self.device)
 
-    # ---------------- API ----------------
+    @staticmethod
+    def supported_hyperparameters():
+        return {"lr", "momentum"}
+
+    # ---------------- training API ----------------
     def train_setup(self, prm):
         prm = prm or {}
-        lr = float(prm.get("lr", 1e-3))
-        beta1 = float(prm.get("momentum", 0.9))
+        self.to(self.device)
+        self.train()
         self.criterion = nn.CrossEntropyLoss(ignore_index=self.pad_idx).to(self.device)
         self.criteria = (self.criterion,)
+        lr = float(prm.get("lr", self.prm.get("lr", 1e-3)))
+        beta1 = float(prm.get("momentum", self.prm.get("momentum", 0.9)))
         self.optimizer = torch.optim.AdamW(self.parameters(), lr=lr, betas=(beta1, 0.999))
 
+    def _normalize_captions(self, captions: torch.Tensor) -> torch.Tensor:
+        if captions.dim() == 1:
+            captions = captions.unsqueeze(0)
+        elif captions.dim() == 3 and captions.size(1) == 1:
+            captions = captions[:, 0, :]
+        return captions
+
     def learn(self, train_data):
-        """Simple teacher-forcing training loop."""
         self.train()
         if self.optimizer is None:
-            self.train_setup(self.prm)
+            self.train_setup(getattr(train_data, "prm", self.prm))
 
         for batch in train_data:
-            images, captions = batch
+            # robust batch unpack
+            if isinstance(batch, (list, tuple)):
+                if len(batch) < 2:
+                    continue
+                images, captions = batch[0], batch[1]
+            elif isinstance(batch, dict):
+                images = batch.get("x", None)
+                captions = batch.get("y", None)
+                if images is None or captions is None:
+                    continue
+            else:
+                images = getattr(batch, "x", None)
+                captions = getattr(batch, "y", None)
+                if images is None or captions is None:
+                    continue
+
             images = images.to(self.device)
-            captions = captions.to(self.device).long()
+            captions = self._normalize_captions(captions.to(self.device).long())
 
-            # If captions are [B, 1, T] -> [B, T]
-            if captions.dim() == 3 and captions.size(1) == 1:
-                captions = captions[:, 0, :]
-
-            # Need at least 2 tokens for input/target shift
             if captions.dim() != 2 or captions.size(1) <= 1:
                 continue
 
-            inputs = captions[:, :-1]   # feed to decoder
-            targets = captions[:, 1:]   # predict next token
+            inputs = captions[:, :-1]   # [B, T-1]
+            targets = captions[:, 1:]   # [B, T-1]
 
             self.optimizer.zero_grad(set_to_none=True)
             logits, _ = self.forward(images, inputs)  # [B, T-1, V]
@@ -92,34 +117,53 @@ class Net(nn.Module):
         self,
         images: torch.Tensor,
         captions: Optional[torch.Tensor] = None,
-        hidden_state: Optional[Any] = None,
-    ) -> Tuple[torch.Tensor, Any]:
-        """
-        Training: captions is [B, T_in]; returns (logits [B, T_in, V], hidden).
-        Inference: captions is None; returns (generated_ids [B, <=max_len], hidden).
-        """
+        hidden_state: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Encode images -> feature vectors [B, H]
-        features = self.encoder(images.to(self.device))
+        images = images.to(self.device)
+        features = self.encoder(images)  # [B, H]
 
         if captions is not None:
-            # Teacher forcing
+            captions = self._normalize_captions(captions.to(self.device).long())
             logits, hidden_state = self.decoder(
-                images=None, captions=captions.to(self.device), features=features, hidden_state=hidden_state
+                images=None,
+                captions=captions,
+                features=features,
+                hidden_state=hidden_state,
             )
             return logits, hidden_state
 
-        # Greedy decoding
-        generated = self.decoder.decode(features, hidden_state=hidden_state, max_len=self.max_len)
-        return generated, None
+        # one-step logits from <SOS> (for generic inference)
+        B = images.size(0)
+        if hidden_state is None:
+            hidden_state = self.decoder._init_hidden_from_features(features)
+        sos = torch.full((B, 1), self.sos_idx, dtype=torch.long, device=self.device)
+        emb = self.decoder.embedding(sos)
+        out, hidden_state = self.decoder.gru(emb, hidden_state)
+        logits = self.decoder.fc(out)  # [B,1,V]
+        return logits.squeeze(1), hidden_state
+
+    @torch.no_grad()
+    def predict(self, images: torch.Tensor) -> torch.Tensor:
+        # greedy decode for BLEU
+        self.eval()
+        images = images.to(self.device)
+        features = self.encoder(images)  # [B, H]
+        tokens = self.decoder.decode(features, hidden_state=None, max_len=self.max_len)
+        return tokens
+
+    def init_zero_hidden(self, batch_size: int, device: torch.device) -> torch.Tensor:
+        hidden_dim = self.hidden_size
+        return torch.zeros(self.num_layers, batch_size, hidden_dim, device=device)
 
     # ---------------- helpers ----------------
     @staticmethod
     def _infer_in_channels(in_shape: Any) -> int:
-        try:
-            if isinstance(in_shape, (tuple, list)) and len(in_shape) > 1 and isinstance(in_shape[1], int):
-                return in_shape[1]
-        except Exception:
-            pass
+        if isinstance(in_shape, (tuple, list)):
+            if len(in_shape) == 3 and all(isinstance(v, int) for v in in_shape):
+                return int(in_shape[0])      # (C,H,W)
+            if len(in_shape) >= 2 and isinstance(in_shape[1], int):
+                return int(in_shape[1])      # (N,C,H,W)
         return 3
 
     @staticmethod
@@ -136,21 +180,23 @@ class Net(nn.Module):
 
 
 class NetEncoder(nn.Module):
-    """Tiny CNN encoder (torchvision-free) producing a feature vector [B, hidden_size]."""
     def __init__(self, in_channels: int, hidden_size: int, device: torch.device):
         super().__init__()
         self.device = device
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(64), nn.ReLU(inplace=True),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
 
             nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(128), nn.ReLU(inplace=True),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
 
             nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(256), nn.ReLU(inplace=True),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
         )
         self.gap = nn.AdaptiveAvgPool2d((1, 1))
@@ -158,13 +204,12 @@ class NetEncoder(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv(x)
-        x = self.gap(x).flatten(1)     # [B, 256]
-        x = self.fc(x)                 # [B, H]
+        x = self.gap(x).flatten(1)
+        x = self.fc(x)
         return x
 
 
 class NetDecoder(nn.Module):
-    """GRU-based caption decoder with greedy decode."""
     def __init__(
         self,
         vocab_size: int,
@@ -194,56 +239,48 @@ class NetDecoder(nn.Module):
             dropout=dropout if num_layers > 1 else 0.0,
         )
         self.fc = nn.Linear(hidden_size, vocab_size)
-
-        # Map encoder features -> initial hidden state
         self.init_h_proj = nn.Linear(hidden_size, hidden_size)
 
     def _init_hidden_from_features(self, features: torch.Tensor) -> torch.Tensor:
-        # features: [B, H] -> h0: [num_layers, B, H]
         h0 = torch.tanh(self.init_h_proj(features)).unsqueeze(0).repeat(self.num_layers, 1, 1)
         return h0.contiguous()
 
     def forward(
         self,
         images: Optional[torch.Tensor],
-        captions: torch.Tensor,               # [B, T]
-        features: torch.Tensor,               # [B, H]
-        hidden_state: Optional[torch.Tensor] = None,  # [num_layers, B, H]
+        captions: torch.Tensor,
+        features: torch.Tensor,
+        hidden_state: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         B, T = captions.size(0), captions.size(1)
         h0 = self._init_hidden_from_features(features) if hidden_state is None else hidden_state
-
-        emb = self.embedding(captions)        # [B, T, H]
-        out, h_n = self.gru(emb, h0)          # out: [B, T, H]
-        logits = self.fc(out)                 # [B, T, V]
+        emb = self.embedding(captions)
+        out, h_n = self.gru(emb, h0)
+        logits = self.fc(out)
         return logits, h_n
 
     def decode(
         self,
-        features: torch.Tensor,                       # [B, H]
-        hidden_state: Optional[torch.Tensor] = None,  # [num_layers, B, H]
+        features: torch.Tensor,
+        hidden_state: Optional[torch.Tensor] = None,
         max_len: int = 50,
     ) -> torch.Tensor:
         B = features.size(0)
         h = self._init_hidden_from_features(features) if hidden_state is None else hidden_state
 
-        # Start tokens
         tokens = torch.full((B, 1), self.sos_idx, dtype=torch.long, device=self.device)
         generated = []
 
         for _ in range(max_len):
-            emb = self.embedding(tokens[:, -1:])  # [B, 1, H]
-            out, h = self.gru(emb, h)            # [B, 1, H]
-            logits = self.fc(out)                # [B, 1, V]
-            next_tok = logits[:, -1, :].argmax(dim=-1, keepdim=True)  # [B, 1]
+            emb = self.embedding(tokens[:, -1:])
+            out, h = self.gru(emb, h)
+            logits = self.fc(out)
+            next_tok = logits[:, -1, :].argmax(dim=-1, keepdim=True)
             generated.append(next_tok)
             tokens = torch.cat([tokens, next_tok], dim=1)
-
-            # stop if all sequences hit EOS
             if (next_tok == self.eos_idx).all():
                 break
 
-        # Concatenate generated tokens after SOS (drop the initial SOS column)
         if generated:
             return tokens[:, 1:]
         return torch.empty(B, 0, dtype=torch.long, device=self.device)

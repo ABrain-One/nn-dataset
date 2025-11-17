@@ -10,7 +10,6 @@ def supported_hyperparameters():
 
 # --------------------- Building Blocks ---------------------
 class SEAttention(nn.Module):
-    """Squeeze-and-Excitation attention module."""
     def __init__(self, channels: int, ratio: int = 4):
         super().__init__()
         reduced = max(1, channels // ratio)
@@ -20,17 +19,15 @@ class SEAttention(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [B, C, H, W]
         b, c, _, _ = x.shape
-        y = x.mean(dim=(2, 3))                 # [B, C]
-        y = self.relu(self.fc1(y))             # [B, C//r]
-        y = self.sigmoid(self.fc2(y))          # [B, C]
-        y = y.view(b, c, 1, 1)                 # [B, C, 1, 1]
-        return x * y                           # broadcast
+        y = x.mean(dim=(2, 3))          # [B, C]
+        y = self.relu(self.fc1(y))      # [B, C//r]
+        y = self.sigmoid(self.fc2(y))   # [B, C]
+        y = y.view(b, c, 1, 1)          # [B, C, 1, 1]
+        return x * y
 
 
 class CBAM(nn.Module):
-    """Convolutional Block Attention Module (simplified)."""
     def __init__(self, channels: int, spatial_kernel: int = 7):
         super().__init__()
         self.ca = SEAttention(channels)
@@ -40,9 +37,7 @@ class CBAM(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Channel attention
         x_ca = self.ca(x)
-        # Spatial attention: concat avg & max along channel
         avg_out = torch.mean(x_ca, dim=1, keepdim=True)
         max_out, _ = torch.max(x_ca, dim=1, keepdim=True)
         x_sp = torch.cat([avg_out, max_out], dim=1)     # [B, 2, H, W]
@@ -51,7 +46,6 @@ class CBAM(nn.Module):
 
 
 class DepthwiseSeparableConv(nn.Module):
-    """Depthwise separable convolution block."""
     def __init__(self, c_in: int, c_out: int, kernel_size: int = 3, stride: int = 1):
         super().__init__()
         padding = (kernel_size - 1) // 2
@@ -72,7 +66,6 @@ class DepthwiseSeparableConv(nn.Module):
 
 # --------------------- Encoder / Decoder ---------------------
 class Encoder(nn.Module):
-    """Hierarchical encoder with depthwise separable convs and CBAM. Outputs [B, hidden_size]."""
     def __init__(self, in_channels: int, hidden_size: int):
         super().__init__()
         ch1, ch2, ch3, ch4 = 64, 128, 256, 512
@@ -90,23 +83,21 @@ class Encoder(nn.Module):
         self.proj = nn.Conv2d(ch4, hidden_size, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.net(x)                 # [B, 512, 1, 1]
-        x = self.proj(x)                # [B, H,   1, 1]
-        return x.flatten(1)             # [B, H]
+        x = self.net(x)         # [B, 512, 1, 1]
+        x = self.proj(x)        # [B, H, 1, 1]
+        return x.flatten(1)     # [B, H]
 
 
 class Decoder(nn.Module):
-    """GRU decoder with optional memory conditioning from the encoder."""
     def __init__(self, hidden_size: int, vocab_size: int):
         super().__init__()
         self.hidden_size = hidden_size
         self.vocab_size = vocab_size
 
-        self.embed = nn.Embedding(vocab_size, hidden_size)
+        self.embed = nn.Embedding(vocab_size, hidden_size, padding_idx=0)
         self.gru = nn.GRU(hidden_size, hidden_size, batch_first=True)
         self.fc = nn.Linear(hidden_size, vocab_size)
 
-        # Project memory (if provided) to hidden size and add to embeddings
         self.mem_proj = nn.Linear(hidden_size, hidden_size)
 
     def init_hidden(self, batch_size: int, device: torch.device) -> torch.Tensor:
@@ -114,16 +105,18 @@ class Decoder(nn.Module):
 
     def forward(
         self,
-        inputs: torch.Tensor,                    # [B, T] (token ids)
-        hidden_state: Optional[torch.Tensor] = None,  # [1, B, H]
-        memory: Optional[torch.Tensor] = None,        # [B, H]
+        inputs: torch.Tensor,
+        hidden_state: Optional[torch.Tensor] = None,
+        memory: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if inputs.dim() == 1:
+            inputs = inputs.unsqueeze(1)
         emb = self.embed(inputs)                 # [B, T, H]
         if memory is not None:
-            mem_add = self.mem_proj(memory).unsqueeze(1)  # [B, 1, H]
+            mem_add = self.mem_proj(memory).unsqueeze(1)  # [B,1,H]
             emb = emb + mem_add
 
-        out, h_n = self.gru(emb, hidden_state)  # out: [B, T, H]
+        out, h_n = self.gru(emb, hidden_state)  # [B, T, H]
         logits = self.fc(out)                   # [B, T, V]
         return logits, h_n
 
@@ -135,54 +128,77 @@ class Net(nn.Module):
         self.device = device
         self.prm = prm or {}
 
-        # Shapes / sizes
-        self.in_channels = in_shape[1] if isinstance(in_shape, (tuple, list)) and len(in_shape) > 1 else 3
+        self.in_channels = self._infer_in_channels(in_shape)
         self.vocab_size = self._first_int(out_shape)
         self.hidden_size = int(self.prm.get("hidden_size", 768))
 
-        # Modules
+        self.out_dim = self.vocab_size
+        self.num_classes = self.vocab_size
+
         self.encoder = Encoder(self.in_channels, self.hidden_size)
         self.decoder = Decoder(self.hidden_size, self.vocab_size)
 
-        # Defaults for tokens (can be overridden by prm)
-        self.sos_idx = int(self.prm.get("sos", 1))
+        self.sos_idx = int(self.prm.get("sos", self.prm.get("sos_idx", 1)))
         self.eos_idx = int(self.prm.get("eos", 0))
+        self.pad_idx = int(self.prm.get("pad_idx", 0))
         self.max_len = int(self.prm.get("max_length", 20))
 
-        # Training helpers (set in train_setup)
         self.criterion: Optional[nn.Module] = None
         self.criteria = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
 
         self.to(self.device)
 
+    @staticmethod
+    def supported_hyperparameters():
+        return {"lr", "momentum"}
+
     # ---- Training API ----
     def train_setup(self, prm: dict):
+        prm = prm or {}
         lr = float(prm.get("lr", 1e-3))
         beta1 = float(prm.get("momentum", 0.9))
-        self.criterion = nn.CrossEntropyLoss(ignore_index=0).to(self.device)
+        self.criterion = nn.CrossEntropyLoss(ignore_index=self.pad_idx).to(self.device)
         self.criteria = (self.criterion,)
         self.optimizer = torch.optim.AdamW(self.parameters(), lr=lr, betas=(beta1, 0.999))
 
     def learn(self, train_data: Any):
         self.train()
         if self.optimizer is None or self.criterion is None:
-            self.train_setup(self.prm)
+            self.train_setup(getattr(train_data, "prm", self.prm))
 
-        for images, captions in train_data:
-            images = images.to(self.device).float()
+        for batch in train_data:
+            if isinstance(batch, (list, tuple)):
+                if len(batch) < 2:
+                    continue
+                images, captions = batch[0], batch[1]
+            elif isinstance(batch, dict):
+                images = batch.get("x", None)
+                captions = batch.get("y", None)
+                if images is None or captions is None:
+                    continue
+            else:
+                images = getattr(batch, "x", None)
+                captions = getattr(batch, "y", None)
+                if images is None or captions is None:
+                    continue
+
+            images = images.to(self.device, dtype=torch.float32)
             captions = captions.to(self.device).long()
             if captions.dim() == 3 and captions.size(1) == 1:
-                captions = captions[:, 0, :]  # squeeze time dim if shaped [B,1,T]
+                captions = captions[:, 0, :]
             if captions.size(1) <= 1:
-                continue  # need at least one next-token target
+                continue
 
-            inputs = captions[:, :-1]   # teacher forcing inputs
-            targets = captions[:, 1:]   # next-token targets
+            inputs = captions[:, :-1]
+            targets = captions[:, 1:]
 
             self.optimizer.zero_grad(set_to_none=True)
             logits, _ = self.forward(images, inputs)  # [B, T-1, V]
-            loss = self.criterion(logits.reshape(-1, self.vocab_size), targets.reshape(-1))
+            loss = self.criterion(
+                logits.reshape(-1, self.vocab_size),
+                targets.reshape(-1),
+            )
             loss.backward()
             nn.utils.clip_grad_norm_(self.parameters(), 3.0)
             self.optimizer.step()
@@ -194,27 +210,44 @@ class Net(nn.Module):
         captions: Optional[torch.Tensor] = None,
         hidden_state: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        # Encode images to memory vector [B, H]
+        images = images.to(self.device, dtype=torch.float32)
         memory = self.encoder(images)  # [B, H]
 
+        if hidden_state is None:
+            hidden_state = self.decoder.init_hidden(images.size(0), self.device)
+
         if captions is not None:
-            # Teacher forcing path
-            logits, h_n = self.decoder(captions, hidden_state, memory)
+            logits, h_n = self.decoder(captions.to(self.device).long(), hidden_state, memory)
             return logits, h_n
 
-        # Greedy generation
         bsz = images.size(0)
-        h = self.decoder.init_hidden(bsz, self.device)
+        h = hidden_state
         seq = torch.full((bsz, 1), self.sos_idx, dtype=torch.long, device=self.device)
 
         for _ in range(self.max_len):
-            logits, h = self.decoder(seq[:, -1:], h, memory)  # step on last token
-            next_tok = logits[:, -1, :].argmax(dim=-1, keepdim=True)  # [B, 1]
+            logits, h = self.decoder(seq[:, -1:], h, memory)  # last token only
+            next_tok = logits[:, -1, :].argmax(dim=-1, keepdim=True)
             seq = torch.cat([seq, next_tok], dim=1)
             if (next_tok == self.eos_idx).all():
                 break
 
         return seq, h
+
+    @torch.no_grad()
+    def predict(self, images: torch.Tensor) -> torch.Tensor:
+        self.eval()
+        images = images.to(self.device, dtype=torch.float32)
+        memory = self.encoder(images)
+        h = self.decoder.init_hidden(images.size(0), self.device)
+
+        seq = torch.full((images.size(0), 1), self.sos_idx, dtype=torch.long, device=self.device)
+        for _ in range(self.max_len):
+            logits, h = self.decoder(seq[:, -1:], h, memory)
+            next_tok = logits[:, -1, :].argmax(dim=-1, keepdim=True)
+            seq = torch.cat([seq, next_tok], dim=1)
+            if (next_tok == self.eos_idx).all():
+                break
+        return seq[:, 1:]
 
     # ---- Utils ----
     @staticmethod
@@ -228,3 +261,12 @@ class Net(nn.Module):
                 except Exception:
                     continue
         return int(x)
+
+    @staticmethod
+    def _infer_in_channels(in_shape: Any) -> int:
+        if isinstance(in_shape, (tuple, list)):
+            if len(in_shape) == 3 and isinstance(in_shape[0], int):
+                return int(in_shape[0])          # (C,H,W)
+            if len(in_shape) >= 2 and isinstance(in_shape[1], int):
+                return int(in_shape[1])          # (B,C,H,W)
+        return 3

@@ -1,18 +1,15 @@
 import math
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch import Tensor
 
 
-# Harness hook (module-level)
 def supported_hyperparameters():
     return {"lr", "momentum"}
 
 
-# ---- Utility blocks (not required by forward path, but kept and fixed) --------
 class EfficientChannelReduction(nn.Module):
     def __init__(self, input_channels: int, num_reduced_channels: Optional[int]):
         super().__init__()
@@ -22,13 +19,11 @@ class EfficientChannelReduction(nn.Module):
         self.reduce = nn.Linear(input_channels, num_reduced_channels)
 
     def forward(self, x: Tensor) -> Tensor:
-        # Expect x: [*, C]; apply linear reduction safely
         x = self.act(x)
         return self.reduce(x)
 
 
 class ChannelShuffle(nn.Module):
-    """Channel Shuffle; unused in forward but kept compile-safe."""
     def __init__(self, groups: int):
         super().__init__()
         self.groups = max(1, int(groups))
@@ -44,165 +39,76 @@ class ChannelShuffle(nn.Module):
         return x
 
 
-# ---- Attention block ----------------------------------------------------------
 class DecoderAttention(nn.Module):
-    """Cross-attention: queries attend over memory (keys=values=memory)."""
     def __init__(self, embed_dim: int, num_heads: int):
         super().__init__()
         self.multihead_attn = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
 
     def forward(
         self,
-        queries: Tensor,              # [B, Tq, E]
-        memory: Tensor,               # [B, Tm, E]
-        key_padding_mask: Optional[Tensor] = None,  # [B, Tm] True => ignore
+        queries: Tensor,
+        memory: Tensor,
+        key_padding_mask: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Tensor]:
         out, w = self.multihead_attn(queries, memory, memory, key_padding_mask=key_padding_mask)
         return out, w
 
 
-# ---- Main model ---------------------------------------------------------------
 class Net(nn.Module):
-    def __init__(self, in_shape: tuple, out_shape: tuple, prm: dict, device: torch.device) -> None:
+    def __init__(self, in_shape: Any, out_shape: Any, prm: dict, device: torch.device, *_, **__):
         super().__init__()
         self.device = device
         self.prm = prm or {}
 
-        # Hidden / vocab
         self.hidden_size = int(self.prm.get("hidden_size", 768))
         self.num_heads = int(self.prm.get("num_heads", 8))
-        assert self.hidden_size % self.num_heads == 0, "Hidden size must be divisible by number of heads"
+        if self.hidden_size % self.num_heads != 0:
+            self.hidden_size = max(self.num_heads, ((self.hidden_size // self.num_heads) + 1) * self.num_heads)
         self.vocab_size = self._first_int(out_shape)
         self.pad_idx = int(self.prm.get("pad_idx", 0))
         self.sos_idx = int(self.prm.get("sos_idx", 1))
+        self.eos_idx = int(self.prm.get("eos_idx", 2))
+        self.max_len = int(self.prm.get("max_len", 16))
 
-        # Infer channels / spatial dims safely
         self.in_channels, self.in_h, self.in_w = self._infer_shape(in_shape)
 
-        # --- Image encoder -> token memory [B, S, H] ---
-        # Small CNN to create hidden_size channels then flatten to tokens
         self.encoder = nn.Sequential(
             nn.Conv2d(self.in_channels, 64, 3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(64), nn.ReLU(inplace=True),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
 
             nn.Conv2d(64, 128, 3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(128), nn.ReLU(inplace=True),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
 
             nn.Conv2d(128, self.hidden_size, 3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(self.hidden_size), nn.ReLU(inplace=True),
+            nn.BatchNorm2d(self.hidden_size),
+            nn.ReLU(inplace=True),
         )
 
-        # (optional) memory projections; kept to match original concept
         self.memory_proj_key = nn.Linear(self.hidden_size, self.hidden_size)
         self.memory_proj_value = nn.Linear(self.hidden_size, self.hidden_size)
 
-        # --- Decoder: GRU + cross-attention + classifier ---
         embed_dim = int(self.prm.get("embed_dim", self.hidden_size))
         self.embedding = nn.Embedding(self.vocab_size, embed_dim, padding_idx=self.pad_idx)
         self.gru = nn.GRU(embed_dim, self.hidden_size, batch_first=True, num_layers=1)
         self.attention = DecoderAttention(self.hidden_size, self.num_heads)
         self.classifier = nn.Linear(self.hidden_size, self.vocab_size)
 
-        # Regularization
         self.dropout = nn.Dropout(float(self.prm.get("dropout", 0.1)))
 
-        # Init
+        self.criterion: Optional[nn.Module] = None
+        self.optimizer: Optional[torch.optim.Optimizer] = None
+
         self._init_weights()
         self.to(self.device)
 
-    # Shared by some harnesses
     @staticmethod
     def supported_hyperparameters():
         return {"lr", "momentum"}
 
-    # ---- Training glue ---------------------------------------------------------
-    def train_setup(self, prm):
-        prm = prm or {}
-        self.to(self.device)
-        self.criteria = (nn.CrossEntropyLoss(ignore_index=self.pad_idx).to(self.device),)
-        lr = float(prm.get("lr", 1e-3))
-        beta1 = float(prm.get("momentum", 0.9))
-        self.optimizer = torch.optim.AdamW(self.parameters(), lr=lr, betas=(beta1, 0.999))
-
-    def learn(self, train_data):
-        self.train_setup(getattr(train_data, "prm", self.prm))
-        self.train()
-        for images, captions in train_data:
-            images = images.to(self.device)
-            captions = captions.to(self.device).long()
-            if captions.dim() == 3:
-                captions = captions[:, 0, :]  # [B,1,T] -> [B,T]
-            if captions.size(1) <= 1:
-                continue
-
-            # Teacher forcing: predict next token for positions 1..T-1
-            inputs = captions[:, :-1]                  # [B, T-1]
-            targets = captions[:, 1:]                  # [B, T-1]
-            logits, _ = self.forward(images, inputs)   # [B, T-1, V]
-
-            loss = self.criteria[0](logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
-            self.optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            nn.utils.clip_grad_norm_(self.parameters(), 3.0)
-            self.optimizer.step()
-
-    # ---- Forward ---------------------------------------------------------------
-    def forward(self, images: Tensor, captions: Optional[Tensor] = None):
-        """
-        If captions given (teacher-forced):
-            images: [B, C, H, W], captions: [B, T]  -> logits: [B, T, V]
-        If captions is None:
-            one-step from SOS -> logits: [B, 1, V]
-        Returns (logits, attention_weights)
-        """
-        images = images.to(self.device)
-
-        # Encode image -> memory tokens [B, S, H]
-        feat = self.encoder(images)                   # [B, Hdim, H', W']
-        B, C, Hp, Wp = feat.shape
-        memory = feat.permute(0, 2, 3, 1).reshape(B, Hp * Wp, C)   # [B, S, H]
-        # Optional linear projections (keys/values share dim H)
-        mem_k = self.memory_proj_key(memory)          # [B, S, H]
-        mem_v = self.memory_proj_value(memory)        # [B, S, H]
-        # MultiheadAttention uses a single memory for K and V; concatenate not needed
-        # We'll pass mem_v as memory; projections are symmetrical so either works
-        memory_tokens = mem_v
-
-        # Build decoder inputs
-        if captions is None:
-            captions = torch.full((B, 1), self.sos_idx, dtype=torch.long, device=self.device)
-        else:
-            captions = captions.long().to(self.device)
-
-        emb = self.dropout(self.embedding(captions))  # [B, T, E]
-        dec_out, _ = self.gru(emb)                    # [B, T, H]
-
-        # Cross-attention: queries = decoder states, memory = image tokens
-        attn_out, attn_w = self.attention(dec_out, memory_tokens, key_padding_mask=None)  # [B, T, H], [B, T, S]
-        logits = self.classifier(self.dropout(attn_out))  # [B, T, V]
-        return logits, attn_w
-
-    # ---- Helpers ---------------------------------------------------------------
-    def _init_weights(self):
-        init_range = 0.02
-        # Embedding
-        nn.init.normal_(self.embedding.weight, mean=0.0, std=init_range)
-        # Linear layers
-        for m in [self.memory_proj_key, self.memory_proj_value, self.classifier]:
-            nn.init.xavier_uniform_(m.weight)
-            if m.bias is not None:
-                nn.init.zeros_(m.bias)
-        # Conv/BN already have decent defaults
-
-        # GRU init (only l0 present)
-        for name, param in self.gru.named_parameters():
-            if "weight" in name:
-                nn.init.xavier_uniform_(param)
-            elif "bias" in name:
-                nn.init.zeros_(param)
-
     @staticmethod
-    def _first_int(x) -> int:
+    def _first_int(x: Any) -> int:
         if isinstance(x, int):
             return x
         if isinstance(x, (tuple, list)) and len(x) > 0:
@@ -210,13 +116,140 @@ class Net(nn.Module):
         return int(x)
 
     @staticmethod
-    def _infer_shape(in_shape: tuple) -> Tuple[int, int, int]:
-        # Accept (C,H,W) or (N,C,H,W)
+    def _infer_shape(in_shape: Any) -> Tuple[int, int, int]:
         if isinstance(in_shape, (tuple, list)):
-            if len(in_shape) >= 4:  # (N, C, H, W)
+            if len(in_shape) >= 4:
                 return int(in_shape[1]), int(in_shape[2]), int(in_shape[3])
-            if len(in_shape) == 3:  # (C, H, W)
+            if len(in_shape) == 3:
                 return int(in_shape[0]), int(in_shape[1]), int(in_shape[2])
-            if len(in_shape) == 2:  # (C, H) -> assume square
+            if len(in_shape) == 2:
                 return int(in_shape[0]), int(in_shape[1]), int(in_shape[1])
         return 3, 224, 224
+
+    def _normalize_captions(self, captions: Tensor) -> Tensor:
+        if captions.dim() == 1:
+            captions = captions.unsqueeze(0)
+        elif captions.dim() == 3:
+            captions = captions[:, 0, :]
+        return captions
+
+    def _encode_image(self, images: Tensor) -> Tuple[Tensor, Tensor]:
+        feat = self.encoder(images)                                      # [B, Hdim, H', W']
+        B, C, Hp, Wp = feat.shape
+        memory = feat.permute(0, 2, 3, 1).reshape(B, Hp * Wp, C)         # [B, S, H]
+        mem_k = self.memory_proj_key(memory)
+        mem_v = self.memory_proj_value(memory)
+        return mem_k, mem_v
+
+    def train_setup(self, prm: dict):
+        prm = prm or {}
+        self.to(self.device)
+        self.train()
+        self.criterion = nn.CrossEntropyLoss(ignore_index=self.pad_idx).to(self.device)
+        lr = float(prm.get("lr", 1e-3))
+        beta1 = float(prm.get("momentum", 0.9))
+        self.optimizer = torch.optim.AdamW(self.parameters(), lr=lr, betas=(beta1, 0.999))
+
+    def learn(self, train_data):
+        prm = getattr(train_data, "prm", self.prm)
+        self.train_setup(prm)
+
+        for batch in train_data:
+            if isinstance(batch, (list, tuple)):
+                if len(batch) < 2:
+                    continue
+                images, captions = batch[0], batch[1]
+            elif isinstance(batch, dict):
+                images = batch.get("x", None)
+                captions = batch.get("y", None)
+                if images is None or captions is None:
+                    continue
+            else:
+                images = getattr(batch, "x", None)
+                captions = getattr(batch, "y", None)
+                if images is None or captions is None:
+                    continue
+
+            images = images.to(self.device)
+            captions = self._normalize_captions(captions.to(self.device).long())
+            if captions.size(1) <= 1:
+                continue
+
+            inputs = captions[:, :-1]
+            targets = captions[:, 1:]
+
+            logits, _ = self.forward(images, inputs)
+
+            loss = self.criterion(
+                logits.reshape(-1, logits.size(-1)),
+                targets.reshape(-1),
+            )
+
+            self.optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.parameters(), 3.0)
+            self.optimizer.step()
+
+    def init_zero_hidden(self, batch_size: int, device: torch.device) -> torch.Tensor:
+        return torch.zeros(1, batch_size, self.hidden_size, device=device)
+
+    def forward(self, images: Tensor, captions: Optional[Tensor] = None):
+        images = images.to(self.device)
+        mem_k, mem_v = self._encode_image(images)
+
+        B = images.size(0)
+        if captions is None:
+            captions = torch.full((B, 1), self.sos_idx, dtype=torch.long, device=self.device)
+        else:
+            captions = self._normalize_captions(captions.to(self.device).long())
+
+        emb = self.dropout(self.embedding(captions))
+        dec_out, _ = self.gru(emb)
+
+        attn_out, attn_w = self.attention(dec_out, mem_v, key_padding_mask=None)
+        logits = self.classifier(self.dropout(attn_out))
+        return logits, attn_w
+
+    @torch.no_grad()
+    def predict(self, images: Tensor) -> Tensor:
+        self.eval()
+        images = images.to(self.device)
+        mem_k, mem_v = self._encode_image(images)
+        B = images.size(0)
+
+        tokens = torch.full((B, 1), self.sos_idx, dtype=torch.long, device=self.device)
+        hidden = None
+
+        for _ in range(self.max_len - 1):
+            emb = self.embedding(tokens[:, -1:])
+            dec_out, hidden = self.gru(emb, hidden)
+            attn_out, _ = self.attention(dec_out, mem_v, key_padding_mask=None)
+            logits = self.classifier(attn_out)          # [B,1,V]
+            next_tok = logits.squeeze(1).argmax(dim=-1, keepdim=True)  # [B,1]
+            tokens = torch.cat([tokens, next_tok], dim=1)
+            if (next_tok == self.eos_idx).all():
+                break
+
+        return tokens
+
+    def _init_weights(self):
+        init_range = 0.02
+        nn.init.normal_(self.embedding.weight, mean=0.0, std=init_range)
+        nn.init.xavier_uniform_(self.classifier.weight)
+        if self.classifier.bias is not None:
+            nn.init.zeros_(self.classifier.bias)
+        nn.init.xavier_uniform_(self.memory_proj_key.weight)
+        if self.memory_proj_key.bias is not None:
+            nn.init.zeros_(self.memory_proj_key.bias)
+        nn.init.xavier_uniform_(self.memory_proj_value.weight)
+        if self.memory_proj_value.bias is not None:
+            nn.init.zeros_(self.memory_proj_value.bias)
+        for name, param in self.gru.named_parameters():
+            if "weight" in name:
+                nn.init.xavier_uniform_(param)
+            elif "bias" in name:
+                nn.init.zeros_(param)
+
+
+def model_net(in_shape: Any, out_shape: Any, prm: dict, device: torch.device):
+    return Net(in_shape, out_shape, prm, device)

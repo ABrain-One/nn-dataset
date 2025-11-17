@@ -12,7 +12,7 @@ class LSTMDecoder(nn.Module):
     def __init__(self, hidden_size: int, vocab_size: int):
         super().__init__()
         self.hidden_size = hidden_size
-        self.embedding = nn.Embedding(vocab_size, hidden_size)
+        self.embedding = nn.Embedding(vocab_size, hidden_size, padding_idx=0)
         self.lstm = nn.LSTM(hidden_size, hidden_size, batch_first=True)
         self.linear = nn.Linear(hidden_size, vocab_size)
 
@@ -23,13 +23,15 @@ class LSTMDecoder(nn.Module):
 
     def forward(
         self,
-        inputs: torch.Tensor,                            # [B, T] token ids
-        hidden_state: Tuple[torch.Tensor, torch.Tensor], # (h0, c0)
-        features: Optional[torch.Tensor] = None          # unused, kept for API compatibility
+        inputs: torch.Tensor,                             # [B, T] token ids
+        hidden_state: Tuple[torch.Tensor, torch.Tensor],  # (h0, c0)
+        features: Optional[torch.Tensor] = None           # unused, kept for API compatibility
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        emb = self.embedding(inputs)                     # [B, T, H]
-        out, hidden_state = self.lstm(emb, hidden_state) # out: [B, T, H]
-        logits = self.linear(out)                        # [B, T, V]
+        if inputs.dim() == 1:
+            inputs = inputs.unsqueeze(1)
+        emb = self.embedding(inputs)                      # [B, T, H]
+        out, hidden_state = self.lstm(emb, hidden_state)  # [B, T, H]
+        logits = self.linear(out)                         # [B, T, V]
         return logits, hidden_state
 
 
@@ -39,88 +41,89 @@ class Net(nn.Module):
         self.device = device
         self.prm = prm or {}
 
-        # ---- Shapes / sizes ----
+        self.in_shape = in_shape
+        self.out_shape = out_shape
+
         self.in_channels = self._infer_in_channels(in_shape)
         self.vocab_size = self._first_int(out_shape)
         self.hidden_size = int(self.prm.get("hidden_size", 768))
 
-        # ---- Encoder: simple CNN -> global pool -> fc ----
+        self.out_dim = self.vocab_size
+        self.num_classes = self.vocab_size
+
         self.cnn = nn.Sequential(
             nn.Conv2d(self.in_channels, 64, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(2),  # /2
+            nn.MaxPool2d(2),
 
             nn.Conv2d(64, 128, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(128),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(2),  # /4
+            nn.MaxPool2d(2),
 
             nn.Conv2d(128, 256, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(2),  # /8
+            nn.MaxPool2d(2),
 
             nn.Conv2d(256, 512, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(512),
             nn.ReLU(inplace=True),
-            nn.AdaptiveAvgPool2d((1, 1)),  # [B, 512, 1, 1]
+            nn.AdaptiveAvgPool2d((1, 1)),
         )
         self.fc = nn.Linear(512, self.hidden_size)
 
-        # ---- Decoder ----
         self.rnn = LSTMDecoder(self.hidden_size, self.vocab_size)
 
-        # ---- Tokens / lengths ----
-        self.sos_idx = int(self.prm.get("sos", 1))
+        self.sos_idx = int(self.prm.get("sos", self.prm.get("sos_idx", 1)))
         self.eos_idx = int(self.prm.get("eos", 0))
+        self.pad_idx = int(self.prm.get("pad_idx", 0))
         self.max_len = int(self.prm.get("max_length", 20))
 
-        # ---- Training helpers (set in train_setup) ----
         self.criterion: Optional[nn.Module] = None
         self.criteria = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
 
         self.to(self.device)
 
+    @staticmethod
+    def supported_hyperparameters():
+        return {"lr", "momentum"}
+
     # ---------------- Training API ----------------
     def train_setup(self, prm):
-        lr = float(prm.get("lr", 1e-3))
-        beta1 = float(prm.get("momentum", 0.9))
-        self.criterion = nn.CrossEntropyLoss(ignore_index=0).to(self.device)
+        prm = prm or {}
+        lr = float(prm.get("lr", self.prm.get("lr", 1e-3)))
+        beta1 = float(prm.get("momentum", self.prm.get("momentum", 0.9)))
+        self.criterion = nn.CrossEntropyLoss(ignore_index=self.pad_idx).to(self.device)
         self.criteria = (self.criterion,)
         self.optimizer = torch.optim.AdamW(self.parameters(), lr=lr, betas=(beta1, 0.999))
+        self.train()
+        self.to(self.device)
 
     def learn(self, train_data: Any):
-        """
-        Supports either:
-          - iterable of (images, captions) batches
-          - dict with 'images' and 'captions' tensors (single batch)
-        """
         if self.optimizer is None or self.criterion is None:
-            self.train_setup(self.prm)
+            prm = getattr(train_data, "prm", self.prm)
+            self.train_setup(prm)
 
         self.train()
 
         def _run_batch(images: torch.Tensor, captions: torch.Tensor):
-            images = images.to(self.device).float()
+            images = images.to(self.device, dtype=torch.float32)
             captions = captions.to(self.device).long()
             if captions.dim() == 3 and captions.size(1) == 1:
-                captions = captions[:, 0, :]  # [B, T]
+                captions = captions[:, 0, :]
 
-            # teacher forcing: predict next token
             if captions.size(1) <= 1:
-                return  # need at least one next-token target
+                return
 
-            inputs = captions[:, :-1]   # [B, T-1]
-            targets = captions[:, 1:]   # [B, T-1]
+            inputs = captions[:, :-1]
+            targets = captions[:, 1:]
 
-            # Encode (not used by LSTM, but kept for API parity)
-            _features = self._encode(images)  # [B, H]
-
-            # Decode
+            features = self._encode(images)  # [B, H]
             h0c0 = self.rnn.init_zero_hidden(images.size(0), self.device)
-            logits, _ = self.rnn(inputs, h0c0, _features)   # [B, T-1, V]
+            logits, _ = self.rnn(inputs, h0c0, features)   # [B, T-1, V]
 
             loss = self.criterion(logits.reshape(-1, self.vocab_size), targets.reshape(-1))
             self.optimizer.zero_grad(set_to_none=True)
@@ -129,9 +132,24 @@ class Net(nn.Module):
             self.optimizer.step()
 
         if isinstance(train_data, dict):
-            _run_batch(train_data["images"], train_data["captions"])
+            images = train_data.get("images", train_data.get("x", None))
+            captions = train_data.get("captions", train_data.get("y", None))
+            if images is not None and captions is not None:
+                _run_batch(images, captions)
         else:
-            for images, captions in train_data:
+            for batch in train_data:
+                if isinstance(batch, (list, tuple)):
+                    if len(batch) < 2:
+                        continue
+                    images, captions = batch[0], batch[1]
+                elif isinstance(batch, dict):
+                    images = batch.get("images", batch.get("x", None))
+                    captions = batch.get("captions", batch.get("y", None))
+                else:
+                    images = getattr(batch, "x", None)
+                    captions = getattr(batch, "y", None)
+                if images is None or captions is None:
+                    continue
                 _run_batch(images, captions)
 
     # ---------------- Forward / Inference ----------------
@@ -141,26 +159,26 @@ class Net(nn.Module):
         captions: Optional[torch.Tensor] = None,
         hidden_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
-        features = self._encode(images)  # [B, H]
+        images = images.to(self.device, dtype=torch.float32)
+        features = self._encode(images)
 
-        # Teacher forcing
         if captions is not None:
+            captions = captions.to(self.device).long()
             if captions.dim() == 3 and captions.size(1) == 1:
-                captions = captions[:, 0, :]  # [B, T]
+                captions = captions[:, 0, :]
             if hidden_state is None:
                 hidden_state = self.rnn.init_zero_hidden(images.size(0), self.device)
-            logits, hidden_state = self.rnn(captions, hidden_state, features)  # [B, T, V]
+            logits, hidden_state = self.rnn(captions, hidden_state, features)
             return logits, hidden_state
 
-        # Greedy generation
         bsz = images.size(0)
         h = self.rnn.init_zero_hidden(bsz, self.device)
-        seq = torch.full((bsz, 1), self.sos_idx, dtype=torch.long, device=self.device)  # [B, 1]
+        seq = torch.full((bsz, 1), self.sos_idx, dtype=torch.long, device=self.device)
 
         for _ in range(self.max_len):
-            step_logits, h = self.rnn(seq[:, -1:], h, features)      # feed last token
-            next_tok = step_logits[:, -1, :].argmax(dim=-1, keepdim=True)  # [B, 1]
-            seq = torch.cat([seq, next_tok], dim=1)                  # grow sequence
+            step_logits, h = self.rnn(seq[:, -1:], h, features)
+            next_tok = step_logits[:, -1, :].argmax(dim=-1, keepdim=True)
+            seq = torch.cat([seq, next_tok], dim=1)
             if (next_tok == self.eos_idx).all():
                 break
 
@@ -168,17 +186,18 @@ class Net(nn.Module):
 
     # ---------------- Internals ----------------
     def _encode(self, images: torch.Tensor) -> torch.Tensor:
-        x = self.cnn(images)                  # [B, 512, 1, 1]
-        x = x.flatten(1)                      # [B, 512]
-        x = self.fc(x)                        # [B, H]
+        x = self.cnn(images)      # [B, 512, 1, 1]
+        x = x.flatten(1)          # [B, 512]
+        x = self.fc(x)            # [B, H]
         return x
 
     @staticmethod
     def _infer_in_channels(in_shape) -> int:
-        # Expect in_shape like (B, C, H, W) or (C, H, W)
         if isinstance(in_shape, (tuple, list)):
-            if len(in_shape) >= 2:
-                return int(in_shape[1 if len(in_shape) >= 4 else 0])
+            if len(in_shape) == 3 and isinstance(in_shape[0], int):
+                return int(in_shape[0])          # (C,H,W)
+            if len(in_shape) >= 4 and isinstance(in_shape[1], int):
+                return int(in_shape[1])          # (B,C,H,W)
         return 3
 
     @staticmethod
@@ -192,3 +211,7 @@ class Net(nn.Module):
                 except Exception:
                     continue
         return int(x)
+
+
+def model_net(in_shape: Any, out_shape: Any, prm: dict, device: torch.device):
+    return Net(in_shape, out_shape, prm, device)
