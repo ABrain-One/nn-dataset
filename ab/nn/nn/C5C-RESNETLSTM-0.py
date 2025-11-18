@@ -87,9 +87,7 @@ class Net(nn.Module):
     def supported_hyperparameters(self):
         return {"lr", "momentum", "dropout"}
 
-    # -----------------------------------------------------
     # Internal helpers
-    # -----------------------------------------------------
     def _image_context(self, images: Tensor) -> Tuple[Tensor, Tensor]:
         """Encode images to (context_emb, h0) for the decoder GRU."""
         feats = self.cnn(images)                # (B,64)
@@ -106,9 +104,7 @@ class Net(nn.Module):
             captions = captions[:, 0, :]      # (B,T)
         return captions
 
-    # -----------------------------------------------------
     # Forward
-    # -----------------------------------------------------
     def forward(
         self,
         images: Tensor,
@@ -186,13 +182,9 @@ class Net(nn.Module):
 
         return tokens
 
-    # -----------------------------------------------------
     # Training setup / loop
-    # -----------------------------------------------------
     def train_setup(self, prm: dict) -> None:
-        """
-        Called by the training harness before learn().
-        """
+
         lr = float(prm.get("lr", 1e-3))
         momentum = float(prm.get("momentum", 0.9))
         dropout = float(prm.get("dropout", self.prm.get("dropout", 0.0)))
@@ -269,9 +261,8 @@ class Net(nn.Module):
         if len(self._token_counts) > 0:
             self._have_stats = True
 
-    # -----------------------------------------------------
+
     # Inference convenience
-    # -----------------------------------------------------
     @torch.no_grad()
     def predict(self, images: Tensor, max_len: Optional[int] = None) -> Tensor:
 

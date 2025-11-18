@@ -201,7 +201,7 @@ class Net(nn.Module):
             inputs = captions[:, :-1]
             targets = captions[:, 1:]
 
-            logits, _ = self.forward(images, inputs)
+            logits, _ = self.forward(images, inputs)   # teacher-forcing path
             loss = self.criterion(
                 logits.reshape(-1, logits.size(-1)),
                 targets.reshape(-1),
@@ -218,25 +218,21 @@ class Net(nn.Module):
         images: Tensor,
         captions: Optional[Tensor] = None,
         hidden_state: Optional[Any] = None,
-    ) -> Tuple[Tensor, Any]:
+    ):
+        """
+        Training: captions given -> (logits [B,T,V], hidden_state)
+        Eval (BLEU): captions None -> token_ids [B,<=max_len] (Tensor ONLY)
+        """
         memory = self.encoder(images.to(self.device))  # [B, S, H]
 
-        if captions is None:
-            captions = torch.full((images.size(0), 1), self.sos_idx, dtype=torch.long, device=self.device)
-        else:
+        # Teacher forcing for training
+        if captions is not None:
             captions = self._normalize_captions(captions.to(self.device).long())
+            logits, _ = self.decoder(memory, captions)  # [B, T, V]
+            return logits, hidden_state
 
-        logits, _ = self.decoder(memory, captions)  # [B, T, V]
-        return logits, hidden_state
-
-    @torch.no_grad()
-    def predict(self, images: Tensor) -> Tensor:
-        # Greedy decode for BLEU
-        self.eval()
-        images = images.to(self.device)
-        memory = self.encoder(images)  # [B, S, H]
+        # Greedy decode for BLEU / inference
         B = images.size(0)
-
         tokens = torch.full((B, 1), self.sos_idx, dtype=torch.long, device=self.device)
 
         for _ in range(self.max_len - 1):
@@ -247,7 +243,13 @@ class Net(nn.Module):
             if (next_tok == self.eos_idx).all():
                 break
 
-        return tokens
+        return tokens  # <- IMPORTANT: Tensor, not tuple
+
+    @torch.no_grad()
+    def predict(self, images: Tensor) -> Tensor:
+        # Just call forward(images) to share the same behavior
+        self.eval()
+        return self.forward(images)
 
     def init_zero_hidden(self, batch_size: int, device: torch.device) -> Tuple[Tensor, Tensor]:
         z = torch.zeros(batch_size, self.hidden_size, device=device)
