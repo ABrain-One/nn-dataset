@@ -1,220 +1,200 @@
 import torch
 import torch.nn as nn
+from typing import Any, Dict, Iterable, Optional, Tuple
 
-class BasicBlock(torch.nn.Module):
-    def __init__(self, in_channels, out_channels, stride):
-        super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.relu = nn.ReLU(inplace=True)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        
-        if in_channels != out_channels:
-            self.shortcut = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(out_channels)
-            )
-        else:
-            self.shortcut = None
-
-    def forward(self, x):
-        identity = x
-        
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-        
-        out = self.conv2(out)
-        out = self.bn2(out)
-        
-        if self.shortcut is not None:
-            identity = self.shortcut(x)
-            
-        out += identity
-        out = self.relu(out)
-        return out
-
-class ResNetSpatialEncoder(torch.nn.Module):
-    def __init__(self, in_shape, out_shape, prm, device):
-        super().__init__()
-        self.device = device
-        self.in_shape = in_shape
-        self.out_shape = out_shape
-        self.prm = prm
-        
-        # Define the stem
-        self.stem = nn.Sequential(
-            nn.Conv2d(in_shape[1], 64, kernel_size=7, stride=2, padding=3, bias=False),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        )
-        
-        # Define the rest of the ResNet
-        self.layer1 = self._make_layer(64, 64, 3, stride=1)
-        self.layer2 = self._make_layer(64, 128, 4, stride=2)
-        self.layer3 = self._make_layer(128, 256, 23, stride=2)
-        self.layer4 = self._make_layer(256, 512, 3, stride=2)
-        
-        # Global average pooling
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        
-        # Projection to hidden_size
-        self.fc = nn.Linear(512 * 7 * 7, out_shape[0])
-
-    def _make_layer(self, in_channels, out_channels, blocks, stride):
-        _layer_list = []
-        for i in range(blocks):
-            _layer_list.append(BasicBlock(in_channels, out_channels, stride))
-            in_channels = out_channels
-        return nn.Sequential(*_layer_list)
-
-    def forward(self, images):
-        x = self.stem(images)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc(x)
-        return x
-
-class SpatialAttentionLSTMDecoder(torch.nn.Module):
-    def __init__(self, vocab_size, prm, device):
-        super().__init__()
-        self.device = device
-        self.vocab_size = vocab_size
-        self.hidden_size = prm['hidden_size']
-        
-        # Define the embedding layer
-        self.embedding = nn.Embedding(vocab_size, self.hidden_size)
-        self.lstm = nn.LSTM(self.hidden_size, self.hidden_size, batch_first=True)
-        self.fc = nn.Linear(self.hidden_size, vocab_size)
-
-    def init_zero_hidden(self, batch_size):
-        # Initialize the hidden state and cell state to zeros
-        return (torch.zeros(1, batch_size, self.hidden_size).to(self.device),
-                torch.zeros(1, batch_size, self.hidden_size).to(self.device))
-
-    def forward(self, inputs, hidden_state=None, features=None):
-        # If hidden_state is None, initialize it
-        if hidden_state is None:
-            hidden_state = self.init_zero_hidden(inputs.size(0))
-            
-        # Embed the inputs
-        embedded = self.embedding(inputs)
-        # If features are provided, use them for attention
-        if features is not None:
-            # features: [B, num_regions, hidden_size]
-            # embedded: [B, T, hidden_size]
-            embedded = embedded.permute(0, 2, 1)
-            features = features.permute(0, 2, 1)
-            # Apply attention
-            context, attn_weights = nn.functional.multi_head_attention_forward(
-                query=embedded,
-                key=features,
-                value=features,
-                embed_dim=embedded.size(1),
-                num_heads=8,
-                dropout=0.0,
-                return_weights=True
-            )
-            context = context.permute(0, 2, 1)
-            # Concatenate context and embedded
-            output = torch.cat((context, embedded), dim=2)
-            output, hidden_state = self.lstm(output, hidden_state)
-            output = self.fc(output)
-        else:
-            # Just use the embedded input
-            output, hidden_state = self.lstm(embedded, hidden_state)
-            output = self.fc(output)
-        return output, hidden_state
-
-class Net(torch.nn.Module):
-    def __init__(self, in_shape, out_shape, prm, device, *_, **__):
-        
-            # ---- API aliases (auto-injected) ----
-
-            self.in_shape = in_shape
-            self.out_shape = out_shape
-            self.device = device
-            self.in_channels = in_shape[1] if isinstance(in_shape, (tuple, list)) else 3
-            self.vocab_size = out_shape[0] if isinstance(out_shape, (tuple, list)) else int(out_shape)
-            self.out_dim = self.vocab_size
-            self.num_classes = self.vocab_size
-            # Backward-compat local aliases (old LLM patterns)
-            vocab_size = self.vocab_size
-            out_dim = self.vocab_size
-            num_classes = self.vocab_size
-            in_channels = self.in_channels
-super().__init__()
-        self.in_shape = in_shape
-        self.out_shape = out_shape
-        self.device = device
-        self.prm = prm
-        self.in_channels = in_shape[1] if isinstance(in_shape, (tuple, list)) else 3
-        self.vocab_size = out_shape[0][0] if isinstance(out_shape, (tuple, list)) else int(out_shape)
-        self.out_dim = self.vocab_size
-        self.num_classes = self.vocab_size
-        
-        # Backward-compat local aliases (old LLM patterns)
-        self.encoder = ResNetSpatialEncoder(in_shape, self.vocab_size, self.prm, self.device)
-        self.decoder = SpatialAttentionLSTMDecoder(self.vocab_size, self.prm, self.device)
-        self.criterion = None
-        self.optimizer = None
-
-    def train_setup(self, prm):
-        self.to(self.device)
-        self.criteria = (nn.CrossEntropyLoss(ignore_index=0).to(self.device),)
-        self.optimizer = torch.optim.AdamW(
-            self.parameters(), lr=prm['lr'], betas=(prm.get('momentum', 0.9), 0.999)
-        )
-
-
-    def learn(self, train_data):
-        # Train the model on the given data
-        self.train()
-        for epoch in range(self.prm['epochs']):
-            for batch in train_data:
-                images, captions = batch
-                images = images.to(self.device)
-                captions = captions.to(self.device)
-
-                # Forward pass
-                outputs, hidden_state = self(images, captions)
-
-                # Compute loss
-                loss = self.criterion(outputs.view(-1, self.vocab_size), captions.view(-1))
-
-                # Backward pass and optimize
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
-
-    def forward(self, images, captions=None, hidden_state=None):
-        # If captions are provided, do teacher forcing
-        if captions is not None:
-            # Get the encoder features
-            encoder_features = self.encoder(images)
-            # Get the decoder output
-            output, hidden_state = self.decoder(captions, hidden_state, encoder_features)
-            return output, hidden_state
-
-        # Otherwise, generate captions
-        self.eval()
-        with torch.no_grad():
-            # Start with the start-of-sentence token
-            caption = torch.tensor([[self.decoder.sos_index]], device=self.device)
-            captions = []
-            for i in range(self.prm['max_length']):
-                encoder_features = self.encoder(images)
-                output, hidden_state = self.decoder(caption, hidden_state, encoder_features)
-                caption = torch.argmax(output, dim=1)
-                captions.append(caption)
-            captions = torch.cat(captions, dim=0)
-            return captions, hidden_state
 
 def supported_hyperparameters():
-    return {'lr','momentum'}
+    return {"lr", "momentum"}
+
+
+class SimpleEncoderA98(nn.Module):
+    def __init__(self, in_channels: int, hidden_size: int):
+        super().__init__()
+        self.body = nn.Sequential(
+            nn.Conv2d(in_channels, 64, 3, padding=1, bias=False),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(64, 128, 3, padding=1, bias=False),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(128, 256, 3, padding=1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),
+        )
+        self.fc = nn.Linear(256, hidden_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.body(x)
+        x = x.flatten(1)
+        return self.fc(x)
+
+
+class LSTMDecoderA98(nn.Module):
+    def __init__(self, hidden_size: int, vocab_size: int):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.embed = nn.Embedding(vocab_size, hidden_size)
+        self.lstm = nn.LSTM(hidden_size, hidden_size, batch_first=True)
+        self.proj = nn.Linear(hidden_size, vocab_size)
+
+    def init_zero_hidden(self, batch: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+        h0 = torch.zeros(1, batch, self.hidden_size, device=device)
+        c0 = torch.zeros(1, batch, self.hidden_size, device=device)
+        return h0, c0
+
+    def forward(
+        self,
+        inputs: torch.Tensor,
+        hidden: Tuple[torch.Tensor, torch.Tensor],
+        features: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        emb = self.embed(inputs)
+        out, hidden = self.lstm(emb, hidden)
+        logits = self.proj(out)
+        return logits, hidden
+
+
+class Net(nn.Module):
+    def __init__(self, in_shape, out_shape, prm, device, *_, **__):
+        super().__init__()
+        self.in_shape = in_shape
+        self.out_shape = out_shape
+        self.device = device
+        self.prm = prm or {}
+
+        self.in_channels = self._infer_in_channels(in_shape)
+        self.vocab_size = self._first_int(out_shape)
+        self.out_dim = self.vocab_size
+        self.num_classes = self.vocab_size
+
+        self.hidden_size = int(self.prm.get("hidden_size", 640))
+        self.sos_idx = int(self.prm.get("sos", 1))
+        self.eos_idx = int(self.prm.get("eos", 0))
+        self.max_len = int(self.prm.get("max_length", 20))
+        self.grad_clip = float(self.prm.get("grad_clip", 3.0))
+
+        self.encoder = SimpleEncoderA98(self.in_channels, self.hidden_size)
+        self.decoder = LSTMDecoderA98(self.hidden_size, self.vocab_size)
+        self.h_init = nn.Linear(self.hidden_size, self.hidden_size)
+        self.c_init = nn.Linear(self.hidden_size, self.hidden_size)
+
+        self.cnn = self.encoder.body
+        self.embedding = self.decoder.embed
+        self.fc_out = self.decoder.proj
+
+        self.criterion: Optional[nn.Module] = None
+        self.criteria = None
+        self.optimizer: Optional[torch.optim.Optimizer] = None
+
+        self.to(self.device)
+
+    def train_setup(self, prm: Dict[str, Any]):
+        prm = prm or {}
+        lr = float(prm.get("lr", self.prm.get("lr", 1e-3)))
+        beta1 = float(prm.get("momentum", self.prm.get("momentum", 0.9)))
+        self.criterion = nn.CrossEntropyLoss(ignore_index=0).to(self.device)
+        self.criteria = (self.criterion,)
+        self.optimizer = torch.optim.AdamW(self.parameters(), lr=lr, betas=(beta1, 0.999))
+
+    def learn(self, train_data: Iterable | Dict[str, torch.Tensor]):
+        if self.optimizer is None or self.criterion is None:
+            self.train_setup(self.prm)
+
+        self.train()
+
+        def _run_batch(images: torch.Tensor, captions: torch.Tensor):
+            images = images.to(self.device).float()
+            captions = captions.to(self.device).long()
+            if captions.dim() == 3 and captions.size(1) == 1:
+                captions = captions[:, 0, :]
+            if captions.size(1) <= 1:
+                return
+
+            inputs = captions[:, :-1]
+            targets = captions[:, 1:]
+
+            logits, _ = self.forward(images, inputs)
+            loss = self.criterion(
+                logits.reshape(-1, self.vocab_size),
+                targets.reshape(-1),
+            )
+
+            self.optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            nn.utils.clip_grad_norm_((self.parameters(), self.grad_clip))
+            self.optimizer.step()
+
+        if isinstance(train_data, dict):
+            _run_batch(train_data["images"], train_data["captions"])
+        else:
+            for batch in train_data:
+                if isinstance(batch, (list, tuple)) and len(batch) >= 2:
+                    _run_batch(batch[0], batch[1])
+                elif isinstance(batch, dict):
+                    _run_batch(batch["images"], batch["captions"])
+
+    def forward(
+        self,
+        images: torch.Tensor,
+        captions: Optional[torch.Tensor] = None,
+        hidden_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ):
+        images = images.to(self.device).float()
+        feats = self.encoder(images)
+
+        if hidden_state is None:
+            h0 = torch.tanh(self.h_init(feats)).unsqueeze(0)
+            c0 = torch.tanh(self.c_init(feats)).unsqueeze(0)
+            hidden_state = (h0, c0)
+
+        if captions is not None:
+            captions = captions.to(self.device).long()
+            if captions.dim() == 3 and captions.size(1) == 1:
+                captions = captions[:, 0, :]
+            logits, hidden_state = self.decoder(captions, hidden_state, feats)
+            return logits, hidden_state
+
+        B = images.size(0)
+        seq = torch.full((B, 1), self.sos_idx, dtype=torch.long, device=self.device)
+        h = hidden_state
+        for _ in range(self.max_len):
+            step_logits, h = self.decoder(seq[:, -1:], h, feats)
+            next_tok = step_logits[:, -1, :].argmax(dim=-1, keepdim=True)
+            seq = torch.cat([seq, next_tok], dim=1)
+            if (next_tok == self.eos_idx).all():
+                break
+        return seq
+
+    @torch.no_grad()
+    def predict(self, images: torch.Tensor) -> torch.Tensor:
+        self.eval()
+        out = self.forward(images)
+        if isinstance(out, tuple):
+            out = out[0]
+        return out
+
+    @staticmethod
+    def _infer_in_channels(in_shape) -> int:
+        if isinstance(in_shape, (tuple, list)):
+            if len(in_shape) >= 4:
+                return int(in_shape[1])
+            if len(in_shape) == 3:
+                return int(in_shape[0])
+        return 3
+
+    @staticmethod
+    def _first_int(x) -> int:
+        if isinstance(x, int):
+            return x
+        if isinstance(x, (tuple, list)) and len(x) > 0:
+            for item in x:
+                try:
+                    return Net._first_int(item)
+                except Exception:
+                    continue
+        return int(x)

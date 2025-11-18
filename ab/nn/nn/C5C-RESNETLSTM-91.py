@@ -1,207 +1,218 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from typing import Tuple, Optional, List, Dict, Any
+from typing import Any, Dict, Iterable, Optional, Tuple
 
-class SEBlock(nn.Module):
-    def __init__(self, channel: int, ratio: int = 4):
-        super(SEBlock, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+
+def supported_hyperparameters():
+    return {"lr", "momentum"}
+
+
+class SEBlockA91(nn.Module):
+    def __init__(self, channels: int, reduction: int = 8):
+        super().__init__()
+        hidden = max(1, channels // reduction)
+        self.pool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Sequential(
-            nn.Linear(channel, channel // ratio, bias=False),
+            nn.Linear(channels, hidden),
             nn.ReLU(inplace=True),
-            nn.Linear(channel // ratio, channel, bias=False),
-            nn.Sigmoid()
+            nn.Linear(hidden, channels),
+            nn.Sigmoid(),
         )
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        b, c, h, w = x.size()
-        y = self.avg_pool(x).view(b, c)
-        y = self.fc(y).view(b, c, 1, 1)
-        return x * y
 
-class InvertedResidual(nn.Module):
-    def __init__(self, inp: int, oup: int, stride: int, expand_ratio: int):
-        super(InvertedResidual, self).__init__()
-        self.identity = stride == 1 and inp == oup
-        
-        self.conv = nn.Sequential(
-            # Expansion
-            nn.Conv2d(inp, inp * expand_ratio, 1, 1, 0, bias=False),
-            nn.BatchNorm2d(inp * expand_ratio),
-            nn.ReLU(inplace=True),
-            # Depthwise
-            nn.Conv2d(inp * expand_ratio, oup, 3, stride, 1, bias=False, padding_mode='reflect'),
-            nn.BatchNorm2d(oup),
-            nn.ReLU(inplace=True),
-            # Projection
-            nn.Conv2d(oup, oup, 1, 1, bias=False)
-        )
-    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.identity:
-            return x + self.conv(x)
-        else:
-            return self.conv(x)
+        b, c, _, _ = x.shape
+        s = self.pool(x).view(b, c)
+        w = self.fc(s).view(b, c, 1, 1)
+        return x * w
+
+
+class EncoderA91(nn.Module):
+    """CNN + SE encoder -> single feature vector per image."""
+    def __init__(self, in_channels: int, hidden_size: int):
+        super().__init__()
+        self.body = nn.Sequential(
+            nn.Conv2d(in_channels, 64, 3, padding=1, bias=False),
+            nn.BatchNorm2d(64), nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(64, 128, 3, padding=1, bias=False),
+            nn.BatchNorm2d(128), nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(128, 256, 3, padding=1, bias=False),
+            nn.BatchNorm2d(256), nn.ReLU(inplace=True),
+            SEBlockA91(256),
+            nn.AdaptiveAvgPool2d((1, 1)),
+        )
+        self.fc = nn.Linear(256, hidden_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.body(x)      # [B,256,1,1]
+        x = x.flatten(1)      # [B,256]
+        return self.fc(x)     # [B,H]
+
+
+class LSTMDecoderA91(nn.Module):
+    def __init__(self, hidden_size: int, vocab_size: int):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.embed = nn.Embedding(vocab_size, hidden_size)
+        self.lstm = nn.LSTM(hidden_size, hidden_size, batch_first=True)
+        self.proj = nn.Linear(hidden_size, vocab_size)
+
+    def init_zero_hidden(self, batch: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+        h0 = torch.zeros(1, batch, self.hidden_size, device=device)
+        c0 = torch.zeros(1, batch, self.hidden_size, device=device)
+        return h0, c0
+
+    def forward(
+        self,
+        inputs: torch.Tensor,
+        hidden: Tuple[torch.Tensor, torch.Tensor],
+        features: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        emb = self.embed(inputs)           # [B,T,H]
+        out, hidden = self.lstm(emb, hidden)
+        logits = self.proj(out)            # [B,T,V]
+        return logits, hidden
+
 
 class Net(nn.Module):
     def __init__(self, in_shape, out_shape, prm, device, *_, **__):
-
-            # ---- API aliases (auto-injected) ----
-            self.in_shape = in_shape
-            self.out_shape = out_shape
-            self.device = device
-            self.in_channels = in_shape[1] if isinstance(in_shape, (tuple, list)) else 3
-            self.vocab_size = out_shape[0] if isinstance(out_shape, (tuple, list)) else int(out_shape)
-            self.out_dim = self.vocab_size
-            self.num_classes = self.vocab_size
-
-            # Backward-compat local aliases (old LLM patterns)
-            vocab_size = self.vocab_size
-            out_dim = self.vocab_size
-            num_classes = self.vocab_size
-            in_channels = self.in_channels
-super(Net, self).__init__()
+        super().__init__()
         self.in_shape = in_shape
         self.out_shape = out_shape
         self.device = device
-        self.in_channels = in_shape[1] if isinstance(in_shape, (tuple, list)) else 3
-        self.vocab_size = out_shape[0][0] if isinstance(out_shape, (tuple, list)) else int(out_shape)
+        self.prm = prm or {}
+
+        self.in_channels = self._infer_in_channels(in_shape)
+        self.vocab_size = self._first_int(out_shape)
         self.out_dim = self.vocab_size
         self.num_classes = self.vocab_size
-        
-        # Encoder: ResNet-like with SE blocks
-        self.encoder = nn.Sequential(
-            nn.Conv2d(self.in_channels, 64, 7, 2, 3, bias=False),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(3, 2, 1),
-            
-            # Stage 1: 2x2 stride
-            self._make_layer(64, 256, 3, 2),
-            
-            # Stage 2: 1x1 stride
-            self._make_layer(256, 512, 3, 1),
-            
-            # Stage 3: 1x1 stride
-            self._make_layer(512, 1024, 2, 1),
-            
-            # Stage 4: 1x1 stride
-            self._make_layer(1024, 1280, 2, 1),
-            
-            # Final stage
-            nn.Conv2d(1280, 768, 1, 1, bias=False),
-            nn.BatchNorm2d(768),
-            SEBlock(768)
-        )
-        
-        # Decoder: LSTM-based with attention
-        self.decoder = nn.LSTM(
-            input_size=768,
-            hidden_size=768,
-            num_layers=1,
-            batch_first=True,
-            dropout=0.3
-        )
-        
-        self.embedding = nn.Embedding(self.vocab_size, 768)
-        self.attention = nn.Linear(768, 768)
-        self.fc = nn.Linear(768, self.vocab_size)
-        self.device = device
-    
-    def _make_layer(self, in_channels: int, out_channels: int, blocks: int, stride: int) -> nn.Sequential:
-        _layer_list = []
-        for i in range(blocks):
-            if i == 0 and stride != 1:
-                _layer_list.append(InvertedResidual(in_channels, out_channels, stride, 6))
-            else:
-                _layer_list.append(InvertedResidual(in_channels, out_channels, 1, 6))
-            in_channels = out_channels
-        return nn.Sequential(*_layer_list)
-    
-    def init_zero_hidden(self, batch_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        return (torch.zeros(1, batch_size, 768).to(self.device),
-                torch.zeros(1, batch_size, 768).to(self.device))
-    
-    def train_setup(self, prm):
+
+        self.hidden_size = int(self.prm.get("hidden_size", 768))
+        self.sos_idx = int(self.prm.get("sos", 1))
+        self.eos_idx = int(self.prm.get("eos", 0))
+        self.max_len = int(self.prm.get("max_length", 20))
+
+        self.encoder = EncoderA91(self.in_channels, self.hidden_size)
+        self.decoder = LSTMDecoderA91(self.hidden_size, self.vocab_size)
+        self.h_init = nn.Linear(self.hidden_size, self.hidden_size)
+        self.c_init = nn.Linear(self.hidden_size, self.hidden_size)
+
+        self.criterion: Optional[nn.Module] = None
+        self.criteria = None
+        self.optimizer: Optional[torch.optim.Optimizer] = None
+
         self.to(self.device)
-        self.criteria = (nn.CrossEntropyLoss(ignore_index=0).to(self.device),)
-        self.optimizer = torch.optim.AdamW(
-            self.parameters(), lr=prm['lr'], betas=(prm.get('momentum', 0.9), 0.999)
-        )
 
-    
-    def learn(self, train_data: List[Tuple[torch.Tensor, List[str]]]):
-        self.train_setup({'lr': 0.001})
-        for images, captions in train_data:
-            features = self.encoder(images)
-            embedded = self.embedding(captions[:-1])
-            embedded = embedded.view(embedded.size(0), embedded.size(1), 768)
-            
-            h0, c0 = self.init_zero_hidden(images.size(0))
-            outputs, (h_n, c_n) = self.decoder(embedded, (h0, c0))
-            
-            loss = self.criteria[0](outputs.view(-1, self.vocab_size), captions[1:].view(-1))
-            self.optimizer.zero_grad()
+    # ------------- training plumbing -------------
+    def train_setup(self, prm: Dict[str, Any]):
+        prm = prm or {}
+        lr = float(prm.get("lr", self.prm.get("lr", 1e-3)))
+        beta1 = float(prm.get("momentum", self.prm.get("momentum", 0.9)))
+        self.criterion = nn.CrossEntropyLoss(ignore_index=0).to(self.device)
+        self.criteria = (self.criterion,)
+        self.optimizer = torch.optim.AdamW(self.parameters(), lr=lr, betas=(beta1, 0.999))
+
+    def learn(self, train_data: Iterable | Dict[str, torch.Tensor]):
+        if self.optimizer is None or self.criterion is None:
+            self.train_setup(self.prm)
+
+        self.train()
+
+        def _run_batch(images: torch.Tensor, captions: torch.Tensor):
+            images = images.to(self.device).float()
+            captions = captions.to(self.device).long()
+            if captions.dim() == 3 and captions.size(1) == 1:
+                captions = captions[:, 0, :]
+
+            if captions.size(1) <= 1:
+                return
+
+            inputs = captions[:, :-1]
+            targets = captions[:, 1:]
+
+            logits, _ = self.forward(images, inputs)
+            loss = self.criterion(logits.reshape(-1, self.vocab_size), targets.reshape(-1))
+
+            self.optimizer.zero_grad(set_to_none=True)
             loss.backward()
+            nn.utils.clip_grad_norm_(self.parameters(), 3.0)
             self.optimizer.step()
-    
-    def forward(self, images: torch.Tensor, captions: Optional[torch.Tensor] = None, hidden_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None):
-        # Get encoder features
-        features = self.encoder(images)
-        
-        # If captions is provided, we are in teacher forcing mode
-        if captions is not None:
-            # Embed the captions
-            embedded = self.embedding(captions)
-            
-            # If hidden_state is provided, use it; otherwise initialize
-            if hidden_state is None:
-                h0, c0 = self.init_zero_hidden(images.size(0))
-            else:
-                h0, c0 = hidden_state
-                
-            # Pass through the decoder
-            outputs, hidden_state = self.decoder(embedded, (h0, c0))
-            
-            # Apply attention to features
-            attention_weights = F.softmax(self.attention(outputs[:, -1, :]), dim=1)
-            context = torch.sum(outputs[:, -1, :] * attention_weights, dim=1)
-            
-            # Project to vocabulary distribution
-            logits = self.fc(context)
-            
-            return logits, hidden_state
-        
-        # Otherwise, we are in inference mode
-        else:
-            # Initialize hidden state
-            h0, c0 = self.init_zero_hidden(images.size(0))
-            
-            # Start with SOS token
-            captions = [self.vocab_size - 1]  # SOS index
-            
-            # Generate captions until EOS
-            while len(captions) < 50:  # max length
-                embedded = self.embedding(captions)
-                embedded = embedded.view(len(captions), 1, 768)
-                
-                outputs, (h0, c0) = self.decoder(embedded, (h0, c0))
-                
-                # Get the last output's distribution
-                last_output = outputs[-1, -1, :]
-                last_output = self.fc(last_output)
-                
-                # Sample next token
-                probs = F.softmax(last_output, dim=0)
-                next_token = torch.multinomial(probs, 1)
-                captions.append(next_token.item())
-                
-                # If next_token is EOS, break
-                if next_token.item() == self.vocab_size - 2:  # EOS index
-                    break
-            
-            return captions
 
-def supported_hyperparameters():
-    return {'lr', 'momentum'}
+        if isinstance(train_data, dict):
+            _run_batch(train_data["images"], train_data["captions"])
+        else:
+            for images, captions in train_data:
+                _run_batch(images, captions)
+
+    # ------------- forward / inference -------------
+    def forward(
+        self,
+        images: torch.Tensor,
+        captions: Optional[torch.Tensor] = None,
+        hidden_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ):
+        """
+        Training:  forward(images, captions) -> (logits [B,T,V], hidden_state)
+        Eval/BLEU: forward(images)           -> token_ids [B,S]
+        """
+        images = images.to(self.device).float()
+        feats = self.encoder(images)  # [B,H]
+
+        if hidden_state is None:
+            h0 = torch.tanh(self.h_init(feats)).unsqueeze(0)
+            c0 = torch.tanh(self.c_init(feats)).unsqueeze(0)
+            hidden_state = (h0, c0)
+
+        if captions is not None:
+            captions = captions.to(self.device).long()
+            if captions.dim() == 3 and captions.size(1) == 1:
+                captions = captions[:, 0, :]
+            logits, hidden_state = self.decoder(captions, hidden_state, feats)
+            return logits, hidden_state
+
+        # greedy decode
+        B = images.size(0)
+        seq = torch.full((B, 1), self.sos_idx, dtype=torch.long, device=self.device)
+        h = hidden_state
+
+        for _ in range(self.max_len):
+            step_logits, h = self.decoder(seq[:, -1:], h, feats)
+            next_tok = step_logits[:, -1, :].argmax(dim=-1, keepdim=True)
+            seq = torch.cat([seq, next_tok], dim=1)
+            if (next_tok == self.eos_idx).all():
+                break
+
+        return seq
+
+    @torch.no_grad()
+    def predict(self, images: torch.Tensor) -> torch.Tensor:
+        self.eval()
+        out = self.forward(images)
+        if isinstance(out, tuple):
+            out = out[0]
+        return out
+
+    # ------------- helpers -------------
+    @staticmethod
+    def _infer_in_channels(in_shape) -> int:
+        if isinstance(in_shape, (tuple, list)):
+            if len(in_shape) >= 4:
+                return int(in_shape[1])
+            if len(in_shape) == 3:
+                return int(in_shape[0])
+        return 3
+
+    @staticmethod
+    def _first_int(x) -> int:
+        if isinstance(x, int):
+            return x
+        if isinstance(x, (tuple, list)) and len(x) > 0:
+            for item in x:
+                try:
+                    return Net._first_int(item)
+                except Exception:
+                    continue
+        return int(x)

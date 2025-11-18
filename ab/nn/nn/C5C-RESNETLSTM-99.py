@@ -1,328 +1,200 @@
-import math
-from typing import Optional, Tuple
-
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-
-# -----------------------------
-# Utilities
-# -----------------------------
-def trunc_normal_(tensor: torch.Tensor, mean: float = 0.0, std: float = 0.02) -> None:
-    """
-    Simple truncated normal initializer: samples from N(mean, std) and clamps to 2*std.
-    (Approximation suitable for embeddings/positional encodings.)
-    """
-    with torch.no_grad():
-        tensor.normal_(mean=mean, std=std)
-        tensor.clamp_(min=mean - 2 * std, max=mean + 2 * std)
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 
 def supported_hyperparameters():
-    return {'lr', 'momentum'}
+    return {"lr", "momentum"}
 
 
-# -----------------------------
-# Blocks
-# -----------------------------
-class MLPBlock(nn.Module):
-    def __init__(self, in_dim: int, mlp_dim: int, dropout: float):
+class SimpleEncoderA99(nn.Module):
+    def __init__(self, in_channels: int, hidden_size: int):
         super().__init__()
-        self.fc1 = nn.Linear(in_dim, mlp_dim)
-        self.act = nn.GELU()
-        self.fc2 = nn.Linear(mlp_dim, in_dim)
-        self.dropout = nn.Dropout(dropout)
+        self.body = nn.Sequential(
+            nn.Conv2d(in_channels, 64, 3, padding=1, bias=False),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.fc1(x)
-        x = self.act(x)
-        x = self.fc2(x)
-        x = self.dropout(x)
-        return x
+            nn.Conv2d(64, 128, 3, padding=1, bias=False),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
 
-
-class EncoderBlock(nn.Module):
-    """
-    A ViT-style encoder block: LN -> MHA -> Drop -> Residual -> LN -> MLP -> Drop -> Residual
-    (Kept for completeness; the encoder below uses nn.TransformerEncoder for stability.)
-    """
-    def __init__(self, hidden_dim: int, mlp_dim: int, num_heads: int, dropout: float, attention_dropout: float):
-        super().__init__()
-        self.norm1 = nn.LayerNorm(hidden_dim)
-        self.attn = nn.MultiheadAttention(hidden_dim, num_heads, dropout=attention_dropout, batch_first=True)
-        self.drop1 = nn.Dropout(dropout)
-
-        self.norm2 = nn.LayerNorm(hidden_dim)
-        self.ff = MLPBlock(hidden_dim, mlp_dim, dropout)
-        self.drop2 = nn.Dropout(dropout)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Self-attention
-        x = x + self.drop1(self.attn(self.norm1(x), self.norm1(x), self.norm1(x), need_weights=False)[0])
-        # Feed-forward
-        x = x + self.drop2(self.ff(self.norm2(x)))
-        return x
-
-
-# -----------------------------
-# Vision Transformer Encoder
-# -----------------------------
-class VisionTransformerEncoder(nn.Module):
-    """
-    Lightweight ViT encoder implemented with a Conv2d patch-embedding + TransformerEncoder.
-    Produces features of shape [B, N, hidden_dim], where N = (H/patch)*(W/patch).
-    """
-    def __init__(
-        self,
-        in_shape: Tuple[int, int, int, int],
-        hidden_dim: int,
-        num_layers: int,
-        num_heads: int,
-        mlp_dim: int,
-        dropout: float,
-        attention_dropout: float,
-        patch_size: int = 16,
-    ):
-        super().__init__()
-        # in_shape is expected like (B, C, H, W) or similar; we only need C, H, W
-        _, c, h, w = in_shape if len(in_shape) == 4 else (None, in_shape[0], in_shape[1], in_shape[2])
-        assert h % patch_size == 0 and w % patch_size == 0, "H and W must be divisible by patch_size"
-
-        self.hidden_dim = hidden_dim
-        self.patch_size = patch_size
-        self.num_patches = (h // patch_size) * (w // patch_size)
-
-        # Patchify via strided convolution to hidden_dim channels
-        self.patch_embed = nn.Conv2d(c, hidden_dim, kernel_size=patch_size, stride=patch_size, bias=True)
-
-        # Positional embeddings
-        self.pos_embedding = nn.Parameter(torch.empty(1, self.num_patches, hidden_dim))
-        trunc_normal_(self.pos_embedding, std=0.02)
-
-        self.dropout = nn.Dropout(dropout)
-
-        # A stable, battle-tested encoder stack
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_dim,
-            nhead=num_heads,
-            dim_feedforward=mlp_dim,
-            dropout=dropout,
-            activation="gelu",
-            batch_first=True,
-            norm_first=True,
+            nn.Conv2d(128, 256, 3, padding=1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        self.norm = nn.LayerNorm(hidden_dim)
+        self.fc = nn.Linear(256, hidden_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [B, C, H, W]
-        x = self.patch_embed(x)                    # [B, hidden_dim, H/ps, W/ps]
-        x = x.flatten(2).transpose(1, 2)           # [B, N, hidden_dim]
-        x = x + self.pos_embedding                 # add learned positions
-        x = self.dropout(x)
-        x = self.encoder(x)                        # [B, N, hidden_dim]
-        x = self.norm(x)
-        return x
+        x = self.body(x)
+        x = x.flatten(1)
+        return self.fc(x)
 
 
-# -----------------------------
-# Transformer Decoder (text)
-# -----------------------------
-class TransformerDecoder(nn.Module):
-    """
-    Text decoder with cross-attention to image features.
-    Uses nn.TransformerDecoder for correctness and simplicity.
-    """
-    def __init__(
-        self,
-        vocab_size: int,
-        hidden_dim: int,
-        num_heads: int,
-        num_layers: int,
-        dropout: float,
-        attention_dropout: float,
-        max_len: int = 100,
-    ):
+class LSTMDecoderA99(nn.Module):
+    def __init__(self, hidden_size: int, vocab_size: int):
         super().__init__()
-        self.vocab_size = vocab_size
-        self.hidden_dim = hidden_dim
-        self.max_len = max_len
+        self.hidden_size = hidden_size
+        self.embed = nn.Embedding(vocab_size, hidden_size)
+        self.lstm = nn.LSTM(hidden_size, hidden_size, batch_first=True)
+        self.proj = nn.Linear(hidden_size, vocab_size)
 
-        self.embedding = nn.Embedding(vocab_size, hidden_dim, padding_idx=0)
-        self.pos_embedding = nn.Parameter(torch.empty(1, max_len, hidden_dim))
-        trunc_normal_(self.pos_embedding, std=0.02)
-
-        self.dropout = nn.Dropout(dropout)
-
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=hidden_dim,
-            nhead=num_heads,
-            dim_feedforward=4 * hidden_dim,
-            dropout=dropout,
-            activation="gelu",
-            batch_first=True,
-            norm_first=True,
-        )
-        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
-        self.norm = nn.LayerNorm(hidden_dim)
-
-        self.lm_head = nn.Linear(hidden_dim, vocab_size)
-
-    def _causal_mask(self, sz: int, device: torch.device) -> torch.Tensor:
-        # standard causal mask [sz, sz] with -inf above diagonal
-        mask = torch.full((sz, sz), float("-inf"), device=device)
-        mask = torch.triu(mask, diagonal=1)
-        return mask
+    def init_zero_hidden(self, batch: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+        h0 = torch.zeros(1, batch, self.hidden_size, device=device)
+        c0 = torch.zeros(1, batch, self.hidden_size, device=device)
+        return h0, c0
 
     def forward(
         self,
-        inputs: torch.Tensor,                  # [B, T] token ids
-        features: Optional[torch.Tensor],      # [B, N, hidden_dim] from encoder
-    ) -> torch.Tensor:
-        B, T = inputs.shape
-        # Embed + add positions
-        x = self.embedding(inputs) + self.pos_embedding[:, :T, :]
-        x = self.dropout(x)
-
-        # Self-attention causal mask
-        tgt_mask = self._causal_mask(T, x.device)
-
-        # Cross-attention: memory = image features
-        memory = features if features is not None else None
-
-        x = self.decoder(tgt=x, memory=memory, tgt_mask=tgt_mask)
-        x = self.norm(x)
-        logits = self.lm_head(x)               # [B, T, vocab]
-        return logits
+        inputs: torch.Tensor,
+        hidden: Tuple[torch.Tensor, torch.Tensor],
+        features: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        emb = self.embed(inputs)
+        out, hidden = self.lstm(emb, hidden)
+        logits = self.proj(out)
+        return logits, hidden
 
 
-# -----------------------------
-# Net (API)
-# -----------------------------
 class Net(nn.Module):
     def __init__(self, in_shape, out_shape, prm, device, *_, **__):
         super().__init__()
-        # API fields
-        self.device = device
         self.in_shape = in_shape
         self.out_shape = out_shape
+        self.device = device
+        self.prm = prm or {}
 
-        # Channel and vocab extraction compatible with your pipeline
-        self.in_channels = in_shape[1] if isinstance(in_shape, (tuple, list)) else 3
-        # out_shape may be (V,) or ((V,), something). Safest:
-        if isinstance(out_shape, (tuple, list)):
-            self.vocab_size = out_shape[0] if isinstance(out_shape[0], int) else int(out_shape[0][0])
-        else:
-            self.vocab_size = int(out_shape)
+        self.in_channels = self._infer_in_channels(in_shape)
+        self.vocab_size = self._first_int(out_shape)
+        self.out_dim = self.vocab_size
+        self.num_classes = self.vocab_size
 
-        # Model dims (safe defaults; can be tuned by prm if present)
-        self.hidden_dim = int(prm.get('hidden_dim', 768))
-        self.num_heads = int(prm.get('num_heads', 8))
-        self.mlp_dim = int(prm.get('mlp_dim', 3072))
-        self.dropout = float(prm.get('dropout', 0.1))
-        self.attn_drop = float(prm.get('attn_drop', 0.1))
-        self.max_len = int(prm.get('max_len', 50))
-        self.patch_size = int(prm.get('patch_size', 16))
-        self.enc_layers = int(prm.get('enc_layers', 6))
-        self.dec_layers = int(prm.get('dec_layers', 6))
+        self.hidden_size = int(self.prm.get("hidden_size", 640))
+        self.sos_idx = int(self.prm.get("sos", 1))
+        self.eos_idx = int(self.prm.get("eos", 0))
+        self.max_len = int(self.prm.get("max_length", 20))
+        self.grad_clip = float(self.prm.get("grad_clip", 3.0))
 
-        # Encoder (ViT)
-        # Build a shape tuple like (B, C, H, W). We only need C,H,W values.
-        # If in_shape already includes B, use it; otherwise assume dummy B=1.
-        enc_in_shape = in_shape if len(in_shape) == 4 else (1, self.in_channels, in_shape[1], in_shape[2])
-        self.encoder = VisionTransformerEncoder(
-            in_shape=enc_in_shape,
-            hidden_dim=self.hidden_dim,
-            num_layers=self.enc_layers,
-            num_heads=self.num_heads,
-            mlp_dim=self.mlp_dim,
-            dropout=self.dropout,
-            attention_dropout=self.attn_drop,
-            patch_size=self.patch_size,
-        )
+        self.encoder = SimpleEncoderA99(self.in_channels, self.hidden_size)
+        self.decoder = LSTMDecoderA99(self.hidden_size, self.vocab_size)
+        self.h_init = nn.Linear(self.hidden_size, self.hidden_size)
+        self.c_init = nn.Linear(self.hidden_size, self.hidden_size)
 
-        # Decoder (text)
-        self.decoder = TransformerDecoder(
-            vocab_size=self.vocab_size,
-            hidden_dim=self.hidden_dim,
-            num_heads=self.num_heads,
-            num_layers=self.dec_layers,
-            dropout=self.dropout,
-            attention_dropout=self.attn_drop,
-            max_len=self.max_len,
-        )
+        self.cnn = self.encoder.body
+        self.embedding = self.decoder.embed
+        self.fc_out = self.decoder.proj
 
-        # Training helpers (initialized in train_setup)
-        self.criterion = None
-        self.optimizer = None
+        self.criterion: Optional[nn.Module] = None
+        self.criteria = None
+        self.optimizer: Optional[torch.optim.Optimizer] = None
+
         self.to(self.device)
 
-    # -------- Training API --------
-    def train_setup(self, prm: dict) -> None:
-        """
-        Sets up optimizer & loss. Expects prm to contain 'lr' and optional 'momentum' (used as beta1).
-        """
-        lr = float(prm.get('lr', 1e-4))
-        beta1 = float(prm.get('momentum', 0.9))
+    def train_setup(self, prm: Dict[str, Any]):
+        prm = prm or {}
+        lr = float(prm.get("lr", self.prm.get("lr", 1e-3)))
+        beta1 = float(prm.get("momentum", self.prm.get("momentum", 0.9)))
         self.criterion = nn.CrossEntropyLoss(ignore_index=0).to(self.device)
+        self.criteria = (self.criterion,)
         self.optimizer = torch.optim.AdamW(self.parameters(), lr=lr, betas=(beta1, 0.999))
 
-    def learn(self, train_data) -> None:
-        """
-        One training pass over provided data loader/iterator.
-        Expects batches of (images, captions) where captions are [B, T] with BOS/EOS/0-padding.
-        """
-        assert self.criterion is not None and self.optimizer is not None, "Call train_setup(prm) first."
+    def learn(self, train_data: Iterable | Dict[str, torch.Tensor]):
+        if self.optimizer is None or self.criterion is None:
+            self.train_setup(self.prm)
+
         self.train()
-        for images, captions in train_data:
-            images = images.to(self.device, non_blocking=True).float()
-            captions = captions.to(self.device, non_blocking=True).long()
 
-            # Teacher-forcing: predict next token
-            inputs = captions[:, :-1]           # [B, T-1]
-            targets = captions[:, 1:]           # [B, T-1]
+        def _run_batch(images: torch.Tensor, captions: torch.Tensor):
+            images = images.to(self.device).float()
+            captions = captions.to(self.device).long()
+            if captions.dim() == 3 and captions.size(1) == 1:
+                captions = captions[:, 0, :]
+            if captions.size(1) <= 1:
+                return
 
-            with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
-                feats = self.encoder(images)                # [B, N, H]
-                logits = self.decoder(inputs, feats)        # [B, T-1, V]
-                loss = self.criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+            inputs = captions[:, :-1]
+            targets = captions[:, 1:]
+
+            logits, _ = self.forward(images, inputs)
+            loss = self.criterion(
+                logits.reshape(-1, self.vocab_size),
+                targets.reshape(-1),
+            )
 
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            nn.utils.clip_grad_norm_(self.parameters(), 3.0)
+            nn.utils.clip_grad_norm_(self.parameters(), self.grad_clip)
             self.optimizer.step()
 
-    # -------- Inference/Forward --------
+        if isinstance(train_data, dict):
+            _run_batch(train_data["images"], train_data["captions"])
+        else:
+            for batch in train_data:
+                if isinstance(batch, (list, tuple)) and len(batch) >= 2:
+                    _run_batch(batch[0], batch[1])
+                elif isinstance(batch, dict):
+                    _run_batch(batch["images"], batch["captions"])
+
     def forward(
         self,
         images: torch.Tensor,
         captions: Optional[torch.Tensor] = None,
-        hidden_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # kept for API compatibility, unused
-    ) -> torch.Tensor:
-        """
-        If captions is provided (training/eval): returns logits [B, T-1, vocab].
-        If captions is None (inference): greedy decode up to max_len and return logits of the whole decoded path [B, T, vocab].
-        """
+        hidden_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ):
         images = images.to(self.device).float()
-        feats = self.encoder(images)  # [B, N, H]
+        feats = self.encoder(images)
+
+        if hidden_state is None:
+            h0 = torch.tanh(self.h_init(feats)).unsqueeze(0)
+            c0 = torch.tanh(self.c_init(feats)).unsqueeze(0)
+            hidden_state = (h0, c0)
 
         if captions is not None:
             captions = captions.to(self.device).long()
-            inputs = captions[:, :-1]                         # [B, T-1]
-            logits = self.decoder(inputs, feats)              # [B, T-1, V]
-            return logits                                     # (tensor, not tuple) for BLEU compatibility
+            if captions.dim() == 3 and captions.size(1) == 1:
+                captions = captions[:, 0, :]
+            logits, hidden_state = self.decoder(captions, hidden_state, feats)
+            return logits, hidden_state
 
-        # Inference (greedy)
         B = images.size(0)
-        sos_id = 1  # assuming 1 is <SOS>; adapt if your tokenizer uses a different id
-        cur = torch.full((B, 1), sos_id, dtype=torch.long, device=self.device)
-        all_logits = []
-
+        seq = torch.full((B, 1), self.sos_idx, dtype=torch.long, device=self.device)
+        h = hidden_state
         for _ in range(self.max_len):
-            logits = self.decoder(cur, feats)                 # [B, t, V]
-            next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)  # [B,1]
-            all_logits.append(logits[:, -1:, :])              # keep last step logits
-            cur = torch.cat([cur, next_token], dim=1)
+            step_logits, h = self.decoder(seq[:, -1:], h, feats)
+            next_tok = step_logits[:, -1, :].argmax(dim=-1, keepdim=True)
+            seq = torch.cat([seq, next_tok], dim=1)
+            if (next_tok == self.eos_idx).all():
+                break
+        return seq
 
-        return torch.cat(all_logits, dim=1)                   # [B, T, V]
+    @torch.no_grad()
+    def predict(self, images: torch.Tensor) -> torch.Tensor:
+        self.eval()
+        out = self.forward(images)
+        if isinstance(out, tuple):
+            out = out[0]
+        return out
+
+    @staticmethod
+    def _infer_in_channels(in_shape) -> int:
+        if isinstance(in_shape, (tuple, list)):
+            if len(in_shape) >= 4:
+                return int(in_shape[1])
+            if len(in_shape) == 3:
+                return int(in_shape[0])
+        return 3
+
+    @staticmethod
+    def _first_int(x) -> int:
+        if isinstance(x, int):
+            return x
+        if isinstance(x, (tuple, list)) and len(x) > 0:
+            for item in x:
+                try:
+                    return Net._first_int(item)
+                except Exception:
+                    continue
+        return int(x)

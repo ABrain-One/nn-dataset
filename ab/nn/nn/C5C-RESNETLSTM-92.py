@@ -1,216 +1,191 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Iterable, Optional, Tuple
 
-class SEBlock(nn.Module):
-    def __init__(self, channel: int, ratio: int = 4):
-        super(SEBlock, self).__init__()
-        self.squeeze = nn.AdaptiveAvgPool2d(1)
-        self.excite = nn.Sequential(
-            nn.Linear(channel, channel // ratio),
-            nn.ReLU(inplace=True),
-            nn.Linear(channel // ratio, channel),
-            nn.Sigmoid()
-        )
-        
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        b, c, _, _ = x.size()
-        y = self.squeeze(x)
-        y = self.excite(y)
-        return x * y.expand_as(x)
-
-class PatchEmbedding(nn.Module):
-    """Convert images to patch tokens"""
-    def __init__(self, in_channels: int, patch_size: int, embedding_dim: int):
-        super(PatchEmbedding, self).__init__()
-        self.projection = nn.Conv2d(in_channels, embedding_dim, kernel_size=patch_size, stride=patch_size)
-        self.norm = nn.LayerNorm(embedding_dim)
-        self.dropout = nn.Dropout(0.1)
-        
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.projection(x)
-        x = self.norm(x)
-        x = self.dropout(x)
-        return x
-
-class DecoderBlock(nn.Module):
-    """Modified Transformer decoder layer"""
-    def __init__(self, embedding_dim: int, num_heads: int):
-        super(DecoderBlock, self).__init__()
-        self.self_attention = nn.MultiheadAttention(embedding_dim, num_heads, batch_first=True)
-        self.cross_attention = nn.MultiheadAttention(embedding_dim, num_heads, batch_first=True)
-        self.norm1 = nn.LayerNorm(embedding_dim)
-        self.norm2 = nn.LayerNorm(embedding_dim)
-        self.ff = nn.Sequential(
-            nn.Linear(embedding_dim, embedding_dim * 2),
-            nn.ReLU(inplace=True),
-            nn.Linear(embedding_dim * 2, embedding_dim)
-        )
-        self.dropout = nn.Dropout(0.3)
-        
-    def forward(self, x: torch.Tensor, memory: Optional[torch.Tensor] = None) -> torch.Tensor:
-        # Self attention
-        q, k, v = x, x, x
-        x = self.norm1(q)
-        x = self.self_attention(x, q, k)[0]
-        x = self.dropout(x)
-        
-        # Cross attention if memory provided
-        if memory is not None:
-            x = self.norm2(x)
-            x_cross, _ = self.cross_attention(x, memory, memory)
-            x = x + x_cross
-            
-        # Feed forward
-        x = self.norm2(x)
-        x = self.ff(x)
-        x = self.dropout(x)
-        return x
-
-class CustomTransformerDecoder(nn.Module):
-    def __init__(self, vocab_size: int, embedding_dim: int, num_layers: int, num_heads: int):
-        super(CustomTransformerDecoder, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
-        self.pos_encoding = PatchEmbedding(3, 16, embedding_dim)  # Simple learnable positional encoding
-        
-        # Decoder layers
-        decoder_blocks = []
-        for _ in range(num_layers):
-            decoder_blocks.append(DecoderBlock(embedding_dim, num_heads))
-        self.decoder_blocks = nn.Sequential(*decoder_blocks)
-        
-        # Final projection
-        self.projection = nn.Linear(embedding_dim, vocab_size)
-        
-    def init_zero_hidden(self, batch: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
-        return (torch.zeros(batch, self.embedding.num_embeddings, self.embedding.embedding_dim, 
-                           device=device), 
-                torch.zeros(batch, self.embedding.num_embeddings, self.embedding.embedding_dim, 
-                           device=device))
-    
-    def forward(self, inputs: torch.Tensor, memory: Optional[torch.Tensor] = None, 
-                hidden_state: Optional[Tuple[torch.Tensor]] = None) -> Tuple[torch.Tensor, torch.Tensor]:
-        if memory is None and hidden_state is None:
-            raise ValueError("Either memory or hidden_state must be provided")
-            
-        # Apply embedding and positional encoding
-        embedded = self.embedding(inputs)
-        embedded_pos = self.pos_encoding(inputs).transpose(0, 1)
-        embedded = embedded + embedded_pos
-        
-        # Process through decoder layers
-        for block in self.decoder_blocks:
-            embedded = block(embedded, memory)
-            
-        # Final projection
-        logits = self.projection(embedded.transpose(0, 1))
-        
-        # Return last hidden state of decoder blocks (avg of all layers)
-        if memory is None:
-            h_states = [block.norm2.weight.detach().clone() for block in self.decoder_blocks]
-            avg_state = torch.stack(h_states).mean(dim=0)
-        else:
-            avg_state = memory[-1][:,-1,:]
-                
-        return logits, avg_state
 
 def supported_hyperparameters():
-    return {'lr','momentum'}
+    return {"lr", "momentum"}
 
+
+class PatchEncoderA92(nn.Module):
+    """Conv patch embedding -> global feature."""
+    def __init__(self, in_channels: int, hidden_size: int, patch_size: int = 4):
+        super().__init__()
+        self.proj = nn.Conv2d(in_channels, hidden_size, kernel_size=patch_size, stride=patch_size, padding=0)
+        self.bn = nn.BatchNorm2d(hidden_size)
+        self.act = nn.ReLU(inplace=True)
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.proj(x)
+        x = self.bn(x)
+        x = self.act(x)
+        x = self.pool(x)       # [B,H,1,1]
+        return x.flatten(1)    # [B,H]
+
+
+class LSTMDecoderA92(nn.Module):
+    def __init__(self, hidden_size: int, vocab_size: int):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.embed = nn.Embedding(vocab_size, hidden_size)
+        self.lstm = nn.LSTM(hidden_size, hidden_size, batch_first=True)
+        self.proj = nn.Linear(hidden_size, vocab_size)
+
+    def init_zero_hidden(self, batch: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+        h0 = torch.zeros(1, batch, self.hidden_size, device=device)
+        c0 = torch.zeros(1, batch, self.hidden_size, device=device)
+        return h0, c0
+
+    def forward(
+        self,
+        inputs: torch.Tensor,
+        hidden: Tuple[torch.Tensor, torch.Tensor],
+        features: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        emb = self.embed(inputs)
+        out, hidden = self.lstm(emb, hidden)
+        logits = self.proj(out)
+        return logits, hidden
 
 
 class Net(nn.Module):
-    def __init__(self, in_shape: Tuple[int, int, int], out_shape: Tuple[int, ...], 
-                 prm: Dict[str, Any], device: torch.device) -> None:
-        super(Net, self).__init__()
+    def __init__(self, in_shape, out_shape, prm, device, *_, **__):
+        super().__init__()
+        self.in_shape = in_shape
+        self.out_shape = out_shape
         self.device = device
-        
-        # Extract dimensions
-        height, width = in_shape[1], in_shape[2]
-        embedding_dim = prm.get('hidden_size', 640)
-        num_layers = prm.get('num_layers', 1)
-        num_heads = prm.get('num_heads', 8)
-        image_size = min(height, width)
-        patch_size = prm.get('patch_size', 4)
-        
-        # Define encoder components
-        self.patch_embedding = PatchEmbedding(in_shape[1], patch_size, embedding_dim)
-        self.backbone = nn.Sequential(
-            nn.Conv2d(embedding_dim, embedding_dim*2, 3, padding=1),
-            nn.LeakyReLU(0.1),
-            SEBlock(embedding_dim*2),
-            nn.Conv2d(embedding_dim*2, embedding_dim, 3, padding=1)
-        )
-        self.global_context = nn.Sequential(
-            nn.AdaptiveMaxPool2d((1,1)),
-            nn.Flatten(),
-            nn.Linear(embedding_dim, embedding_dim),
-            nn.ReLU(),
-            nn.Linear(embedding_dim, embedding_dim)
-        )
-        
-        # Define decoder
-        self.decoder = CustomTransformerDecoder(
-            out_shape[0], embedding_dim, num_layers, num_heads
-        )
-        
-        # Classifier layers
-        self.classifier_dropout = nn.Dropout(0.2)
-        self.classifier_final = nn.Linear(embedding_dim, out_shape[0])
-        
-    def train_setup(self, prm):
+        self.prm = prm or {}
+
+        self.in_channels = self._infer_in_channels(in_shape)
+        self.vocab_size = self._first_int(out_shape)
+        self.out_dim = self.vocab_size
+        self.num_classes = self.vocab_size
+
+        self.hidden_size = int(self.prm.get("hidden_size", 640))
+        self.sos_idx = int(self.prm.get("sos", 1))
+        self.eos_idx = int(self.prm.get("eos", 0))
+        self.max_len = int(self.prm.get("max_length", 20))
+        self.patch_size = int(self.prm.get("patch_size", 4))
+
+        self.encoder = PatchEncoderA92(self.in_channels, self.hidden_size, self.patch_size)
+        self.decoder = LSTMDecoderA92(self.hidden_size, self.vocab_size)
+        self.h_init = nn.Linear(self.hidden_size, self.hidden_size)
+        self.c_init = nn.Linear(self.hidden_size, self.hidden_size)
+
+        self.criterion: Optional[nn.Module] = None
+        self.criteria = None
+        self.optimizer: Optional[torch.optim.Optimizer] = None
+
         self.to(self.device)
-        self.criteria = (nn.CrossEntropyLoss(ignore_index=0).to(self.device),)
-        self.optimizer = torch.optim.AdamW(
-            self.parameters(), lr=prm['lr'], betas=(prm.get('momentum', 0.9), 0.999)
-        )
 
+    # ------------- training plumbing -------------
+    def train_setup(self, prm: Dict[str, Any]):
+        prm = prm or {}
+        lr = float(prm.get("lr", self.prm.get("lr", 1e-3)))
+        beta1 = float(prm.get("momentum", self.prm.get("momentum", 0.9)))
+        self.criterion = nn.CrossEntropyLoss(ignore_index=0).to(self.device)
+        self.criteria = (self.criterion,)
+        self.optimizer = torch.optim.AdamW(self.parameters(), lr=lr, betas=(beta1, 0.999))
 
-    
-    def learn(self, train_data):
+    def learn(self, train_data: Iterable | Dict[str, torch.Tensor]):
+        if self.optimizer is None or self.criterion is None:
+            self.train_setup(self.prm)
+
         self.train()
-        for images, captions in train_data:
-            images = images.to(self.device)
-            captions = captions.to(self.device)
-            
-            # Extract features with patch embedding and backbone
-            patches = self.patch_embedding(images)
-            features = self.backbone(patches)
-            global_feat = self.global_context(features)
-            
-            # Get text embeddings
-            text_inputs = captions
-            
-            # Forward pass through decoder
-            logits, _ = self.decoder(text_inputs, None)
-            
-            # Reshape and compute loss
-            logits_flat = logits.view(-1, out_shape[0])
-            targets_flat = captions.view(-1)
-            
-            loss = self.criteria[0](logits_flat, targets_flat)
-            
-            # Backward pass
-            self.optimizer.zero_grad()
+
+        def _run_batch(images: torch.Tensor, captions: torch.Tensor):
+            images = images.to(self.device).float()
+            captions = captions.to(self.device).long()
+            if captions.dim() == 3 and captions.size(1) == 1:
+                captions = captions[:, 0, :]
+
+            if captions.size(1) <= 1:
+                return
+
+            inputs = captions[:, :-1]
+            targets = captions[:, 1:]
+
+            logits, _ = self.forward(images, inputs)
+            loss = self.criterion(logits.reshape(-1, self.vocab_size), targets.reshape(-1))
+
+            self.optimizer.zero_grad(set_to_none=True)
             loss.backward()
             nn.utils.clip_grad_norm_(self.parameters(), 3.0)
             self.optimizer.step()
-    
-    def forward(self, images: torch.Tensor, captions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        # Extract features with patch embedding and backbone
-        patches = self.patch_embedding(images)
-        features = self.backbone(patches)
-        global_feat = self.global_context(features)
-        
-        # Get text embeddings
-        text_inputs = captions
-        
-        # Forward pass through decoder
-        logits, avg_state = self.decoder(text_inputs, None)
-        
-        # Reshape the logits and captions to match the output shape
-        logits_flat = logits.view(-1, out_shape[0])
-        targets_flat = captions.view(-1)
-        
-        return logits_flat, avg_state
+
+        if isinstance(train_data, dict):
+            _run_batch(train_data["images"], train_data["captions"])
+        else:
+            for images, captions in train_data:
+                _run_batch(images, captions)
+
+    # ------------- forward / inference -------------
+    def forward(
+        self,
+        images: torch.Tensor,
+        captions: Optional[torch.Tensor] = None,
+        hidden_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ):
+        """
+        Training:  forward(images, captions) -> (logits [B,T,V], hidden_state)
+        Eval/BLEU: forward(images)           -> token_ids [B,S]
+        """
+        images = images.to(self.device).float()
+        feats = self.encoder(images)  # [B,H]
+
+        if hidden_state is None:
+            h0 = torch.tanh(self.h_init(feats)).unsqueeze(0)
+            c0 = torch.tanh(self.c_init(feats)).unsqueeze(0)
+            hidden_state = (h0, c0)
+
+        if captions is not None:
+            captions = captions.to(self.device).long()
+            if captions.dim() == 3 and captions.size(1) == 1:
+                captions = captions[:, 0, :]
+            logits, hidden_state = self.decoder(captions, hidden_state, feats)
+            return logits, hidden_state
+
+        # greedy decoding
+        B = images.size(0)
+        seq = torch.full((B, 1), self.sos_idx, dtype=torch.long, device=self.device)
+        h = hidden_state
+
+        for _ in range(self.max_len):
+            step_logits, h = self.decoder(seq[:, -1:], h, feats)
+            next_tok = step_logits[:, -1, :].argmax(dim=-1, keepdim=True)
+            seq = torch.cat([seq, next_tok], dim=1)
+            if (next_tok == self.eos_idx).all():
+                break
+
+        return seq
+
+    @torch.no_grad()
+    def predict(self, images: torch.Tensor) -> torch.Tensor:
+        self.eval()
+        out = self.forward(images)
+        if isinstance(out, tuple):
+            out = out[0]
+        return out
+
+    # ------------- helpers -------------
+    @staticmethod
+    def _infer_in_channels(in_shape) -> int:
+        if isinstance(in_shape, (tuple, list)):
+            if len(in_shape) >= 4:
+                return int(in_shape[1])
+            if len(in_shape) == 3:
+                return int(in_shape[0])
+        return 3
+
+    @staticmethod
+    def _first_int(x) -> int:
+        if isinstance(x, int):
+            return x
+        if isinstance(x, (tuple, list)) and len(x) > 0:
+            for item in x:
+                try:
+                    return Net._first_int(item)
+                except Exception:
+                    continue
+        return int(x)

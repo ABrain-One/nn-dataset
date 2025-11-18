@@ -1,0 +1,174 @@
+import math
+import torch
+import torch.nn as nn
+from typing import Optional, Tuple
+
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2) * (math.log(10000.0) / d_model)
+        )
+        pe = torch.zeros(max_len, 1, d_model)
+        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        self.register_buffer("pe", pe)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        seq_len = x.size(1)
+        pe = self.pe[:seq_len]
+        x = x + pe
+        return self.dropout(x)
+
+
+class TransformerDecoder(nn.Module):
+    def __init__(self, vocab_size: int, d_model: int):
+        super().__init__()
+        self.d_model = d_model
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.pos_encoding = PositionalEncoding(d_model)
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=d_model,
+            nhead=min(8, d_model // 64),
+            batch_first=True,
+        )
+        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=6)
+        self.fc_out = nn.Linear(d_model, vocab_size)
+
+    def forward(
+        self,
+        tgt: torch.Tensor,
+        memory: torch.Tensor,
+        tgt_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        embedded = self.embedding(tgt) * math.sqrt(self.d_model)
+        embedded = self.pos_encoding(embedded)
+        dec_out = self.transformer_decoder(
+            embedded,
+            memory,
+            tgt_mask=tgt_mask,
+        )
+        dec_out = self.fc_out(dec_out)
+        return dec_out
+
+
+class Net(nn.Module):
+    def __init__(self, in_shape: Tuple, out_shape: Tuple, prm: dict, device: torch.device, *_, **__):
+        super().__init__()
+        self.device = device
+
+        if isinstance(in_shape, (tuple, list)):
+            in_channels = int(in_shape[1])
+        else:
+            in_channels = int(in_shape)
+
+        if isinstance(out_shape, (tuple, list)):
+            vocab_size = int(out_shape[0])
+        else:
+            vocab_size = int(out_shape)
+
+        self.hidden_dim = int(prm.get("hidden_dim", 640))
+        self.vocab_size = vocab_size
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(in_channels, self.hidden_dim, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),
+        )
+
+        self.decoder = TransformerDecoder(vocab_size=self.vocab_size, d_model=self.hidden_dim)
+
+    def train_setup(self, prm: dict):
+        self.to(self.device)
+        self.criteria = (nn.CrossEntropyLoss(ignore_index=0).to(self.device),)
+        self.optimizer = torch.optim.AdamW(
+            self.parameters(),
+            lr=prm["lr"],
+            betas=(prm.get("momentum", 0.9), 0.999),
+        )
+
+    def _norm_caps(self, caps: torch.Tensor) -> torch.Tensor:
+        if caps.ndim == 3:
+            if caps.size(1) == 1:
+                caps = caps[:, 0, :]
+            else:
+                caps = caps[:, :, 0]
+        return caps.long()
+
+    def _make_tgt_mask(self, T: int, device: torch.device) -> torch.Tensor:
+        mask = torch.triu(
+            torch.full((T, T), float("-inf"), device=device),
+            diagonal=1,
+        )
+        return mask
+
+    def learn(self, train_data):
+        self.train()
+        total_loss = 0.0
+        steps = 0
+        for images, captions in train_data:
+            images = images.to(self.device, dtype=torch.float32)
+            captions = captions.to(self.device)
+            captions = self._norm_caps(captions)
+
+            inp = captions[:, :-1]
+            tgt = captions[:, 1:]
+
+            mem_feat = self.encoder(images)  # [B, H, 1, 1]
+            memory = mem_feat.view(images.size(0), 1, self.hidden_dim)
+
+            tgt_mask = self._make_tgt_mask(inp.size(1), images.device)
+            logits = self.decoder(inp, memory, tgt_mask=tgt_mask)
+
+            loss = self.criteria[0](
+                logits.reshape(-1, self.vocab_size),
+                tgt.reshape(-1),
+            )
+            self.optimizer.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.parameters(), 3.0)
+            self.optimizer.step()
+
+            total_loss += loss.item()
+            steps += 1
+
+        return total_loss / max(steps, 1)
+
+    def forward(
+        self,
+        images: torch.Tensor,
+        captions: Optional[torch.Tensor] = None,
+        hidden_state: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        images = images.to(self.device, dtype=torch.float32)
+        mem_feat = self.encoder(images)
+        memory = mem_feat.view(images.size(0), 1, self.hidden_dim)
+
+        if captions is not None:
+            captions = captions.to(self.device)
+            captions = self._norm_caps(captions)
+            inp = captions[:, :-1]
+            tgt_mask = self._make_tgt_mask(inp.size(1), images.device)
+            logits = self.decoder(inp, memory, tgt_mask=tgt_mask)
+            return logits, hidden_state
+
+        batch_size = images.size(0)
+        max_len = 20
+        sos_idx = 1
+        generated = torch.full(
+            (batch_size, 1), sos_idx, dtype=torch.long, device=self.device
+        )
+        for _ in range(max_len - 1):
+            tgt_mask = self._make_tgt_mask(generated.size(1), images.device)
+            logits_step = self.decoder(generated, memory, tgt_mask=tgt_mask)
+            next_tok = logits_step[:, -1, :].argmax(dim=-1, keepdim=True)
+            generated = torch.cat([generated, next_tok], dim=1)
+
+        return generated, None
+
+
+def supported_hyperparameters():
+    return {"lr", "momentum"}
