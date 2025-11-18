@@ -1,0 +1,396 @@
+import argparse, json, csv, os, glob, sys, torch, inspect
+import torchvision.transforms as T
+from PIL import Image
+
+# Your model class
+from ab.nn.nn.C10C_ALEXNETLSTM import Net as Model
+
+
+@torch.no_grad()
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--weights", type=str, required=True)
+    ap.add_argument("--images", type=str, nargs="+", required=True,
+                    help="Folder(s) or file globs, e.g. data/demo_images or data/demo_images/*.jpg")
+    ap.add_argument("--outdir", type=str, default="_runs/alexnet_caps")
+    ap.add_argument("--max_len", type=int, default=20)
+    ap.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--vocab", type=str, default=None,
+                    help='Optional vocab.json mapping {"0":"<pad>", ...}. If provided, vocab size is inferred.')
+    ap.add_argument("--verbose", action="store_true", default=True)
+    args = ap.parse_args()
+
+    # -------- Expand folders & globs --------
+    def expand_inputs(items):
+        exts = ["*.jpg","*.jpeg","*.png","*.JPG","*.JPEG","*.PNG"]
+        out=[]
+        for it in items:
+            if os.path.isdir(it):
+                for ex in exts: out+=glob.glob(os.path.join(it, ex))
+            else:
+                out+=glob.glob(it)
+        return sorted(list({p for p in out if os.path.isfile(p)}))
+
+    paths = expand_inputs(args.images)
+    if not paths:
+        raise FileNotFoundError("❌ No images found. Try 'data/demo_images/*.[Jj][Pp][Gg]'")
+    print(f"✅ Found {len(paths)} image(s)")
+    if args.verbose:
+        for p in paths: print("   •", p)
+
+    os.makedirs(args.outdir, exist_ok=True)
+
+    # -------- Preprocess (AlexNet) --------
+    tfm = T.Compose([
+        T.Resize(256), T.CenterCrop(224), T.ToTensor(),
+        T.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]),
+    ])
+    device = torch.device(args.device)
+
+    # -------- Optional vocab --------
+    id2tok=None
+    if args.vocab and os.path.exists(args.vocab):
+        with open(args.vocab) as f: id2tok=json.load(f)
+        id2tok={str(k):v for k,v in id2tok.items()}
+        print(f"🔤 Loaded vocab ({len(id2tok)} tokens)")
+
+    # -------- Load checkpoint first --------
+    ckpt=torch.load(args.weights, map_location="cpu")
+    sd=ckpt.get("model", ckpt.get("state_dict", ckpt))
+
+    meta={}
+    for k in ("meta","config","cfg","hparams"):
+        if isinstance(ckpt,dict) and isinstance(ckpt.get(k),dict):
+            meta=ckpt[k]; break
+
+    in_shape=tuple(meta.get("in_shape",(3,224,224)))
+
+    def infer_vocab_from_sd(sd):
+        for k in ["decoder.embed.weight","decoder.fc.weight","decoder.fc.bias",
+                  "generator.weight","output_proj.weight","lm_head.weight"]:
+            t=sd.get(k)
+            if isinstance(t,torch.Tensor) and t.ndim>=1:
+                return int(t.shape[0])
+        cand=[int(t.shape[0]) for k,t in sd.items()
+              if isinstance(t,torch.Tensor) and t.ndim==1 and t.shape[0]>=1000]
+        return max(cand) if cand else None
+
+    if id2tok is not None:
+        out_shape=(len(id2tok),); src="--vocab"
+    else:
+        v=infercab_from_sd(sd)
+        out_shape=(v,) if v is not None else tuple(meta.get("out_shape",(10000,)))
+        src="checkpoint" if v else "meta/default"
+
+    prm=meta.get("prm", meta.get("params", {"dropout":0.3,"nhead":8,"num_layers":6}))
+    bos_id = meta.get("bos_id", ckpt.get("bos_id", 1))
+    eos_id = meta.get("eos_id", ckpt.get("eos_id", 2))
+    pad_id = meta.get("pad_id", ckpt.get("pad_id", 0))
+
+    print("🧩 Model init params:")
+    print("   in_shape :", in_shape)
+    print("   out_shape:", out_shape, f"(from {src})")
+    print("   device   :", device)
+    if args.verbose: print("   prm      :", prm)
+
+    # -------- Build & load model --------
+    model=Model(in_shape, out_shape, prm, device)
+    missing, unexpected = model.load_state_dict(sd, strict=False)
+    if missing: print(f"⚠️ Missing keys: {len(missing)} (first 5) -> {missing[:5]}")
+    if unexpected: print(f"⚠️ Unexpected keys: {len(unexpected)} (first 5) -> {unexpected[:5]}")
+
+    # attach special tokens if absent
+    if not hasattr(model,"bos_id"): model.bos_id=bos_id
+    if not hasattr(model,"eos_id"): model.eos_id=eos_id
+    if not hasattr(model,"pad_id"): model.pad_id=pad_id
+
+    model.to(device).eval()
+
+    if args.verbose:
+        try: print("🔍 model.forward signature:", inspect.signature(model.forward))
+        except Exception: pass
+        print(f"🔖 tokens: bos={model.bos_id} eos={model.eos_id} pad={model.pad_id}")
+
+    # -------- helpers --------
+    def ids_to_text(ids):
+        if ids is None: return "<none>"
+        if isinstance(ids,torch.Tensor): ids=ids.detach().cpu().flatten().tolist()
+        elif not isinstance(ids,(list,tuple)):
+            try: ids=list(ids)
+            except Exception: ids=[int(ids)] if isinstance(ids,int) else [str(ids)]
+        if id2tok: return " ".join(id2tok.get(str(i), f"[{i}]") for i in ids)
+        if hasattr(model,"ids_to_text"):
+            try: return model.ids_to_text(ids)
+            except Exception as e:
+                if args.verbose: print("⚠️ ids_to_text() failed:", e)
+        return " ".join(map(str, ids))
+
+    # -------- STRICT greedy decode using forward(images, captions=ids) --------
+    def greedy_decode(x_batched, max_len):
+        """
+        Uses the model's forward(images, captions=ids) API.
+        Always starts with BOS, stops on EOS.
+        """
+        seq=[int(getattr(model,"bos_id", import argparse, json, csv, os, glob, sys, torch, inspect
+import torchvision.transforms as T
+from PIL import Image
+
+# Your model class
+from ab.nn.nn.C10C_ALEXNETLSTM import Net as Model
+
+
+@torch.no_grad()
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--weights", type=str, required=True)
+    ap.add_argument("--images", type=str, nargs="+", required=True,
+                    help="Folder(s) or file globs, e.g. data/demo_images or data/demo_images/*.jpg")
+    ap.add_argument("--outdir", type=str, default="_runs/alexnet_caps")
+    ap.add_argument("--max_len", type=int, default=20)
+    ap.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--vocab", type=str, default=None,
+                    help='Optional vocab.json mapping {"0":"<pad>", ...}. If provided, vocab size is inferred.')
+    ap.add_argument("--verbose", action="store_true", default=True)
+    args = ap.parse_args()
+
+    # -------- Expand folders & globs --------
+    def expand_inputs(items):
+        exts = ["*.jpg","*.jpeg","*.png","*.JPG","*.JPEG","*.PNG"]
+        out=[]
+        for it in items:
+            if os.path.isdir(it):
+                for ex in exts: out+=glob.glob(os.path.join(it, ex))
+            else:
+                out+=glob.glob(it)
+        return sorted(list({p for p in out if os.path.isfile(p)}))
+
+    paths = expand_inputs(args.images)
+    if not paths:
+        raise FileNotFoundError("❌ No images found. Try 'data/demo_images/*.[Jj][Pp][Gg]'")
+    print(f"✅ Found {len(paths)} image(s)")
+    if args.verbose:
+        for p in paths: print("   •", p)
+
+    os.makedirs(args.outdir, exist_ok=True)
+
+    # -------- Preprocess (AlexNet) --------
+    tfm = T.Compose([
+        T.Resize(256), T.CenterCrop(224), T.ToTensor(),
+        T.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]),
+    ])
+    device = torch.device(args.device)
+
+    # -------- Optional vocab --------
+    id2tok=None
+    if args.vocab and os.path.exists(args.vocab):
+        with open(args.vocab) as f: id2tok=json.load(f)
+        id2tok={str(k):v for k,v in id2tok.items()}
+        print(f"🔤 Loaded vocab ({len(id2tok)} tokens)")
+
+    # -------- Load checkpoint first --------
+    ckpt=torch.load(args.weights, map_location="cpu")
+    sd=ckpt.get("model", ckpt.get("state_dict", ckpt))
+
+    meta={}
+    for k in ("meta","config","cfg","hparams"):
+        if isinstance(ckpt,dict) and isinstance(ckpt.get(k),dict):
+            meta=ckpt[k]; break
+
+    in_shape=tuple(meta.get("in_shape",(3,224,224)))
+
+    def infer_vocab_from_sd(sd):
+        for k in ["decoder.embed.weight","decoder.fc.weight","decoder.fc.bias",
+                  "generator.weight","output_proj.weight","lm_head.weight"]:
+            t=sd.get(k)
+            if isinstance(t,torch.Tensor) and t.ndim>=1:
+                return int(t.shape[0])
+        cand=[int(t.shape[0]) for k,t in sd.items()
+              if isinstance(t,torch.Tensor) and t.ndim==1 and t.shape[0]>=1000]
+        return max(cand) if cand else None
+
+    if id2tok is not None:
+        out_shape=(len(id2tok),); src="--vocab"
+    else:
+        v=infer_vocab_from_sd(sd)
+        out_shape=(v,) if v is not None else tuple(meta.get("out_shape",(10000,)))
+        src="checkpoint" if v else "meta/default"
+
+    prm=meta.get("prm", meta.get("params", {"dropout":0.3,"nhead":8,"num_layers":6}))
+    bos_id = meta.get("bos_id", ckpt.get("bos_id", 1))
+    eos_id = meta.get("eos_id", ckpt.get("eos_id", 2))
+    pad_id = meta.get("pad_id", ckpt.get("pad_id", 0))
+
+    print("🧩 Model init params:")
+    print("   in_shape :", in_shape)
+    print("   out_shape:", out_shape, f"(from {src})")
+    print("   device   :", device)
+    if args.verbose: print("   prm      :", prm)
+
+    # -------- Build & load model --------
+    model=Model(in_shape, out_shape, prm, device)
+    missing, unexpected = model.load_state_dict(sd, strict=False)
+    if missing: print(f"⚠️ Missing keys: {len(missing)} (first 5) -> {missing[:5]}")
+    if unexpected: print(f"⚠️ Unexpected keys: {len(unexpected)} (first 5) -> {unexpected[:5]}")
+
+    # attach special tokens if absent
+    if not hasattr(model,"bos_id"): model.bos_id=bos_id
+    if not hasattr(model,"eos_id"): model.eos_id=eos_id
+    if not hasattr(model,"pad_id"): model.pad_id=pad_id
+
+    model.to(device).eval()
+
+    if args.verbose:
+        try: print("🔍 model.forward signature:", inspect.signature(model.forward))
+        except Exception: pass
+        print(f"🔖 tokens: bos={model.bos_id} eos={model.eos_id} pad={model.pad_id}")
+
+    # -------- helpers --------
+    def ids_to_text(ids):
+        if ids is None: return "<none>"
+        if isinstance(ids,torch.Tensor): ids=ids.detach().cpu().flatten().tolist()
+        elif not isinstance(ids,(list,tuple)):
+            try: ids=list(ids)
+            except Exception: ids=[int(ids)] if isinstance(ids,int) else [str(ids)]
+        if id2tok: return " ".join(id2tok.get(str(i), f"[{i}]") for i in ids)
+        if hasattr(model,"ids_to_text"):
+            try: return model.ids_to_text(ids)
+            except Exception as e:
+                if args.verbose: print("⚠️ ids_to_text() failed:", e)
+        return " ".join(map(str, ids))
+
+    # -------- STRICT greedy decode using forward(images, captions=ids) --------
+    def greedy_decode(x_batched, max_len):
+        """
+        Uses the model's forward(images, captions=ids) API.
+        Always starts with BOS, stops on EOS.
+        """
+        seq=[int(getattr(model,"bos_id", bos_id))]  # start with BOS
+        for step in range(max_len):
+            ids = torch.tensor([seq], dtype=torch.long, device=device)   # (1, L)
+            # NOTE: pass captions by keyword (per signature: (images, captions=None))
+            logits = model(x_batched, captions=ids)
+
+            if isinstance(logits,(list,tuple)): logits=logits[0]
+            if not isinstance(logits,torch.Tensor):
+                raise RuntimeError("Model forward did not return tensor logits.")
+
+            # Support (B, L, V) or (L, B, V) or (B, V)
+            if logits.ndim==2:
+                # (B, V): single-step logits
+                next_id=int(logits.argmax(dim=-1).item())
+            elif logits.ndim==3:
+                B, L, V = logits.shape if logits.shape[0]==x_batched.size(0) else (None, None, None)
+                if logits.shape[0]==x_batched.size(0) and logits.shape[1]==ids.size(1):
+                    # (B, L, V)
+                    last=logits[0,-1,:]
+                    next_id=int(last.argmax(dim=-1).item())
+                elif logits.shape[0]==ids.size(1) and logits.shape[1]==x_batched.size(0):
+                    # (L, B, V)
+                    last=logits[ids.size(1)-1,0,:]
+                    next_id=int(last.argmax(dim=-1).item())
+                else:
+                    last=logits.reshape(-1, logits.shape[-1])[-1]
+                    next_id=int(last.argmax(dim=-1).item())
+            else:
+                raise RuntimeError(f"Unexpected logits shape: {tuple(logits.shape)}")
+
+            seq.append(next_id)
+            if getattr(model,"eos_id", eos_id) is not None and next_id==getattr(model,"eos_id", eos_id):
+                break
+        return seq
+
+    # -------- Inference --------
+    results=[]
+    for i,p in enumerate(paths,1):
+        try:
+            img=Image.open(p).convert("RGB")
+        except Exception as e:
+            msg=f"<ERROR opening image: {e}>"
+            print(f"[{i}/{len(paths)}] {os.path.basename(p)} -> {msg}")
+            results.append({"image":os.path.basename(p),"caption":msg})
+            continue
+
+        x=tfm(img).unsqueeze(0).to(device)
+        if args.verbose: print(f"[{i}/{len(paths)}] Encoded {os.path.basename(p)}; tensor {tuple(x.shape)}")
+        try:
+            out_ids=greedy_decode(x, max_len=args.max_len)
+            cap=ids_to_text(out_ids) or "<empty>"
+        except Exception as e:
+            cap=f"<ERROR generating: {e}>"
+        print(f"[CAP] {os.path.basename(p)} -> {cap}")
+        results.append({"image":os.path.basename(p),"caption":cap})
+
+    # -------- Save --------
+    json_path=os.path.abspath(os.path.join(args.outdir,"captions.json"))
+    csv_path =os.path.abspath(os.path.join(args.outdir,"captions.csv"))
+    try:
+        with open(json_path,"w") as f: json.dump(results,f,indent=2)
+        with open(csv_path,"w",newline="") as f:
+            w=csv.DictWriter(f,fieldnames=["image","caption"]); w.writeheader(); w.writerows(results)
+        print(f"💾 Saved JSON: {json_path}")
+        print(f"💾 Saved CSV : {csv_path}")
+    except Exception as e:
+        print("❌ Failed to save outputs:", e)
+
+
+if __name__=="__main__":
+    main()
+                # (B, V): single-step logits
+                next_id=int(logits.argmax(dim=-1).item())
+            elif logits.ndim==3:
+                B, L, V = logits.shape if logits.shape[0]==x_batched.size(0) else (None, None, None)
+                if logits.shape[0]==x_batched.size(0) and logits.shape[1]==ids.size(1):
+                    # (B, L, V)
+                    last=logits[0,-1,:]
+                    next_id=int(last.argmax(dim=-1).item())
+                elif logits.shape[0]==ids.size(1) and logits.shape[1]==x_batched.size(0):
+                    # (L, B, V)
+                    last=logits[ids.size(1)-1,0,:]
+                    next_id=int(last.argmax(dim=-1).item())
+                else:
+                    last=logits.reshape(-1, logits.shape[-1])[-1]
+                    next_id=int(last.argmax(dim=-1).item())
+            else:
+                raise RuntimeError(f"Unexpected logits shape: {tuple(logits.shape)}")
+
+            seq.append(next_id)
+            if getattr(model,"eos_id", eos_id) is not None and next_id==getattr(model,"eos_id", eos_id):
+                break
+        return seq
+
+    # -------- Inference --------
+    results=[]
+    for i,p in enumerate(paths,1):
+        try:
+            img=Image.open(p).convert("RGB")
+        except Exception as e:
+            msg=f"<ERROR opening image: {e}>"
+            print(f"[{i}/{len(paths)}] {os.path.basename(p)} -> {msg}")
+            results.append({"image":os.path.basename(p),"caption":msg})
+            continue
+
+        x=tfm(img).unsqueeze(0).to(device)
+        if args.verbose: print(f"[{i}/{len(paths)}] Encoded {os.path.basename(p)}; tensor {tuple(x.shape)}")
+        try:
+            out_ids=greedy_decode(x, max_len=args.max_len)
+            cap=ids_to_text(out_ids) or "<empty>"
+        except Exception as e:
+            cap=f"<ERROR generating: {e}>"
+        print(f"[CAP] {os.path.basename(p)} -> {cap}")
+        results.append({"image":os.path.basename(p),"caption":cap})
+
+    # -------- Save --------
+    json_path=os.path.abspath(os.path.join(args.outdir,"captions.json"))
+    csv_path =os.path.abspath(os.path.join(args.outdir,"captions.csv"))
+    try:
+        with open(json_path,"w") as f: json.dump(results,f,indent=2)
+        with open(csv_path,"w",newline="") as f:
+            w=csv.DictWriter(f,fieldnames=["image","caption"]); w.writeheader(); w.writerows(results)
+        print(f"💾 Saved JSON: {json_path}")
+        print(f"💾 Saved CSV : {csv_path}")
+    except Exception as e:
+        print("❌ Failed to save outputs:", e)
+
+
+if __name__=="__main__":
+    main()

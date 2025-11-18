@@ -2,6 +2,14 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.models as tv
+
+# --- AlexNet weights (safe fallback for older torchvision) ---
+try:
+    from torchvision.models import AlexNet_Weights
+    ALEXNET_W = AlexNet_Weights.IMAGENET1K_V1
+except Exception:
+    ALEXNET_W = None  # fallback: will use pretrained=True on older torchvision
 
 # Optional: discover PAD/BOS/EOS ids from loader
 try:
@@ -10,6 +18,7 @@ except Exception:
     GLOBAL_CAPTION_VOCAB = {}
 
 def supported_hyperparameters():
+    # repo's train.py consumes lr/momentum/dropout via -p JSON or optuna ranges
     return {'lr', 'momentum', 'dropout'}
 
 # ---------- helpers ----------
@@ -40,44 +49,22 @@ class PositionalEncoding(nn.Module):
         L = x.size(1)
         return self.drop(x + self.pe[:, :L, :])
 
-# ---------- encoder ----------
-class BagNetBlock(nn.Module):
-    def __init__(self, in_ch, out_ch, k=3, s=1):
-        super().__init__()
-        mid = max(1, out_ch // 4)
-        self.conv1 = nn.Conv2d(in_ch, mid, 1, 1, 0, bias=False)
-        self.conv2 = nn.Conv2d(mid, mid, k, s, (k - 1)//2, bias=False)
-        self.bn2   = nn.BatchNorm2d(mid)
-        self.conv3 = nn.Conv2d(mid, out_ch, 1, 1, 0, bias=False)
-        self.proj  = None if (in_ch == out_ch and s == 1) else nn.Conv2d(in_ch, out_ch, 1, s, 0, bias=False)
-        self.act   = nn.ReLU(inplace=True)
-
-    def forward(self, x):
-        idt = x if self.proj is None else self.proj(x)
-        y = self.conv1(x)
-        y = self.conv2(y); y = self.bn2(y); y = self.act(y)
-        y = self.conv3(y)
-        if y.shape[-2:] != idt.shape[-2:]:
-            idt = F.interpolate(idt, size=y.shape[-2:], mode='bilinear', align_corners=False)
-        return self.act(y + idt)
-
+# ---------- encoder (AlexNet features) ----------
 class CNNEncoder(nn.Module):
-    def __init__(self, in_ch: int, feat_ch: int = 384):
+    """
+    AlexNet conv feature extractor.
+    Output: (B, 256, h, w)
+    """
+    def __init__(self, in_ch: int, feat_ch: int = 256):  # feat_ch kept for signature
         super().__init__()
-        self.stem = nn.Sequential(
-            nn.Conv2d(in_ch, 64, 3, 2, 1, bias=False),
-            nn.BatchNorm2d(64), nn.SiLU(),
-            nn.Conv2d(64, 128, 3, 2, 1, bias=False),
-            nn.BatchNorm2d(128), nn.SiLU(),
-        )
-        self.b1 = BagNetBlock(128, 256, k=3, s=2)   # (H/8, W/8)
-        self.b2 = BagNetBlock(256, feat_ch, k=3, s=1)
+        # torchvision AlexNet expects 3-channel RGB, repo's transforms should handle normalization/resize
+        if ALEXNET_W is None:
+            self.backbone = tv.alexnet(pretrained=True).features
+        else:
+            self.backbone = tv.alexnet(weights=ALEXNET_W).features
 
     def forward(self, x):
-        x = self.stem(x)
-        x = self.b1(x)
-        x = self.b2(x)   # (B, C, h, w)
-        return x
+        return self.backbone(x)  # (B, 256, h, w)
 
 # ---------- decoder ----------
 class TransformerDecoder(nn.Module):
@@ -95,7 +82,6 @@ class TransformerDecoder(nn.Module):
 
     @staticmethod
     def _causal_mask(L, device, dtype):
-        # Make the dtype consistent with PyTorch recommendations to avoid warnings
         m = torch.full((L, L), float('-inf'), device=device, dtype=dtype)
         return torch.triu(m, diagonal=1)
 
@@ -107,9 +93,8 @@ class TransformerDecoder(nn.Module):
         B, T = tgt_tokens.shape
         x = self.embed(tgt_tokens)                    # (B,T,D)
         x = self.pos(x)
-        # Use float mask to match attn_mask dtype
-        tgt_mask = self._causal_mask(T, x.device, x.dtype)      # (T,T)
-        tgt_kpm  = (tgt_tokens == self.pad_idx)                  # (B,T) bool
+        tgt_mask = self._causal_mask(T, x.device, x.dtype)  # (T,T) float mask
+        tgt_kpm  = (tgt_tokens == self.pad_idx)              # (B,T) bool
         y = self.dec(tgt=x, memory=memory,
                      tgt_mask=tgt_mask,
                      tgt_key_padding_mask=tgt_kpm)
@@ -129,9 +114,9 @@ class Net(nn.Module):
         super().__init__()
         self.device = device
         self.in_channels = int(in_shape[1])
-        self.vocab_size = int(out_shape[0])
+        self.vocab_size  = int(out_shape[0])
 
-        # Hyperparams (consumed)
+        # Hyperparams
         self.dropout_p = float(prm.get('dropout', 0.1))
         self.max_len   = int(prm.get('max_len', 20))
 
@@ -140,7 +125,7 @@ class Net(nn.Module):
 
         # Encoder -> sequence of d_model features
         d_model = 512
-        enc_feat_ch = 384
+        enc_feat_ch = 256   # AlexNet conv5 output channels
         self.encoder = CNNEncoder(self.in_channels, feat_ch=enc_feat_ch)
         self.enc_proj = nn.Linear(enc_feat_ch, d_model)
         self.enc_pos  = PositionalEncoding(d_model, dropout=self.dropout_p)
@@ -157,9 +142,9 @@ class Net(nn.Module):
 
     # -- encoder helper --
     def _encode(self, images: torch.Tensor) -> torch.Tensor:
-        f = self.encoder(images)                     # (B,C,h,w)
+        f = self.encoder(images)                     # (B,C,h,w) with C=256
         B, C, h, w = f.shape
-        seq = f.view(B, C, h*w).permute(0, 2, 1)    # (B,S,C)
+        seq = f.view(B, C, h*w).permute(0, 2, 1)    # (B,S,C) where S=h*w
         seq = self.enc_proj(seq)                    # (B,S,D)
         seq = self.enc_pos(seq)
         seq = self.enc_drop(seq)
@@ -203,15 +188,15 @@ class Net(nn.Module):
     # -- training setup --
     def train_setup(self, prm):
         self.to(self.device)
-        # Loss: ignore PAD; a bit of label smoothing helps BLEU
+        # Loss: ignore PAD; label smoothing helps BLEU
         self.criteria = (nn.CrossEntropyLoss(ignore_index=self.pad_idx, label_smoothing=0.1).to(self.device),)
-        # Consume 'momentum' by mapping to AdamW beta1
+        # Map "momentum" → AdamW beta1 to keep CLI semantics
         beta1 = float(prm.get('momentum', 0.9))
         self.optimizer = torch.optim.AdamW(self.parameters(),
                                            lr=float(prm['lr']),
                                            betas=(beta1, 0.999),
                                            weight_decay=1e-4)
-        # New AMP API to avoid deprecation warning
+        # AMP (PyTorch 2.x API)
         self.scaler = torch.amp.GradScaler('cuda', enabled=(self.device.type == 'cuda'))
 
     # -- one epoch training loop --
@@ -233,7 +218,7 @@ class Net(nn.Module):
             with torch.amp.autocast(amp_device, enabled=(self.device.type == 'cuda')):
                 if captions.ndim == 3:
                     captions = captions[:, 0, :]
-                logits = self.forward(images, captions)          # (B,T-1,V) Tensor
+                logits = self.forward(images, captions)          # (B,T-1,V)
                 targets = captions[:, 1:]                        # (B,T-1)
                 loss = self.criteria[0](logits.reshape(-1, logits.size(-1)),
                                         targets.reshape(-1))
