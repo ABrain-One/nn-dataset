@@ -1,22 +1,28 @@
 import json
 import importlib
 from pathlib import Path
+import sys
 
 import torch
 from PIL import Image
 import torchvision.transforms as T
 
-
-
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 print(">>> ROOT:", ROOT)
 
-MODEL_MODULE = "ab.nn.nn.C10C-ALEXNETLSTM"
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+
+MODEL_MODULE = "ab.nn.nn.C10C-ALEXNETLSTM-mohsin"
+
 CKPT_PATH = ROOT / "_weights" / "C10C-ALEXNETLSTM_tinycaps_trained.pth"
+
 VOCAB_PATH = ROOT / "data" / "coco" / "vocab_10k.json"
 
-
 IMG_DIR = ROOT / "data" / "demo_images"
+
 
 
 def load_vocab(path: Path):
@@ -86,7 +92,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(">>> device:", device)
 
-    # basic checks
+
     for path, name in [
         (CKPT_PATH, "Checkpoint"),
         (VOCAB_PATH, "Vocab"),
@@ -101,7 +107,7 @@ def main():
     if not img_paths:
         raise FileNotFoundError(f"No .jpg images found in {IMG_DIR}")
 
-    # optionally limit to first 3
+    # optionally limit to first 3 (so you can say to professor: “this script captions first 3 images in demo_images”)
     img_paths = img_paths[:3]
     print(">>> images to caption:", [p.name for p in img_paths])
 
