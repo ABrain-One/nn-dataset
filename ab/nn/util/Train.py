@@ -70,7 +70,7 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
             if fail_iterations < 0:
                 return accuracy_duration
             else:
-                raise NNException()
+                raise e
 
 
 class Train:
