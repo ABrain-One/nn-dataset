@@ -125,45 +125,6 @@ def estimate_flops(model, input_tensor):
     return flops
 
 
-def analyze_compute_characteristics(model: nn.Module, input_shape: tuple) -> dict:
-    """Analyze computational requirements."""
-    # Create dummy input
-    dummy_input = torch.randn(input_shape)
-    
-    # FLOPs estimation
-    flops = estimate_flops(model, dummy_input)
-    
-    # Memory footprint
-    model_size_mb = sum(p.numel() * p.element_size() 
-                        for p in model.parameters()) / (1024 ** 2)
-    
-    # Calculate buffer memory (e.g., BatchNorm running stats)
-    buffer_size_mb = sum(b.numel() * b.element_size() 
-                         for b in model.buffers()) / (1024 ** 2)
-    
-    # Inference time (rough estimate)
-    model.eval()
-    with torch.no_grad():
-        # Warmup
-        for _ in range(10):
-            _ = model(dummy_input)
-        
-        # Measure
-        start = time.time()
-        num_runs = 100
-        for _ in range(num_runs):
-            _ = model(dummy_input)
-        avg_inference_time = (time.time() - start) / num_runs
-    
-    return {
-        "estimated_flops": flops,
-        "estimated_gflops": flops / 1e9,
-        "model_size_mb": model_size_mb,
-        "buffer_size_mb": buffer_size_mb,
-        "total_memory_mb": model_size_mb + buffer_size_mb,
-        "avg_inference_time_ms": avg_inference_time * 1000
-    }
-
 
 def detect_architecture_patterns(model: nn.Module, nn_code: str) -> dict:
     """Detect high-level architecture patterns."""
@@ -252,13 +213,10 @@ def analyze_model_comprehensive(model: nn.Module, nn_code: str, input_shape: tup
     # 12. Residual connections
     has_residual = has_residual_connections(model)
     
-    # 13. Computational characteristics
-    compute_info = analyze_compute_characteristics(model, input_shape)
-    
-    # 14. Architecture patterns
+    # 13. Architecture patterns
     pattern_info = detect_architecture_patterns(model, nn_code)
     
-    # 15. Parameter distribution by layer type
+    # 14. Parameter distribution by layer type
     param_distribution = {}
     for name, module in model.named_modules():
         if len(list(module.children())) == 0:  # Leaf modules only
@@ -300,7 +258,7 @@ def analyze_model_comprehensive(model: nn.Module, nn_code: str, input_shape: tup
         "linear_info": linear_info,
         
         # Computational characteristics
-        "compute_characteristics": compute_info,
+        # "compute_characteristics": compute_info,
         
         # Architecture patterns
         "architecture_patterns": pattern_info
@@ -312,7 +270,7 @@ def main():
     from ab.nn.api import data  # Replace with the module where your data() function is
     
     df = data()
-    df_selected = df[['nn', 'nn_code', 'prm']]  # first 10 models
+    df_selected = df[['nn', 'nn_code', 'prm']].head(10)  # first 10 models
     
     results = []
     
@@ -345,8 +303,7 @@ def main():
 
             print(f"  ✓ Successfully analyzed {nn_name}")
             print(f"    Total params: {characteristics['total_params']:,}")
-            print(f"    GFLOPs: {characteristics['compute_characteristics']['estimated_gflops']:.2f}")
-            print(f"    Model size: {characteristics['compute_characteristics']['model_size_mb']:.2f} MB")
+           
             
         except Exception as e:
             print(f"  ✗ Failed to analyze model {nn_name}: {e}")
