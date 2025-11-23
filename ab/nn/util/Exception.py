@@ -8,11 +8,6 @@ class CudaOutOfMemory(Exception):
         return self.batch_power
 
 
-class NNException(Exception):
-    def __init__(self):
-        pass
-
-
 class AccuracyException(Exception):
     def __init__(self, accuracy, duration, message):
         self.accuracy = accuracy
