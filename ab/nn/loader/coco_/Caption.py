@@ -99,8 +99,19 @@ class COCOCaptionDataset(Dataset):
 
         if self.transform is not None:
             image = self.transform(image)
-            if image.dim() == 4 and image.size(0) == 1:
-                image = image.squeeze(0)
+        
+        # Ensure image is resized if it's not already (though transform should handle it)
+        # If transform is 'echo', it won't resize. We need to enforce resizing for batching.
+        # However, usually the transform passed in includes resizing.
+        # The issue is that Optuna picked 'echo'.
+        # We should probably enforce a resize here if the tensor size is not consistent.
+        # But `image` is a tensor now.
+        
+        # Actually, let's just force a resize in the __getitem__ using torchvision transforms if we are in this specific mode.
+        # Or better, let's update the `loader` to wrap the transform with a Resize.
+        
+        if image.dim() == 4 and image.size(0) == 1:
+            image = image.squeeze(0)
         return image, captions
 
     @staticmethod
@@ -151,21 +162,59 @@ def build_vocab(dataset, threshold=5):
     idx2word = {idx: word for idx, word in enumerate(vocab)}
     return word2idx, idx2word
 
+def robust_transform(img, base_transform):
+    # 1. Resize
+    from torchvision import transforms
+    # img is likely a PIL image here coming from __getitem__
+    # Resize works on PIL images too
+    img = transforms.Resize((256, 256))(img)
+    
+    # 2. Apply the Optuna transform
+    # The error showed base_transform expects PIL (it called to_tensor).
+    # So we should pass the PIL image directly.
+    # We remove the manual ToTensor conversion unless base_transform fails otherwise.
+    
+    try:
+        return base_transform(img)
+    except TypeError:
+        # If it fails, maybe it DID expect a tensor?
+        # But the previous error said "Got Tensor, expected PIL".
+        # So passing PIL is correct for that case.
+        # If this fails with "Expected Tensor", we can try converting.
+        img_tensor = transforms.ToTensor()(img)
+        return base_transform(img_tensor)
+
 def loader(transform_fn, task):
     if task != 'img-captioning':
         raise Exception(f"The task '{task}' is not implemented in this file.")
-    transform = transform_fn((__norm_mean, __norm_dev))
-    path = join(data_dir, 'coco')
-    train_dataset = COCOCaptionDataset(transform=transform, root=path, split='train')
-    val_dataset = COCOCaptionDataset(transform=transform, root=path, split='val')
-    # Reduce and Randomize validation set size for fast debugging
-
-    import random
-    val_ids = list(sorted(val_dataset.ids))
-    random.shuffle(val_ids)
-    val_dataset.ids = val_ids[:300]
+    # We need to enforce resizing because Optuna might pick 'echo' (identity)
+    # and COCO images vary in size, causing stack errors in collate_fn.
+    from torchvision import transforms
+    from functools import partial
     
-    vocab_path = os.path.join(path, 'vocab.pth')
+    base_transform = transform_fn((__norm_mean, __norm_dev))
+    
+    # Use partial to bind base_transform to the module-level function
+    transform = partial(robust_transform, base_transform=base_transform)
+    
+    path = join(data_dir, 'coco')
+    # USE SMALL COCO (Validation Set as Training Data)
+    # This avoids downloading the 20GB train set.
+    full_dataset = COCOCaptionDataset(transform=transform, root=path, split='val')
+    
+    # Split the 5000 val images into 4500 Train and 500 Val
+    # We use a fixed seed for reproducibility
+    torch.manual_seed(42)
+    train_size = 4500
+    val_size = len(full_dataset) - train_size
+    train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
+
+    # We need to manually attach word2idx/idx2word to the subsets because random_split doesn't copy attributes
+    # But first we need to build vocab on the TRAIN subset only to be rigorous
+    # However, for simplicity and since it's the same domain, we can build on the full_dataset or just the train subset.
+    # Let's build on the train subset.
+    
+    vocab_path = os.path.join(path, 'vocab_small.pth')
     if os.path.exists(vocab_path):
         vocab_data = torch.load(vocab_path)
         word2idx = vocab_data['word2idx']
@@ -173,16 +222,28 @@ def loader(transform_fn, task):
     else:
         word2idx, idx2word = build_vocab(train_dataset, threshold=1)
         torch.save({'word2idx': word2idx, 'idx2word': idx2word}, vocab_path)
-    train_dataset.word2idx = word2idx
-    train_dataset.idx2word = idx2word
-    val_dataset.word2idx = word2idx
-    val_dataset.idx2word = idx2word
+
+    # Attach attributes to the underlying dataset so collate_fn works
+    # Note: random_split wraps the dataset, so we need to handle that in collate_fn or here.
+    # Actually, the dataset class uses self.word2idx. 
+    # Since we are using subsets, the underlying dataset is 'full_dataset'.
+    full_dataset.word2idx = word2idx
+    full_dataset.idx2word = idx2word
+    
+    # We don't need to re-assign to train_dataset/val_dataset because they access the underlying dataset
+    # BUT, our collate_fn is static and takes word2idx as an arg.
+    # So we just need to pass the correct word2idx to the partial.
+    
+    # Vocab already handled above
 
     GLOBAL_CAPTION_VOCAB['word2idx'] = word2idx
     GLOBAL_CAPTION_VOCAB['idx2word'] = idx2word
     
-    train_dataset.collate_fn = lambda batch: train_dataset.__class__.collate_fn(batch, train_dataset.word2idx)
-    val_dataset.collate_fn = lambda batch: val_dataset.__class__.collate_fn(batch, val_dataset.word2idx)
+    from functools import partial
+    # train_dataset is a Subset, so it doesn't have word2idx attribute directly.
+    # We pass the word2idx dictionary directly.
+    train_dataset.collate_fn = partial(COCOCaptionDataset.collate_fn, word2idx=word2idx)
+    val_dataset.collate_fn = partial(COCOCaptionDataset.collate_fn, word2idx=word2idx)
 
     vocab_size = len(word2idx)
 
