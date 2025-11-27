@@ -41,23 +41,38 @@ class CNNEncoder(nn.Module):
 
 # Transformer Decoder with batch_first=True
 class TransformerDecoder(nn.Module):
-    def __init__(self, vocab_size, d_model=768, num_layers=6, nhead=8):
+    def __init__(self, vocab_size, d_model=768, num_layers=6, nhead=8, dropout=0.1):
         super().__init__()
+        self.d_model = d_model
         self.embedding = nn.Embedding(vocab_size, d_model)
         self.pos_encoding = PositionalEncoding(d_model)
+        self.dropout = nn.Dropout(dropout)
         decoder_layer = nn.TransformerDecoderLayer(
-            d_model, nhead, dim_feedforward=2048, batch_first=True)
+            d_model, nhead, dim_feedforward=2048, dropout=dropout, batch_first=True)
         self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers)
+        self.layer_norm = nn.LayerNorm(d_model)
         self.fc_out = nn.Linear(d_model, vocab_size)
+        
+        # Initialize weights properly
+        self._init_weights()
+    
+    def _init_weights(self):
+        # Initialize embedding with smaller values
+        nn.init.normal_(self.embedding.weight, mean=0, std=0.02)
+        # Initialize output layer
+        nn.init.xavier_uniform_(self.fc_out.weight)
+        nn.init.zeros_(self.fc_out.bias)
 
     def forward(self, tgt, memory):
         # tgt: [batch, seq] -> embed: [batch, seq, d_model]
-        embedded = self.embedding(tgt)
+        embedded = self.embedding(tgt) * math.sqrt(self.d_model)  # Scale embeddings
         embedded = self.pos_encoding(embedded)
+        embedded = self.dropout(embedded)
         seq_len = tgt.size(1)
         tgt_mask = torch.triu(torch.full((seq_len, seq_len), float('-inf')), diagonal=1).to(tgt.device)
         # memory: [batch, mem_seq, d_model] (mem_seq=1 from encoder)
         out = self.transformer_decoder(embedded, memory, tgt_mask=tgt_mask)
+        out = self.layer_norm(out)
         return self.fc_out(out)  # [batch, seq, vocab_size]
 
 # Main Net: Image Captioning Model
@@ -104,7 +119,7 @@ class Net(nn.Module):
             nn.utils.clip_grad_norm_(self.parameters(), 3)
             self.optimizer.step()
 
-    def batch_beam_search(self, images, beam_width=4, max_len=20, length_penalty=0.7):
+    def batch_beam_search(self, images, beam_width=4, max_len=20, length_penalty=0.7, repetition_penalty=1.2):
         """
         images: [B, C, H, W]
         Returns:
@@ -115,7 +130,7 @@ class Net(nn.Module):
         memory = self.encoder(images)  # [B, 1, 768]
         for i in range(batch_size):
             mem = memory[i:i+1]  # [1, 1, 768]
-            best_caption = self.beam_search_generate_single(mem, beam_width, max_len, length_penalty)
+            best_caption = self.beam_search_generate_single(mem, beam_width, max_len, length_penalty, repetition_penalty)
             results.append(best_caption)
         # Pad and convert to one-hot for metric compatibility
         max_seq_len = max(len(r) for r in results)
@@ -125,7 +140,7 @@ class Net(nn.Module):
                 preds[i, t, idx] = 1.0
         return preds
 
-    def beam_search_generate_single(self, memory, beam_width=4, max_len=20, length_penalty=0.7):
+    def beam_search_generate_single(self, memory, beam_width=4, max_len=20, length_penalty=0.7, repetition_penalty=1.2):
         """
         Single image beam search, returns a list of token indices (without <SOS>).
         memory: [1, 1, 768]
@@ -144,6 +159,18 @@ class Net(nn.Module):
                 tgt = torch.tensor(seq, dtype=torch.long).unsqueeze(0).to(device)  # [1, seq_len]
                 out = self.decoder(tgt, memory)  # [1, seq_len, vocab_size]
                 log_probs = out[0, -1].log_softmax(dim=0)  # Last token probs
+                
+                # Apply repetition penalty
+                for token_idx in set(seq):
+                    if log_probs[token_idx] < 0:
+                        log_probs[token_idx] *= repetition_penalty
+                    else:
+                        log_probs[token_idx] /= repetition_penalty
+                
+                # STRICT: Prevent immediate repetition
+                if len(seq) > 0:
+                    log_probs[seq[-1]] = float('-inf')
+
                 topk = torch.topk(log_probs, beam_width)
                 for i in range(beam_width):
                     next_word = topk.indices[i].item()
@@ -167,11 +194,10 @@ class Net(nn.Module):
         if captions is not None:
             tgt_input = captions[:, :-1]  # [B, T-1]
             return self.decoder(tgt_input, memory)  # [B, T-1, vocab_size]
+        # Use beam search decoding for evaluation (when captions is None)
+        return self.batch_beam_search(images, beam_width=4, max_len=20, length_penalty=0.7, repetition_penalty=1.2)
 
-    # Use beam search decoding for evaluation
-        return self.batch_beam_search(images, beam_width=4, max_len=20, length_penalty=0.7)
-
-    def beam_search_generate(self, image, word2idx, idx2word, beam_width=4, max_len=20, length_penalty=0.7):
+    def beam_search_generate(self, image, word2idx, idx2word, beam_width=4, max_len=20, length_penalty=0.7, repetition_penalty=1.2):
         self.eval()
         self.word2idx = word2idx
         self.idx2word = idx2word
@@ -192,6 +218,18 @@ class Net(nn.Module):
                     tgt = torch.tensor(seq, dtype=torch.long).unsqueeze(0).to(device)  # [1, seq_len]
                     out = self.decoder(tgt, memory)  # [1, seq_len, vocab_size]
                     log_probs = out[0, -1].log_softmax(dim=0)  # Last token probs
+                    
+                    # Apply repetition penalty
+                    for token_idx in set(seq):
+                        if log_probs[token_idx] < 0:
+                            log_probs[token_idx] *= repetition_penalty
+                        else:
+                            log_probs[token_idx] /= repetition_penalty
+                    
+                    # STRICT: Prevent immediate repetition
+                    if len(seq) > 0:
+                        log_probs[seq[-1]] = float('-inf')
+                    
                     topk = torch.topk(log_probs, beam_width)
                     for i in range(beam_width):
                         next_word = topk.indices[i].item()
