@@ -5,6 +5,8 @@ import json
 import pandas as pd
 import matplotlib.pyplot as plt
 
+from ab.nn.util.Const import stat_train_dir
+
 # User: specify your model names here (must match stat file names in ab/nn/stat/train/*.json)
 MODEL_NAMES = [
     'MoE-0707', 'MoEv2', 'MoEv3', 'MoEv4', 'MoEv5', 'MoEv6', 'MoEv7', 'MoEv8'
@@ -15,9 +17,6 @@ MODEL_NAMES = [
 # Subdirectory pattern for each model's stats
 STAT_MODEL_DIR_PATTERN = "img-classification_cifar-10_acc_{model}"
 
-# Local stat root directory
-STAT_ROOT_DIR = os.path.join(os.path.dirname(__file__), "ab", "nn", "stat", "train")
-
 # Directory to save graphs (parallel to this script)
 GRAPH_DIR = os.path.join(os.path.dirname(__file__), "nn-training-graphs")
 
@@ -27,7 +26,7 @@ def load_epoch_accuracy(model_name):
     """
     Loads all epoch JSON files for a given model and returns lists of epoch numbers and accuracy values.
     """
-    model_dir = os.path.join(STAT_ROOT_DIR, STAT_MODEL_DIR_PATTERN.format(model=model_name))
+    model_dir = os.path.join(stat_train_dir, STAT_MODEL_DIR_PATTERN.format(model=model_name))
     if not os.path.isdir(model_dir):
         print(f"[DEBUG] Model directory not found: {model_dir}")
         return [], []
