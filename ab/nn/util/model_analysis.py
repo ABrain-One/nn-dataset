@@ -3,8 +3,15 @@ import torch
 import torch.nn as nn
 import time
 from collections import defaultdict
+import sys
+from pathlib import Path
+
+# Add the project root to the path
+project_root = Path(__file__).parent.parent.parent.parent
+sys.path.insert(0, str(project_root))
 
 
+# Example input/output shapes (replace with actual dataset shapes)
 IN_SHAPE = (1, 3, 224, 224)   # Batch size 1, 3 channels, 224x224 image
 OUT_SHAPE = (10,)              # 10 classes
 
@@ -141,19 +148,6 @@ def analyze_compute_characteristics(model: nn.Module, input_shape: tuple) -> dic
     buffer_size_mb = sum(b.numel() * b.element_size() 
                          for b in model.buffers()) / (1024 ** 2)
     
-    # Inference time (rough estimate)
-    model.eval()
-    with torch.no_grad():
-        # Warmup
-        for _ in range(10):
-            _ = model(dummy_input)
-        
-        # Measure
-        start = time.time()
-        num_runs = 100
-        for _ in range(num_runs):
-            _ = model(dummy_input)
-        avg_inference_time = (time.time() - start) / num_runs
     
     return {
         "estimated_flops": flops,
@@ -161,7 +155,6 @@ def analyze_compute_characteristics(model: nn.Module, input_shape: tuple) -> dic
         "model_size_mb": model_size_mb,
         "buffer_size_mb": buffer_size_mb,
         "total_memory_mb": model_size_mb + buffer_size_mb,
-        "avg_inference_time_ms": avg_inference_time * 1000
     }
 
 
@@ -312,7 +305,7 @@ def main():
     from ab.nn.api import data  # Replace with the module where your data() function is
     
     df = data()
-    df_selected = df[['nn', 'nn_code', 'prm']]  # first 10 models
+    df_selected = df[['nn', 'nn_code', 'prm']].head(30)  # first 10 models
     
     results = []
     
@@ -341,8 +334,6 @@ def main():
                 "characteristics": characteristics
             })
             
-            
-
             print(f"  ✓ Successfully analyzed {nn_name}")
             print(f"    Total params: {characteristics['total_params']:,}")
             print(f"    GFLOPs: {characteristics['compute_characteristics']['estimated_gflops']:.2f}")
@@ -357,7 +348,7 @@ def main():
             })
     
     # Save the characteristics to JSON
-    output_file = "nn_characteristics_comprehensive.json"
+    output_file = "ab/nn/stat/nn.json"
     with open(output_file, "w") as f:
         json.dump(results, f, indent=4)
     
