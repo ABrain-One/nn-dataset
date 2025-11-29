@@ -6,18 +6,22 @@ The `simple_accuracy_stat_viz.py` script is a tool for visualizing training metr
 
 ## File Location
 
-This script should be placed in the **root directory** of the `nn-dataset` project:
+This script reads information from
 
 ```
 nn-dataset/
-├── simple_accuracy_stat_viz.py  ← Place the script here
 ├── ab/
 │   └── nn/
 │       └── stat/
 │           └── train/              ← Training statistics are read from here
-├── nn-training-graphs/            ← Graphs are saved here (auto-created)
-├── requirements.txt
 └── ...
+```
+
+and saves graphs in 
+
+```
+nn-dataset/cmd/py/simple_stat_viz/
+├── nn-training-graphs/            ← Graphs are saved here (auto-created)
 ```
 
 ## What It Does
@@ -42,10 +46,10 @@ The script:
 Ensure you have the required Python packages installed:
 
 ```bash
-pip install pandas matplotlib
+pip install matplotlib
 ```
 
-Or install all project dependencies:
+and install all the LEMUR project dependencies from root directory of the project:
 
 ```bash
 pip install -r requirements.txt
