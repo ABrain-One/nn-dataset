@@ -204,9 +204,7 @@ def build_model(model_class: str,
 
 
 
-
 class SimpleAccuracy:
-    """Metric with same interface as your professor's metric_function."""
 
     def __init__(self):
         self.correct = 0
@@ -225,7 +223,6 @@ class SimpleAccuracy:
         return {"accuracy": (self.correct / self.total) if self.total > 0 else None}
 
 
-# ----------------- main inference + profiling -----------------
 
 
 def run_inference(config: Optional[str],
