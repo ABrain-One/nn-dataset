@@ -171,6 +171,15 @@ def detect_architecture_patterns(model: nn.Module, nn_code: str) -> dict:
     }
 
 
+def booleans_to_binary(d):
+    for key, value in d.items():
+        if isinstance(value, bool):
+            d[key] = 1 if value else 0
+        elif isinstance(value, dict):
+            booleans_to_binary(value)
+    return d
+
+
 def analyze_model_comprehensive(model: nn.Module, nn_code: str, input_shape: tuple) -> dict:
     '''Comprehensive model analysis combining all metrics.'''
 
@@ -253,17 +262,16 @@ def analyze_model_comprehensive(model: nn.Module, nn_code: str, input_shape: tup
                     param_distribution[layer_type] = 0
                 param_distribution[layer_type] += params
 
-    return ({  # Basic structure
-                'total_layers': total_layers,
-                'leaf_layers': leaf_layers,
-                'max_depth': max_depth,
-                'total_params': total_params,
-                'trainable_params': trainable_params,
-                'frozen_params': frozen_params
-            } | compute_info | {'dropout_count': dropout_count,
-                                'has_attention': has_attention,
-                                'has_residual_connections': has_residual}
-            | pattern_info | {'meta': {
+    return booleans_to_binary(({'total_layers': total_layers,
+                                'leaf_layers': leaf_layers,
+                                'max_depth': max_depth,
+                                'total_params': total_params,
+                                'trainable_params': trainable_params,
+                                'frozen_params': frozen_params
+                                } | compute_info | {'dropout_count': dropout_count,
+                                                    'has_attention': has_attention,
+                                                    'has_residual_connections': has_residual}
+                               | pattern_info | {'meta': {
                 # Convolutional details
                 'conv_info': conv_info,
                 # Linear/Dense details
@@ -274,7 +282,7 @@ def analyze_model_comprehensive(model: nn.Module, nn_code: str, input_shape: tup
                     'activation': activations,
                     'normalization': norm_types,
                     'pooling': pooling_types}},
-                'param_distribution': param_distribution}})
+                'param_distribution': param_distribution}}))
 
 
 def main():
