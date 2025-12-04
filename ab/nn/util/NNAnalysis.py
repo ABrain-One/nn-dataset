@@ -142,7 +142,6 @@ def analyze_compute_characteristics(model: nn.Module, input_shape: tuple) -> dic
 
     return {
         'flops': flops,
-        'gflops': flops / 1e9,
         'model_size_mb': model_size_mb,
         'buffer_size_mb': buffer_size_mb,
         'total_memory_mb': model_size_mb + buffer_size_mb,
