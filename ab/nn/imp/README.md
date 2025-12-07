@@ -1,3 +1,3 @@
-## Functionality for Improvements in Portable Formats
+## Improvements in Portable Formats: Implementation
 
-Optimization algorithms that do not modify the model’s source code but instead save the improved model in portable formats such as ONNX, TFLite, TensorRT, OpenVINO and etc.
+Any optimization algorithms (e.g., quantization) that do not modify the model’s source code but instead save the improved model in portable formats such as ONNX, TFLite, TensorRT, OpenVINO and etc.
