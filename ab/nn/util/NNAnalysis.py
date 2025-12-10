@@ -142,7 +142,6 @@ def analyze_compute_characteristics(model: nn.Module, input_shape: tuple) -> dic
 
     return {
         'flops': flops,
-        'gflops': flops / 1e9,
         'model_size_mb': model_size_mb,
         'buffer_size_mb': buffer_size_mb,
         'total_memory_mb': model_size_mb + buffer_size_mb,
@@ -169,6 +168,15 @@ def detect_architecture_patterns(model: nn.Module, nn_code: str) -> dict:
         'uses_modulelist': 'nn.ModuleList' in nn_code,
         'uses_moduledict': 'nn.ModuleDict' in nn_code,
     }
+
+
+def booleans_to_binary(d):
+    for key, value in d.items():
+        if isinstance(value, bool):
+            d[key] = 1 if value else 0
+        elif isinstance(value, dict):
+            booleans_to_binary(value)
+    return d
 
 
 def analyze_model_comprehensive(model: nn.Module, nn_code: str, input_shape: tuple) -> dict:
@@ -253,17 +261,16 @@ def analyze_model_comprehensive(model: nn.Module, nn_code: str, input_shape: tup
                     param_distribution[layer_type] = 0
                 param_distribution[layer_type] += params
 
-    return ({  # Basic structure
-                'total_layers': total_layers,
-                'leaf_layers': leaf_layers,
-                'max_depth': max_depth,
-                'total_params': total_params,
-                'trainable_params': trainable_params,
-                'frozen_params': frozen_params
-            } | compute_info | {'dropout_count': dropout_count,
-                                'has_attention': has_attention,
-                                'has_residual_connections': has_residual}
-            | pattern_info | {'meta': {
+    return booleans_to_binary(({'total_layers': total_layers,
+                                'leaf_layers': leaf_layers,
+                                'max_depth': max_depth,
+                                'total_params': total_params,
+                                'trainable_params': trainable_params,
+                                'frozen_params': frozen_params
+                                } | compute_info | {'dropout_count': dropout_count,
+                                                    'has_attention': has_attention,
+                                                    'has_residual_connections': has_residual}
+                               | pattern_info | {'meta': {
                 # Convolutional details
                 'conv_info': conv_info,
                 # Linear/Dense details
@@ -274,7 +281,7 @@ def analyze_model_comprehensive(model: nn.Module, nn_code: str, input_shape: tup
                     'activation': activations,
                     'normalization': norm_types,
                     'pooling': pooling_types}},
-                'param_distribution': param_distribution}})
+                'param_distribution': param_distribution}}))
 
 
 def main():
