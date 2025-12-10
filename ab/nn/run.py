@@ -1,35 +1,20 @@
 #!/usr/bin/env python3
 """
-Inference Profiler for nn-dataset Models
-------------------------------------------------
+Inference for nn-dataset Models (run.py)
 
-This script runs any supported nn-dataset model in inference (eval) mode,
-collecting the following information into a structured JSON report:
+Saves run outputs into folders under:
+    ab/nn/stat/run/<taskname>-<architecturename>/report.json
 
-  • Accuracy metric
-  • System analytics (RAM, CPU, OS, device)
-  • Batch-wise timeline snapshots
-  • Optional torch.profiler traces (top ops, chrome trace files)
+Folder naming rules:
+  - If --config is provided: folder_name == <config>
+  - Otherwise: folder_name == <architecture> (model class name)
 
-Generalized Model Support:
-- Automatically inspects constructors and adapts shapes
-- Works for models such as: ComplexNet, ResNet, AirNet, etc.
+Example:
+  python -m ab.nn.run --model-class ab.nn.nn.ComplexNet.Net --dataset cifar10 --config img-classification --no-profiler
 
-The report format follows the structure provided by the professor:
-{
-  "model_name": ...,
-  "device_type": ...,
-  "os_version": ...,
-  ...
-}
-
-Example (CPU only, no profiler):
-  python -m ab.nn.util.inference_profiler model-class ab.nn.nn.ComplexNet.Net --dataset cifar10 --batch-size 8 --num-batches 2 --out results/infer/complexnet-prof.json --no-profiler
-
-Example (with profiler + trace files):
-  python -m ab.nn.util.inference_profiler --model-class ab.nn.nn.ResNet.Net --dataset cifar100 --batch-size 32 --num-batches 5 --out results/infer/resnet-prof.json
+Result:
+  ab/nn/stat/run/ComplexNet-20251207T123456Z/report.json
 """
-
 
 from __future__ import annotations
 
@@ -54,14 +39,8 @@ except Exception:
     psutil = None
 
 
-
-
 def import_by_path(path: str):
-    """
-    Import a class by full dotted path:
-        package.module.ClassName
-    Example: ab.nn.nn.ComplexNet.Net
-    """
+
     mod_path, _, cls_name = path.rpartition(".")
     if not mod_path:
         raise ImportError(f"Invalid import path: {path}")
@@ -75,8 +54,30 @@ def ensure_outdir(path: str) -> str:
     return path
 
 
+def sanitize_name(name: str) -> str:
+
+    if not name:
+        return "run"
+    return "".join(c if (c.isalnum() or c in ("-", "_")) else "_" for c in name)
+
+
+def default_outpath(model_name: str, config: Optional[str] = None) -> str:
+
+    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    this_dir = os.path.dirname(__file__)  # expected: .../ab/nn
+    if config:
+        folder_base = config
+    else:
+        folder_base = model_name or "model"
+    folder_safe = sanitize_name(folder_base)
+    folder_name = f"{folder_safe}-{ts}"
+    run_dir = os.path.join(this_dir, "stat", "run", folder_name)
+    os.makedirs(run_dir, exist_ok=True)
+    return os.path.join(run_dir, "report.json")
+
+
 def sample_nvidia_smi():
-    """Return list of GPU dicts or None if nvidia-smi not available."""
+
     if shutil.which("nvidia-smi") is None:
         return None
     q = "--query-gpu=index,name,driver_version,memory.total,memory.used,memory.free,utilization.gpu --format=csv,noheader,nounits"
@@ -103,7 +104,7 @@ def sample_nvidia_smi():
 
 
 def sample_system():
-    """Return basic system stats or None if psutil not installed."""
+
     if psutil is None:
         return None
     vm = psutil.virtual_memory()
@@ -126,11 +127,7 @@ def sample_system():
 
 
 def build_dataset_loader(dataset: str, batch_size: int, num_workers: int = 2):
-    """
-    Returns: (DataLoader, num_classes)
-      - cifar10  -> 10 classes
-      - cifar100 -> 100 classes
-    """
+
     from torch.utils.data import DataLoader
     from torchvision import datasets, transforms
 
@@ -159,16 +156,7 @@ def build_model(model_class: str,
                 out_shape: Tuple[int, ...],
                 device: torch.device,
                 errors: List[str]) -> nn.Module:
-    """
-    Build model from class path.
 
-    Strategy:
-      1) Try NN-dataset convention:
-           Net(in_shape=in_shape, out_shape=out_shape, prm=..., device=device)
-      2) If that fails, fall back to:
-           Net()
-           Net(num_classes=out_shape[0])
-    """
     cls = import_by_path(model_class)
     model = None
 
@@ -203,7 +191,6 @@ def build_model(model_class: str,
         )
 
 
-
 class SimpleAccuracy:
 
     def __init__(self):
@@ -221,8 +208,6 @@ class SimpleAccuracy:
 
     def result(self):
         return {"accuracy": (self.correct / self.total) if self.total > 0 else None}
-
-
 
 
 def run_inference(config: Optional[str],
@@ -259,7 +244,6 @@ def run_inference(config: Optional[str],
     # model
     model = build_model(model_class, in_shape, out_shape, device, errors)
     model_name = getattr(model, "__class__", type(model)).__name__
-
 
     if checkpoint:
         try:
@@ -349,9 +333,9 @@ def run_inference(config: Optional[str],
                         except Exception:
                             pass
 
-                    # export chrome trace
+                    # export chrome trace into the same run folder as report.json
                     try:
-                        trace_file = f"{outpath}_trace_batch{bi}.json"
+                        trace_file = os.path.join(os.path.dirname(outpath), f"trace_batch{bi}.json")
                         prof.export_chrome_trace(trace_file)
                         prof_traces.append(trace_file)
                     except Exception:
@@ -489,7 +473,7 @@ def run_inference(config: Optional[str],
 
 def main():
     p = argparse.ArgumentParser(
-        prog="ab.nn.util.inference_profiler",
+        prog="ab.nn.run",
         description="Profile inference and save JSON report (metrics + hardware + op stats)."
     )
     p.add_argument("--config", type=str, default=None,
@@ -504,8 +488,8 @@ def main():
                    help="Number of batches to run.")
     p.add_argument("--batch-size", type=int, default=32,
                    help="Batch size.")
-    p.add_argument("--out", dest="outpath", type=str, default="results/infer/profile-report.json",
-                   help="Output JSON path.")
+    p.add_argument("--out", dest="outpath", type=str, default=None,
+                   help="Optional output JSON path. If omitted, a default path under ab/nn/stat/run/ is used.")
     p.add_argument("--no-profiler", dest="no_profiler", action="store_true",
                    help="Disable torch.profiler even if available.")
     p.add_argument("--debug", action="store_true",
@@ -514,6 +498,21 @@ def main():
                    help="Force using CPU even if CUDA available.")
     args = p.parse_args()
 
+    # Determine output path
+    if args.outpath is None:
+        # Try to import the class to get a clean architecture name. If import fails,
+        # fall back to using the last segment of the provided model-class path.
+        try:
+            cls = import_by_path(args.model_class)
+            model_name = getattr(cls, "__name__", None)
+        except Exception:
+            # fallback to everything after the last dot or the whole string
+            _, _, tail = args.model_class.rpartition(".")
+            model_name = tail or args.model_class
+        outpath = default_outpath(model_name, config=args.config)
+    else:
+        outpath = args.outpath
+
     run_inference(
         config=args.config,
         model_class=args.model_class,
@@ -521,7 +520,7 @@ def main():
         dataset=args.dataset,
         num_batches=args.num_batches,
         batch_size=args.batch_size,
-        outpath=args.outpath,
+        outpath=outpath,
         use_profiler=(not args.no_profiler),
         debug=args.debug,
         force_cpu=args.force_cpu,
@@ -530,3 +529,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
