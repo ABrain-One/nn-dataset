@@ -74,6 +74,7 @@ def add_categorical_if_absent(trial, prms, nm, fn, default=None):
         prms[nm] = trial.suggest_categorical(nm, default or fn())
     return prms[nm]
 
+
 def is_full_config(l: list[str] | tuple[str, ...]):
     return 4 == len(l) and (nn_dir / (l[-1] + '.py')).exists()
 
@@ -122,10 +123,14 @@ def uuid4(obj):
 
 
 def validate_prm(batch_min, batch_max, lr_min, lr_max, momentum_min, momentum_max, dropout_min, dropout_max):
-    if batch_min and batch_max and batch_min > batch_max: raise Exception(f"min_batch_binary_power {batch_min} > max_batch_binary_power {batch_max}")
-    if lr_min and lr_max and lr_min > lr_max: raise Exception(f"min_learning_rate {lr_min} > max_learning_rate {lr_max}")
-    if momentum_min and momentum_max and momentum_min > momentum_max: raise Exception(f"min_momentum {momentum_min} > max_momentum {momentum_max}")
-    if dropout_min and dropout_max and dropout_min > dropout_max: raise Exception(f"min_momentum {dropout_min} > max_momentum {dropout_max}")
+    if batch_min and batch_max and batch_min > batch_max: raise Exception(
+        f"min_batch_binary_power {batch_min} > max_batch_binary_power {batch_max}")
+    if lr_min and lr_max and lr_min > lr_max: raise Exception(
+        f"min_learning_rate {lr_min} > max_learning_rate {lr_max}")
+    if momentum_min and momentum_max and momentum_min > momentum_max: raise Exception(
+        f"min_momentum {momentum_min} > max_momentum {momentum_max}")
+    if dropout_min and dropout_max and dropout_min > dropout_max: raise Exception(
+        f"min_momentum {dropout_min} > max_momentum {dropout_max}")
 
 
 def format_time(sec):
@@ -212,11 +217,12 @@ def test_loader_f(test_dataset, batch, num_workers):
                                        collate_fn=get_obj_attr(test_dataset, 'collate_fn'))
 
 
-def save_if_best(model, model_name, current_score, save_pth_weights, save_onnx_weights, train_set, num_workers, save_path=None):
+def save_if_best(model, model_name, current_score, save_pth_weights, save_onnx_weights, train_set, num_workers,
+                 save_path=None):
     """
     Called by the training framework to save weights if performance improves.
     """
-    checkpoint_dir = out_dir / 'checkpoints' / model_name
+    checkpoint_dir = out_dir / 'checkpoints' / model_name.split('.')[-1]
     makedirs(checkpoint_dir, exist_ok=True)
     # Compare the current score with the best score recorded.
     if current_score > getattr(model, "best_score", 0):
