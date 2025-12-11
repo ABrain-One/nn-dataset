@@ -19,7 +19,7 @@ from ab.nn.util.db.Read import supported_transformers
 debug = False
 
 def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout,
-                     max_dropout, min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, n_epochs,
+                     max_dropout, min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, epoch_max,
                      pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights):
     task, dataset_name, metric, nn = config
     try:
@@ -40,6 +40,7 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
                         prms[prm] = float(pretrained if pretrained else trial.suggest_categorical(prm, [0, 1]))
                     case _:
                         prms[prm] = trial.suggest_float(prm, 0.0, 1.0)
+        prms['epoch_max'] = epoch_max
         batch = add_categorical_if_absent(trial, prms, 'batch', lambda: [max_batch(x) for x in range(min_batch_binary_power, max_batch_binary_power_local + 1)])
         transform_name = add_categorical_if_absent(trial, prms, 'transform', supported_transformers, default=transform)
 
@@ -50,7 +51,7 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
         # Load dataset
         out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset_name, transform_name)
         return Train(config, out_shape, minimum_accuracy, batch, nn_mod('nn', nn), task, train_set, test_set, metric,
-                     num_workers, prms).train_n_eval(n_epochs, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set)
+                     num_workers, prms).train_n_eval(epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set)
 
     except Exception as e:
         accuracy_duration = 0.0, 0.0, 1
@@ -136,14 +137,14 @@ class Train:
             raise ValueError(f"Metric '{metric_name}' not found. Ensure a corresponding file and function exist. Ensure the metric module has create_metric()") \
                 from e
 
-    def train_n_eval(self, num_epochs, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set, save_path: Union[str, Path] = None):
+    def train_n_eval(self, epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set, save_path: Union[str, Path] = None):
         """ Training and evaluation """
 
         start_time = time.time_ns()
         self.model.train_setup(self.prm)
         accuracy_to_time = 0.0
         duration = sys.maxsize
-        for epoch in range(1, num_epochs + 1):
+        for epoch in range(1, epoch_max + 1):
             print(f"epoch {epoch}", flush=True)
             self.model.train()
             self.model.learn(DataRoll(self.train_loader, epoch_limit_minutes))

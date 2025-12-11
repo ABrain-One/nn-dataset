@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, List, Dict
+from ab.nn.util.Const import stat_train_dir
 
 
 def filter_items_with_duration(data: Any) -> tuple[Any, int, int]:
@@ -73,8 +74,7 @@ def find_all_json_files(base_path: Path) -> List[Path]:
 
 
 def main():
-    script_dir = Path(__file__).parent
-    base_path = script_dir / "ab" / "nn" / "stat" / "train"
+    base_path = Path(stat_train_dir)
     
     print(f"Scanning directory: {base_path}")
     print("=" * 70)
