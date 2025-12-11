@@ -82,10 +82,9 @@ def get_best_params(model_name):
         return None
 
 
-def train_and_save(model_name, params):
+def train_and_save(model_name, params, epoch_max):
     print(f"🚀 Starting FRESH training for {model_name}...")
     config_pattern = f"img-classification_cifar-10_acc_{model_name}"
-
     try:
         release_memory()
 
@@ -93,7 +92,7 @@ def train_and_save(model_name, params):
         train_main(
             config=config_pattern,
             nn_prm=params,
-            epoch_max=1,  # Cluster par isay barha dena
+            epoch_max=epoch_max,  # Cluster par isay barha dena
             n_optuna_trials=-1,  # Force New Training (Overwrite logic)
             save_pth_weights=True,
             save_onnx_weights=False,
@@ -107,7 +106,7 @@ def train_and_save(model_name, params):
         return False
 
 
-def create_metadata_file(model_name):
+def create_metadata_file(model_name, epoch_max):
     """Generates metadata.json from training stats."""
     try:
         config_name = f"img-classification_cifar-10_acc_{model_name}"
@@ -135,7 +134,7 @@ def create_metadata_file(model_name):
         metadata = {
             "model_name": model_name,
             "accuracy": stats.get('accuracy', 0),
-            "epoch": stats.get('epoch', 0),
+            "epoch": stats.get('epoch', epoch_max),
             "duration_sec": stats.get('duration', 0) / 1e9,
             "batch_size": stats.get('prm', {}).get('batch', 32),
             "dataset": "cifar-10",
@@ -154,13 +153,13 @@ def create_metadata_file(model_name):
         return None
 
 
-def upload_to_hf(model_name):
+def upload_to_hf(model_name, epoch_max):
     print(f"☁️ Uploading {model_name} to Hugging Face...")
     checkpoint_dir = ckpt_dir / model_name
     expected_file = checkpoint_dir / 'best_model.pth'
 
     # 1. Generate Metadata
-    metadata_file = create_metadata_file(model_name)
+    metadata_file = create_metadata_file(model_name, epoch_max)
 
     api = HfApi(token=HF_TOKEN)
     repo_id = f"{HF_USERNAME}/{REPO_NAME}"
@@ -196,6 +195,7 @@ def upload_to_hf(model_name):
 def main():
     total_models = len(MODELS_TO_TRAIN)
     print(f"🔥 Starting FULL OVERWRITE Pipeline for {total_models} models...")
+    epoch_max = 1
 
     for i, model in enumerate(MODELS_TO_TRAIN, 1):
         print(f"\n{'=' * 60}")
@@ -216,9 +216,9 @@ def main():
             except Exception as e:
                 print(f"Error removing directory {ckpt_dir}: {e}")
 
-        success = train_and_save(model, params)
+        success = train_and_save(model, params, epoch_max)
         if success:
-            upload_to_hf(model)
+            upload_to_hf(model, epoch_max)
 
         release_memory()
 
