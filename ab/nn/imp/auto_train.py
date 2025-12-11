@@ -104,7 +104,7 @@ def train_and_save(model_name, params):
         train_main(
             config=config_pattern,
             nn_prm=params,
-            n_epochs=1,          # Cluster par isay barha dena
+            epoch_max=1,          # Cluster par isay barha dena
             n_optuna_trials=-1,  # Force New Training (Overwrite logic)
             save_pth_weights=True,
             save_onnx_weights=False, 

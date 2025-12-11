@@ -120,7 +120,7 @@ Standard use cases:
 
 Run the automated training process for this model (e.g., a new ComplexNet training pipeline configuration):
 ```bash
-python -m ab.nn.train -f complex -c img-classification_cifar-10_acc_ComplexNet
+python -m ab.nn.train -f complex -c img-classification_cifar-10_acc_ComplexNet  -l 0.017 --min_learning_rate 0.013 -m 0.025 --min_momentum 0.022 -b 7 --min_batch_binary_power 8 --max_batch_binary_power 9
 ```
 or for all image segmentation models using a fixed range of training parameters and transformer:
 ```bash
