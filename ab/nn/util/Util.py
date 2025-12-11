@@ -92,16 +92,19 @@ def model_stat_dir(config):
     return stat_train_dir / config_splitter.join(config)
 
 
-def accuracy_to_time_metric(accuracy, min_accuracy, training_duration) -> float:
+def accuracy_to_time_metric(accuracy, min_accuracy, duration) -> float:
     """
-    Naive 'accuracy to time' metric for fixed number of training epochs.
-    This metric is essential for detecting the fastest accuracy improvements during neural network training.
+    Naive 'accuracy to time' metric. Can be used for the inference or fixed number of training epochs.
+
+    :param duration: inference or training time for the model, nanoseconds
+
+    This metric is essential for detecting the fastest accuracy improvements during neural network training or optimization of the inference model.
     """
     if accuracy is None:
         accuracy = 0.0
     if min_accuracy is None:
         min_accuracy = 0.0
-    d = max(0.0, (accuracy - min_accuracy)) / (training_duration / 1e11)
+    d = max(0.0, (accuracy - min_accuracy)) / (duration / 1e11)
     print(f"accuracy_to_time_metric {d}")
     return d
 
