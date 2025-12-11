@@ -222,7 +222,7 @@ def save_if_best(model, model_name, current_score, save_pth_weights, save_onnx_w
     """
     Called by the training framework to save weights if performance improves.
     """
-    checkpoint_dir = out_dir / 'checkpoints' / model_name.split('.')[-1]
+    checkpoint_dir = ckpt_dir / model_name.split('.')[-1]
     makedirs(checkpoint_dir, exist_ok=True)
     # Compare the current score with the best score recorded.
     if current_score > getattr(model, "best_score", 0):

@@ -1,12 +1,13 @@
 import json
 import os
+import shutil
 import time
 
 from huggingface_hub import HfApi
 
 from ab.nn.api import data
 from ab.nn.train import main as train_main
-from ab.nn.util.Const import out_dir, stat_train_dir
+from ab.nn.util.Const import stat_train_dir, ckpt_dir
 from ab.nn.util.Util import release_memory
 
 # --- CONFIGURATION ---
@@ -155,7 +156,7 @@ def create_metadata_file(model_name):
 
 def upload_to_hf(model_name):
     print(f"☁️ Uploading {model_name} to Hugging Face...")
-    checkpoint_dir = out_dir / 'checkpoints' / model_name
+    checkpoint_dir = ckpt_dir / model_name
     expected_file = checkpoint_dir / 'best_model.pth'
 
     # 1. Generate Metadata
@@ -208,6 +209,12 @@ def main():
         if not params:
             print("Skipping (No Params found)")
             continue
+        if os.path.isdir(ckpt_dir):
+            try:
+                shutil.rmtree(ckpt_dir)  # # Cleanup all local checkpoint files
+                print(f"Directory {ckpt_dir} cleaned.")
+            except Exception as e:
+                print(f"Error removing directory {ckpt_dir}: {e}")
 
         success = train_and_save(model, params)
         if success:
