@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # --- Configuration ---
-MODELS_DIR="~/Desktop/nn-dataset/ab/nn/nn"
+MODELS_DIR="../../ab/nn/nn"
 MODEL_PATTERN="ast*.py"
 CONFIG_PREFIX="img-classification_cifar-10_acc_"
 EXTRA_FLAGS="-e 1 -t 10 --min_batch_binary_power 9 -f norm_256_flip"
