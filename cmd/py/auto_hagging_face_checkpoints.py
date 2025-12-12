@@ -34,7 +34,6 @@ except ImportError:
 # --- CONFIGURATION ---
 HF_TOKEN = os.environ.get("HF_TOKEN")
 if not HF_TOKEN:
-    if not HF_TOKEN:
     # Fallback for testing
     HF_TOKEN = "" 
     print("⚠️ Warning: No HF_TOKEN found. Please set environment variable.")
