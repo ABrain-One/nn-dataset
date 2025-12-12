@@ -75,6 +75,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
             continue_study = True
             max_batch_binary_power_local = max_batch_binary_power
             _, dataset, _, nn = sub_config
+            last_accuracy = None
             while (continue_study and max_batch_binary_power_local >= min_batch_binary_power and fail_iterations > -1
                    and remaining_trials(sub_config_ext, n_expected_trials)[0] > 0):
                 continue_study = False
@@ -84,7 +85,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
 
                     # Configure Optuna for the current model
                     def objective(trial):
-                        nonlocal continue_study, fail_iterations, max_batch_binary_power_local
+                        nonlocal continue_study, fail_iterations, max_batch_binary_power_local, last_accuracy
                         try:
                             accuracy, accuracy_to_time, duration = optuna_objective(trial, sub_config, nn_prm, num_workers, min_learning_rate, max_learning_rate,
                                                                                     min_momentum, max_momentum, min_dropout, max_dropout,
@@ -92,6 +93,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
                                                                                     pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights)
                             if good(accuracy, min_accuracy(dataset), duration):
                                 fail_iterations = nn_fail_attempts
+                            last_accuracy = accuracy
                             return accuracy
                         except Exception as e:
                             print(f"Optuna: exception in objective function for nn {nn}: {e}")
@@ -104,6 +106,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
                             return 0.0
 
                     study.optimize(objective, n_trials=n_optuna_trials_left)
+                    return last_accuracy
                 except CudaOutOfMemory as e:
                     max_batch_binary_power_local = e.batch_size_power() - 1
                     print(f"Max batch is decreased to {max_batch(max_batch_binary_power_local)} due to a CUDA Out of Memory Exception for model '{nn}'")
