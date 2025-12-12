@@ -84,7 +84,7 @@ def train_and_save(model_name, params, epoch_max):
     config_pattern = f"img-classification_cifar-10_acc_{model_name}"
     try:
         release_memory()
-        train_main(
+        accuracy = train_main(
             config=config_pattern,
             nn_prm=params,
             epoch_max=epoch_max,
@@ -95,50 +95,13 @@ def train_and_save(model_name, params, epoch_max):
             num_workers=0
         )
         print(f"✅ Training completed call for {model_name}")
-        return True
+        return accuracy
     except Exception as e:
         print(f"❌ Training failed/crashed for {model_name}: {e}")
-        return False
-
-
-def get_metadata_from_stats(model_name, epoch_max, dataset, task, metric):
-    """
-    Extracts the latest training statistics (accuracy, time, etc.) from the stats directory.
-    """
-    try:
-        config_name = f"img-classification_cifar-10_acc_{model_name}"
-        stat_path = stat_train_dir / config_name
-        if not stat_path.exists(): return None
-
-        json_files = list(stat_path.glob("*.json"))
-        if not json_files: return None
-        latest_json = max(json_files, key=os.path.getmtime)
-
-        with open(latest_json, 'r') as f:
-            data = json.load(f)
-
-        stats = {}
-        if isinstance(data, list) and data:
-            stats = data[-1]
-        elif isinstance(data, dict):
-            stats = data
-        if not stats: return None
-
-        return {
-            "nn": model_name,
-            "accuracy": stats['accuracy'],
-            "epoch": stats.get('epoch', epoch_max),
-            "duration": stats['duration'],
-            "dataset": dataset,
-            "task": task,
-            "metric": metric,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-        }
-    except:
         return None
 
 
-def upload_to_hf(model_name, epoch_max, dataset, task, metric, summary_data, repo_id):
+def upload_to_hf(model_name, epoch_max, dataset, task, metric, accuracy, summary_data, repo_id):
     print(f"☁️ Uploading {model_name} to Hugging Face...")
 
     # --- SUPER FIX: BLIND SEARCH ---
@@ -182,7 +145,15 @@ def upload_to_hf(model_name, epoch_max, dataset, task, metric, summary_data, rep
             )
 
         # 2. Update Master Data
-        new_metadata = get_metadata_from_stats(model_name, epoch_max, dataset, task, metric)
+        new_metadata = {
+            "nn": model_name,
+            "accuracy": accuracy,
+            "epoch": epoch_max,
+            "dataset": dataset,
+            "task": task,
+            "metric": metric,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
         if new_metadata:
             summary_data[model_name] = new_metadata
 
@@ -269,9 +240,9 @@ def main():
             except:
                 pass
 
-        success = train_and_save(model, params, epoch_max)
-        if success:
-            if upload_to_hf(model, epoch_max, dataset, task, metric, summary_data, repo_id):
+        accuracy = train_and_save(model, params, epoch_max)
+        if accuracy:
+            if upload_to_hf(model, epoch_max, dataset, task, metric, accuracy, summary_data, repo_id):
                 uploaded_models.add(model)
 
         release_memory()
