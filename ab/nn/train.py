@@ -8,7 +8,7 @@ from ab.nn.util.db.Read import remaining_trials
 from types import MappingProxyType
 
 
-def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_hyperparameters, n_epochs: int = default_epochs, n_optuna_trials: int | str = default_trials,
+def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_hyperparameters, epoch_max: int = default_epochs, n_optuna_trials: int | str = default_trials,
          min_batch_binary_power: int = default_min_batch_power, max_batch_binary_power: int = default_max_batch_power,
          min_learning_rate: float = default_min_lr, max_learning_rate: float = default_max_lr,
          min_momentum: float = default_min_momentum, max_momentum: float = default_max_momentum,
@@ -30,7 +30,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
 
     :param config: Configuration specifying the model training pipelines. The default value for all configurations.
     :param nn_prm: Fixed hyperparameter values for neural network training, e.g. {"lr": 0.0061, "momentum": 0.7549, "batch": 4}.
-    :param n_epochs: Number of training epochs.
+    :param epoch_max: Number of training epochs.
     :param n_optuna_trials: The total number of Optuna trials the model should have. If negative, its absolute value represents the number of additional trials.
     :param min_batch_binary_power: Minimum power of two for batch size. E.g., with a value of 0, batch size equals 2**0 = 1.
     :param max_batch_binary_power: Maximum power of two for batch size. E.g., with a value of 12, batch size equals 2**12 = 4096.
@@ -58,11 +58,11 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
     sub_configs = patterns_to_configs(config, random_config_order, train_missing_pipelines)
     if transform:
         transform = transform if isinstance(transform, (tuple, list)) else (transform,)
-    print(f"Training configurations ({n_epochs} epochs):")
+    print(f"Training configurations ({epoch_max} epochs):")
     for idx, sub_config in enumerate(sub_configs, start=1):
         print(f"{idx}. {sub_config}")
     for sub_config in sub_configs:
-        sub_config_ext = sub_config + (n_epochs,)
+        sub_config_ext = sub_config + (epoch_max,)
         n_optuna_trials_left, n_passed_trials = remaining_trials(sub_config_ext, n_optuna_trials)
         n_expected_trials = n_optuna_trials_left + n_passed_trials
 
@@ -75,6 +75,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
             continue_study = True
             max_batch_binary_power_local = max_batch_binary_power
             _, dataset, _, nn = sub_config
+            last_accuracy = None
             while (continue_study and max_batch_binary_power_local >= min_batch_binary_power and fail_iterations > -1
                    and remaining_trials(sub_config_ext, n_expected_trials)[0] > 0):
                 continue_study = False
@@ -84,14 +85,15 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
 
                     # Configure Optuna for the current model
                     def objective(trial):
-                        nonlocal continue_study, fail_iterations, max_batch_binary_power_local
+                        nonlocal continue_study, fail_iterations, max_batch_binary_power_local, last_accuracy
                         try:
                             accuracy, accuracy_to_time, duration = optuna_objective(trial, sub_config, nn_prm, num_workers, min_learning_rate, max_learning_rate,
                                                                                     min_momentum, max_momentum, min_dropout, max_dropout,
-                                                                                    min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, n_epochs,
+                                                                                    min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, epoch_max,
                                                                                     pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights)
                             if good(accuracy, min_accuracy(dataset), duration):
                                 fail_iterations = nn_fail_attempts
+                            last_accuracy = accuracy
                             return accuracy
                         except Exception as e:
                             print(f"Optuna: exception in objective function for nn {nn}: {e}")
@@ -104,6 +106,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
                             return 0.0
 
                     study.optimize(objective, n_trials=n_optuna_trials_left)
+                    return last_accuracy
                 except CudaOutOfMemory as e:
                     max_batch_binary_power_local = e.batch_size_power() - 1
                     print(f"Max batch is decreased to {max_batch(max_batch_binary_power_local)} due to a CUDA Out of Memory Exception for model '{nn}'")
