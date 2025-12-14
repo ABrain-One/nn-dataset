@@ -79,28 +79,6 @@ def get_existing_models_and_summary(repo_id):
     return uploaded_models, summary_data
 
 
-def train_and_save(model_name, params, epoch_max):
-    print(f'🚀 Starting FRESH training for {model_name}...')
-    config_pattern = f'img-classification_cifar-10_acc_{model_name}'
-    try:
-        release_memory()
-        accuracy = train_main(
-            config=config_pattern,
-            nn_prm=params,
-            epoch_max=epoch_max,
-            n_optuna_trials=-1,
-            save_pth_weights=True,
-            save_onnx_weights=False,
-            train_missing_pipelines=False,
-            num_workers=0
-        )
-        print(f'✅ Training completed call for {model_name}')
-        return accuracy
-    except Exception as e:
-        print(f'❌ Training failed/crashed for {model_name}: {e}')
-        return None
-
-
 def upload_to_hf(model_name, epoch_max, dataset, task, metric, accuracy, summary_data, repo_id, prm):
     print(f'☁️ Uploading {model_name} to Hugging Face...')
 
@@ -188,10 +166,11 @@ def main():
     try:
         print('📊 Fetching models from API...')
         epoch_max = 5
+        epoch_train_max = epoch_max
         dataset = 'cifar-10'
         task = 'img-classification'
         metric = 'acc'
-        REPO_NAME = 'checkpoints-epoch-' + str(epoch_max)
+        REPO_NAME = 'checkpoints-epoch-' + str(epoch_train_max)
         repo_id = f'{HF_USERNAME}/{REPO_NAME}'
 
         df = (data(only_best_accuracy=True, task=task, dataset=dataset, metric=metric, epoch=epoch_max,
@@ -219,15 +198,6 @@ def main():
             print(f'⏭️ Skipping {model} (Found in Master JSON)')
             continue
 
-        params = dt['prm']
-
-        if 'batch' in params:
-            if params['batch'] > 32:
-                print(f'   📉 Reducing Batch Size from {params["batch"]} to 32 for safety.')
-                params['batch'] = 32
-        else:
-            params['batch'] = 32
-
         # Local cleanup per model to ensure fresh state
         if os.path.isdir(ckpt_dir):
             try:
@@ -241,12 +211,24 @@ def main():
             except:
                 pass
 
-        accuracy = train_and_save(model, params, epoch_max)
-        if accuracy:
-            if upload_to_hf(model, epoch_max, dataset, task, metric, accuracy, summary_data, repo_id, params):
+        print(f'🚀 Starting FRESH training for {model}...')
+        try:
+            params = dt['prm']
+            accuracy = train_main(
+                config=f'{task}_{dataset}_{metric}_{model}',
+                nn_prm=params,
+                epoch_max=epoch_train_max,
+                n_optuna_trials=-1,
+                save_pth_weights=True,
+                save_onnx_weights=False,
+                train_missing_pipelines=False,
+                num_workers=0
+            )
+            print(f'✅ Training completed call for {model}')
+            if upload_to_hf(model, epoch_train_max, dataset, task, metric, accuracy, summary_data, repo_id, params):
                 uploaded_models.add(model)
-
-        release_memory()
+        except Exception as e:
+            print(f'❌ Training failed/crashed for {model}: {e}')
 
 
 if __name__ == '__main__':
