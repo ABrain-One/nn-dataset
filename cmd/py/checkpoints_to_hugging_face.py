@@ -227,7 +227,7 @@ def main():
                 num_workers=0
             )
             print(f'✅ Training completed call for {model}')
-            if upload_to_hf(model, epoch_train_max, dataset, task, metric, accuracy, summary_data, repo_id, params):
+            if accuracy and upload_to_hf(model, epoch_train_max, dataset, task, metric, accuracy, summary_data, repo_id, params):
                 uploaded_models.add(model)
         except Exception as e:
             print(f'❌ Training failed/crashed for {model}: {e}')
