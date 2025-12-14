@@ -54,6 +54,8 @@ def get_existing_models_and_summary(repo_id):
     Downloads the Master JSON from Hugging Face.
     """
     print('☁️ Fetching Master Summary from Hugging Face...')
+    if os.path.exists(SUMMARY_FILENAME):
+        os.remove(SUMMARY_FILENAME)
 
     summary_data = {}
     uploaded_models = set()
