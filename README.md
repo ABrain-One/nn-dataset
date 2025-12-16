@@ -8,6 +8,13 @@ LEMUR - Learning, Evaluation, and Modeling for Unified Research
 
 The original version of the <a href='https://github.com/ABrain-One/nn-dataset'>LEMUR dataset</a> was created by <strong>Arash Torabi Goodarzi, Roman Kochnev</strong> and <strong>Zofia Antonina Bentyn</strong> at the Computer Vision Laboratory, University of Würzburg, Germany.
 
+## Training statistics
+
+Mean best accuracy per task:
+
+![Mean best accuracy per task](docs/figures/per_task_mean_best_accuracy.png)
+
+
 ## Contents
 
 1. [📖 Overview](#-overview)
