@@ -2,41 +2,59 @@ import torch
 import math
 
 class Net:
+    """
+    A stateful metric that calculates the Peak Signal-to-Noise Ratio (PSNR) 
+    over an entire dataset by accumulating results from each batch.
+    """
     def __init__(self):
         self.reset()
-        self.name = "mai_psnr"
 
     def reset(self):
-        # This clears the memory before a new test starts
+        """
+        Resets the internal state for a new evaluation. This is called at the
+        beginning of the evaluation loop.
+        """
         self._total_mse = 0.0
         self._total_samples = 0
 
     def update(self, outputs: torch.Tensor, labels: torch.Tensor):
-        # 1. Look only at Brightness (Y-channel)
-        # We take Red, Green, Blue and mix them into one 'Gray' layer
-        y_out = 0.299 * outputs[:,0] + 0.587 * outputs[:,1] + 0.114 * outputs[:,2]
-        y_lab = 0.299 * labels[:,0] + 0.587 * labels[:,1] + 0.114 * labels[:,2]
-
-        # 2. Calculate the 'Mistake' (Mean Squared Error)
-        mse = torch.mean((y_out - y_lab) ** 2)
-
-        # 3. Add this result to our 'Total' pile
-        self._total_mse += mse.item() * outputs.size(0)
-        self._total_samples += outputs.size(0)
-
-    def compute(self):
-        # This part gives the final answer
-        if self._total_samples == 0:
-            return 0.0
+        """
+        Updates the state with the results from a new batch. This is called
+        for every batch in the evaluation loop.
+        """
+        device = outputs.device
+        outputs = outputs.to(device).float()
+        labels = labels.to(device).float()
         
-        avg_mse = self._total_mse / self._total_samples
-        if avg_mse == 0: return 1.0 # Perfect!
-
-        # Calculate standard PSNR
-        raw_psnr = 10 * math.log10(1.0 / avg_mse)
-
-        # Normalize by 48 (The Professor's Rule)
-        # This makes sure the result is 0.0 to 1.0
-        final_score = min(raw_psnr / 48.0, 1.0)
+        batch_mse = torch.sum((outputs - labels) ** 2)
         
-        return final_score
+        self._total_mse += batch_mse.item()
+        self._total_samples += outputs.numel()
+
+    def __call__(self, outputs, labels):
+        """
+        This method is called for each batch. It should only update the
+        internal state and NOT return a value to avoid framework errors.
+        """
+        self.update(outputs, labels)
+
+    def result(self):
+        """
+        Computes and returns the final PSNR from the accumulated state.
+        This is called once at the end of the evaluation loop.
+        """
+        if self._total_samples == 0 or self._total_mse == 0:
+            return 100.0
+
+        mean_mse = self._total_mse / self._total_samples
+        
+        max_pixel = 1.0
+        psnr = 20 * math.log10(max_pixel / math.sqrt(mean_mse))
+        
+        return psnr
+
+def create_metric(out_shape=None):
+    """
+    Factory function required by the training framework to create the metric instance.
+    """
+    return Net()
