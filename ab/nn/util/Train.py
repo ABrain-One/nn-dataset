@@ -367,8 +367,6 @@ class Train:
             },
             'hyperparameters': {k: v for k, v in self.prm.items() if k not in {'uid', 'duration', 'accuracy'}},
             'model_info': {
-                'total_parameters': self.total_params,
-                'trainable_parameters': self.trainable_params,
                 'input_shape': list(self.in_shape),
                 'output_shape': list(self.out_shape) if hasattr(self.out_shape, '__iter__') else self.out_shape,
             },
