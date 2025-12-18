@@ -36,15 +36,7 @@ class EpochMetrics:
     lr: float = 0.0
     gradient_norm: float = 0.0
     # Timing
-    epoch_duration_seconds: float = 0.0
     samples_per_second: float = 0.0
-
-
-def count_parameters(model) -> tuple:
-    """Count total and trainable parameters"""
-    total = sum(p.numel() for p in model.parameters())
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    return total, trainable
 
 
 def compute_gradient_norm(model) -> float:
@@ -57,20 +49,19 @@ def compute_gradient_norm(model) -> float:
     return total_norm ** 0.5
 
 
-def get_current_lr(optimizer) -> float:
+def get_current_lr(optimizer) -> Optional[float]:
     """Get current learning rate from optimizer"""
-    if optimizer is None:
-        return 0.0
-    for param_group in optimizer.param_groups:
-        return param_group['lr']
-    return 0.0
+    if optimizer:
+        for param_group in optimizer.param_groups:
+            return param_group['lr']
+    return None
 
 
-def get_gpu_memory_mb() -> float:
-    """Get current GPU memory usage in MB"""
+def get_gpu_memory_kb() -> Optional[float]:
+    """Get current GPU memory usage in KB"""
     if torch.cuda.is_available():
-        return torch.cuda.max_memory_allocated() / (1024 * 1024)
-    return 0.0
+        return torch.cuda.max_memory_allocated() / 1024
+    return None
 
 
 def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout,
@@ -176,18 +167,15 @@ class Train:
         self.model_name = nn_module
         self.model = model_net(self.in_shape, out_shape, prm, self.device)
         self.model.to(self.device)
-        
-        # Model info for metrics
-        self.total_params, self.trainable_params = count_parameters(self.model)
-        
+
         # Initialize loss function for tracking
         self.loss_fn = self._get_loss_function()
-        
+
         # Epoch metrics history
         self.epoch_history: List[EpochMetrics] = []
         self.best_accuracy = 0.0
         self.best_epoch = 0
-    
+
     def _get_loss_function(self):
         """Get loss function for metric tracking"""
         if hasattr(self.model, 'criterion'):
@@ -202,13 +190,13 @@ class Train:
                 return torch.nn.CrossEntropyLoss()
             else:
                 return torch.nn.MSELoss()
-    
+
     def _compute_loss(self, data_loader) -> float:
         """Compute average loss over a dataset"""
         self.model.eval()
         total_loss = 0.0
         num_batches = 0
-        
+
         with torch.no_grad():
             for inputs, labels in data_loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
@@ -219,20 +207,20 @@ class Train:
                     num_batches += 1
                 except Exception:
                     pass
-        
+
         return total_loss / max(num_batches, 1)
-    
+
     def _compute_accuracy(self, data_loader) -> float:
         """Compute accuracy over a dataset using the metric function"""
         self.model.eval()
         self.metric_function.reset()
-        
+
         with torch.no_grad():
             for inputs, labels in data_loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 outputs = self.model(inputs)
                 self.metric_function(outputs, labels)
-        
+
         return self.metric_function.result()
 
     def load_metric_function(self, metric_name):
@@ -257,48 +245,46 @@ class Train:
         self.model.train_setup(self.prm)
         accuracy_to_time = 0.0
         duration = sys.maxsize
-        
+
         # Get optimizer reference for LR tracking
         optimizer = getattr(self.model, 'optimizer', None)
-        
+
         for epoch in range(1, epoch_max + 1):
             epoch_start_time = time.time_ns()
             print(f"epoch {epoch}", flush=True)
-            
+
             # Training phase
             self.model.train()
             self.model.learn(DataRoll(self.train_loader, epoch_limit_minutes))
-            
+
             # Compute gradient norm after training
             grad_norm = compute_gradient_norm(self.model)
-            
+
             # Get current learning rate
-            current_lr = get_current_lr(optimizer)
-            if current_lr == 0.0:
-                current_lr = self.prm.get('lr', 0.0)
-            
+            lr_now = get_current_lr(optimizer)
+
             # Compute losses
             train_loss = self._compute_loss(self.train_loader)
             test_loss = self._compute_loss(self.test_loader)
-            
+
             # Compute accuracies
             train_accuracy = self._compute_accuracy(self.train_loader)
             test_accuracy = self.eval(self.test_loader)
-            
+
             accuracy = test_accuracy
             accuracy = 0.0 if math.isnan(accuracy) or math.isinf(accuracy) else accuracy
             duration = time.time_ns() - start_time
             epoch_duration = (time.time_ns() - epoch_start_time) / 1e9  # seconds
-            
+
             # Calculate throughput
             total_samples = len(self.train_dataset)
             samples_per_second = total_samples / max(epoch_duration, 0.001)
-            
+
             # Track best accuracy
             if accuracy > self.best_accuracy:
                 self.best_accuracy = accuracy
                 self.best_epoch = epoch
-            
+
             # Record epoch metrics
             epoch_metrics = EpochMetrics(
                 epoch=epoch,
@@ -306,18 +292,18 @@ class Train:
                 test_loss=test_loss,
                 train_accuracy=train_accuracy,
                 test_accuracy=accuracy,
-                lr=current_lr,
+                lr=lr_now,
                 gradient_norm=grad_norm,
-                epoch_duration_seconds=epoch_duration,
                 samples_per_second=samples_per_second
             )
             self.epoch_history.append(epoch_metrics)
-            
+
             # Print detailed metrics
             print(f"  Train Loss: {train_loss:.4f}, Test Loss: {test_loss:.4f}")
             print(f"  Train Acc: {train_accuracy:.4f}, Test Acc: {accuracy:.4f}")
-            print(f"  LR: {current_lr:.6f}, Grad Norm: {grad_norm:.4f}, Throughput: {samples_per_second:.1f} samples/s")
-            
+            if lr_now and grad_norm and samples_per_second:
+                print(f"  LR: {lr_now:.6f}, Grad Norm: {grad_norm:.4f}, Throughput: {samples_per_second:.1f} samples/s")
+
             # The accuracy-to-time metric is not stored in the database as it can change over time and can be quickly calculated from saved values.
             accuracy_to_time = accuracy_to_time_metric(accuracy, self.minimum_accuracy, duration)
             if not good(accuracy, self.minimum_accuracy, duration):
@@ -327,35 +313,30 @@ class Train:
                                         f"' dataset is {self.minimum_accuracy}.")
             if save_pth_weights or save_onnx_weights:
                 save_if_best(self.model, self.model_name, accuracy, save_pth_weights, save_onnx_weights, train_set, self.num_workers, save_path=save_path)
-            
+
             # Build extended parameters with new metrics
             only_prm = {k: v for k, v in self.prm.items() if k not in {'uid', 'duration', 'accuracy', 'epoch'}}
             # Use 'lr' as the canonical learning-rate key to avoid duplication with 'learning_rate'
             prm = merge_prm(self.prm, {
-                'uid': uuid4(only_prm),
-                'duration': duration,
-                'accuracy': accuracy,
-                # NEW: Loss metrics
-                'train_loss': train_loss,
-                'test_loss': test_loss,
-                # NEW: Accuracy metrics
-                'train_accuracy': train_accuracy,
-                # NEW: Training dynamics - store under 'lr' to match common hyperparameter naming
-                'lr': current_lr,
-                'gradient_norm': grad_norm,
-                # NEW: Model info
-                'total_params': self.total_params,
-                'trainable_params': self.trainable_params,
-                # NEW: Timing metrics
-                'epoch_duration_seconds': epoch_duration,
-                'samples_per_second': samples_per_second,
-                # NEW: GPU memory (if available)
-                'gpu_memory_mb': get_gpu_memory_mb(),
-                # NEW: Best tracking
-                'best_accuracy': self.best_accuracy,
-                'best_epoch': self.best_epoch,
-            })
-            
+                                          'uid': uuid4(only_prm),
+                                          'duration': duration,
+                                          'accuracy': accuracy,
+                                          # NEW: Loss metrics
+                                          'train_loss': train_loss,
+                                          'test_loss': test_loss,
+                                          # NEW: Accuracy metrics
+                                          'train_accuracy': train_accuracy,
+                                          # NEW: Training dynamics - store under 'lr' to match common hyperparameter naming
+                                          'gradient_norm': grad_norm,
+                                          # NEW: Timing metrics
+                                          'samples_per_second': samples_per_second,
+                                          # NEW: Best tracking
+                                          'best_accuracy': self.best_accuracy,
+                                          'best_epoch': self.best_epoch,
+                                      } | ({'lr_now': lr_now} if lr_now else {})
+                                      # NEW: GPU memory (if available)
+                                      | ({'gpu_memory_kb': get_gpu_memory_kb()} if get_gpu_memory_kb else {}))
+
             if self.save_to_db:
                 if self.is_code:  # We don't want the filename to contain full codes
                     if save_path:
@@ -367,13 +348,13 @@ class Train:
                         save_path = model_stat_dir(self.config)
                     save_results(self.config + (epoch,), join(save_path, f"{epoch}.json"), prm)
                     DB_Write.save_results(self.config + (epoch,), prm)  # Separated from Calc.save_results()
-        
+
         # Save training summary at the end
         if save_path and self.epoch_history:
             self._save_training_summary(save_path)
-        
+
         return accuracy, accuracy_to_time, duration
-    
+
     def _save_training_summary(self, save_path):
         """Save comprehensive training summary"""
         import json
@@ -398,7 +379,7 @@ class Train:
                 'final_train_loss': self.epoch_history[-1].train_loss if self.epoch_history else 0,
                 'final_test_loss': self.epoch_history[-1].test_loss if self.epoch_history else 0,
                 'final_accuracy': self.epoch_history[-1].test_accuracy if self.epoch_history else 0,
-                'gpu_memory_mb': get_gpu_memory_mb(),
+                'gpu_memory_kb': get_gpu_memory_kb(),
             },
             'learning_curves': {
                 'epochs': [e.epoch for e in self.epoch_history],
@@ -411,7 +392,7 @@ class Train:
             },
             'epoch_details': [asdict(e) for e in self.epoch_history]
         }
-        
+
         summary_path = join(save_path, "training_summary.json")
         try:
             with open(summary_path, 'w') as f:
@@ -446,7 +427,8 @@ class Train:
         return self.metric_function.result()
 
 
-def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Union[str, None] = None, save_path: Union[str, None] = None, export_onnx=False, epoch_limit_minutes=default_epoch_limit_minutes, transform_dir= None):
+def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Union[str, None] = None, save_path: Union[str, None] = None, export_onnx=False,
+              epoch_limit_minutes=default_epoch_limit_minutes, transform_dir=None):
     """
     train the model with the given code and hyperparameters and evaluate it.
 
