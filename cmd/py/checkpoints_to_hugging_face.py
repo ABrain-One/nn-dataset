@@ -168,7 +168,7 @@ def main():
     try:
         print('📊 Fetching models from API...')
         epoch_max = 5
-        epoch_train_max = epoch_max
+        epoch_train_max = 50
         dataset = 'cifar-10'
         task = 'img-classification'
         metric = 'acc'
