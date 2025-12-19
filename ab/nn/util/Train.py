@@ -351,11 +351,11 @@ class Train:
 
         # Save training summary at the end
         if save_path and self.epoch_history:
-            self._save_training_summary(save_path)
+            self._save_training_summary()
 
         return accuracy, accuracy_to_time, duration
 
-    def _save_training_summary(self, save_path):
+    def _save_training_summary(self):
         """Save comprehensive training summary"""
         import json
         summary = {
@@ -391,7 +391,7 @@ class Train:
             'epoch_details': [asdict(e) for e in self.epoch_history]
         }
 
-        summary_path = join(save_path, "training_summary.json")
+        summary_path = out_dir / 'training_summary.json'
         try:
             with open(summary_path, 'w') as f:
                 json.dump(summary, f, indent=2)
