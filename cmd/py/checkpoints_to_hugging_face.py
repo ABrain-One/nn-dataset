@@ -6,12 +6,12 @@ import os
 # This ensures the script runs without manually setting 'export PYTHONPATH'.
 try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(current_dir, "../../"))
+    project_root = os.path.abspath(os.path.join(current_dir, '../../'))
     if project_root not in sys.path:
         sys.path.append(project_root)
-    print(f"✅ Project Root detected at: {project_root}")
+    print(f'✅ Project Root detected at: {project_root}')
 except Exception as e:
-    print(f"⚠️ Warning: Auto-path setup failed: {e}")
+    print(f'⚠️ Warning: Auto-path setup failed: {e}')
 
 # --- STANDARD IMPORTS ---
 import json
@@ -32,13 +32,13 @@ except ImportError:
     sys.exit(1)
 
 # --- CONFIGURATION ---
-HF_TOKEN = os.environ.get("HF_TOKEN")
+HF_TOKEN = os.environ.get('HF_TOKEN')
 if not HF_TOKEN:
     # Fallback for testing
     HF_TOKEN = ""
-    print("⚠️ Warning: No HF_TOKEN found. Please set environment variable.")
-HF_USERNAME = "NN-Dataset"
-SUMMARY_FILENAME = "all_models_summary.json"
+    print('⚠️ Warning: No HF_TOKEN found. Please set environment variable.')
+HF_USERNAME = 'NN-Dataset'
+SUMMARY_FILENAME = 'all_models_summary.json'
 
 # =================================================================
 # ⚠️ SETTINGS
@@ -53,7 +53,9 @@ def get_existing_models_and_summary(repo_id):
     """
     Downloads the Master JSON from Hugging Face.
     """
-    print("☁️ Fetching Master Summary from Hugging Face...")
+    print('☁️ Fetching Master Summary from Hugging Face...')
+    if os.path.exists(SUMMARY_FILENAME):
+        os.remove(SUMMARY_FILENAME)
 
     summary_data = {}
     uploaded_models = set()
@@ -63,7 +65,7 @@ def get_existing_models_and_summary(repo_id):
             repo_id=repo_id,
             filename=SUMMARY_FILENAME,
             token=HF_TOKEN,
-            local_dir="."
+            local_dir='.'
         )
         with open(local_path, 'r') as f:
             summary_data = json.load(f)
@@ -71,75 +73,16 @@ def get_existing_models_and_summary(repo_id):
         # Note: We are not deleting the local file so it can be inspected if needed.
 
         uploaded_models = set(summary_data.keys())
-        print(f"✅ Found Master JSON with {len(uploaded_models)} records.")
+        print(f'✅ Found Master JSON with {len(uploaded_models)} records.')
 
     except Exception as e:
-        print(f"⚠️ Master JSON not found (Starting fresh): {e}")
+        print(f'⚠️ Master JSON not found (Starting fresh): {e}')
 
     return uploaded_models, summary_data
 
 
-def train_and_save(model_name, params, epoch_max):
-    print(f"🚀 Starting FRESH training for {model_name}...")
-    config_pattern = f"img-classification_cifar-10_acc_{model_name}"
-    try:
-        release_memory()
-        train_main(
-            config=config_pattern,
-            nn_prm=params,
-            epoch_max=epoch_max,
-            n_optuna_trials=-1,
-            save_pth_weights=True,
-            save_onnx_weights=False,
-            train_missing_pipelines=False,
-            num_workers=0
-        )
-        print(f"✅ Training completed call for {model_name}")
-        return True
-    except Exception as e:
-        print(f"❌ Training failed/crashed for {model_name}: {e}")
-        return False
-
-
-def get_metadata_from_stats(model_name, epoch_max, dataset, task, metric):
-    """
-    Extracts the latest training statistics (accuracy, time, etc.) from the stats directory.
-    """
-    try:
-        config_name = f"img-classification_cifar-10_acc_{model_name}"
-        stat_path = stat_train_dir / config_name
-        if not stat_path.exists(): return None
-
-        json_files = list(stat_path.glob("*.json"))
-        if not json_files: return None
-        latest_json = max(json_files, key=os.path.getmtime)
-
-        with open(latest_json, 'r') as f:
-            data = json.load(f)
-
-        stats = {}
-        if isinstance(data, list) and data:
-            stats = data[-1]
-        elif isinstance(data, dict):
-            stats = data
-        if not stats: return None
-
-        return {
-            "nn": model_name,
-            "accuracy": stats['accuracy'],
-            "epoch": stats.get('epoch', epoch_max),
-            "duration": stats['duration'],
-            "dataset": dataset,
-            "task": task,
-            "metric": metric,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-        }
-    except:
-        return None
-
-
-def upload_to_hf(model_name, epoch_max, dataset, task, metric, summary_data, repo_id):
-    print(f"☁️ Uploading {model_name} to Hugging Face...")
+def upload_to_hf(model_name, epoch_max, dataset, task, metric, accuracy, summary_data, repo_id, prm):
+    print(f'☁️ Uploading {model_name} to Hugging Face...')
 
     # --- SUPER FIX: BLIND SEARCH ---
     # Strategy: Since we clean the output folder before training, 
@@ -147,42 +90,51 @@ def upload_to_hf(model_name, epoch_max, dataset, task, metric, summary_data, rep
     expected_file = None
 
     # Check 1: ckpt_dir (standard path)
-    files_in_ckpt = list(ckpt_dir.rglob("*.pth"))
+    files_in_ckpt = list(ckpt_dir.rglob('*.pth'))
     # Check 2: 'out/checkpoints' (Manual fallback)
-    files_in_out = list(Path("out/checkpoints").rglob("*.pth"))
+    files_in_out = list(Path('out/checkpoints').rglob('*.pth'))
     # Check 3: Current directory recursive (Last resort)
-    files_in_curr = list(Path(".").rglob("*.pth"))
+    files_in_curr = list(Path('.').rglob('*.pth'))
 
     # Combine results
     all_found = files_in_ckpt + files_in_out + files_in_curr
 
     # Filter: Remove .venv files and duplicates
-    valid_files = list(set([f for f in all_found if ".venv" not in str(f) and "site-packages" not in str(f)]))
+    valid_files = list(set([f for f in all_found if '.venv' not in str(f) and 'site-packages' not in str(f)]))
 
     if valid_files:
         # Pick the most recent file (Created within the last minute)
         latest_file = max(valid_files, key=os.path.getmtime)
-        print(f"   🔍 Super-Search found latest file: {latest_file}")
+        print(f'   🔍 Super-Search found latest file: {latest_file}')
         expected_file = latest_file
     else:
         # Green warning (No panic) - likely low accuracy model
-        print("   ℹ️ No .pth file generated (Likely due to low accuracy). Uploading Metadata only.")
+        print('   ℹ️ No .pth file generated (Likely due to low accuracy). Uploading Metadata only.')
 
     api = HfApi(token=HF_TOKEN)
     try:
-        api.create_repo(repo_id=repo_id, repo_type="model", exist_ok=True)
+        api.create_repo(repo_id=repo_id, repo_type='model', exist_ok=True)
 
         # 1. Upload .pth (If exists)
         if expected_file and expected_file.exists():
             api.upload_file(
                 path_or_fileobj=str(expected_file),
-                path_in_repo=f"{model_name}/{model_name}.pth",
+                path_in_repo=f'{model_name}.pth',
                 repo_id=repo_id,
-                repo_type="model"
+                repo_type='model'
             )
 
         # 2. Update Master Data
-        new_metadata = get_metadata_from_stats(model_name, epoch_max, dataset, task, metric)
+        new_metadata = {
+            'nn': model_name,
+            'accuracy': accuracy,
+            'epoch': epoch_max,
+            'dataset': dataset,
+            'task': task,
+            'metric': metric,
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'prm': prm
+        }
         if new_metadata:
             summary_data[model_name] = new_metadata
 
@@ -195,32 +147,33 @@ def upload_to_hf(model_name, epoch_max, dataset, task, metric, summary_data, rep
                 path_or_fileobj=SUMMARY_FILENAME,
                 path_in_repo=SUMMARY_FILENAME,
                 repo_id=repo_id,
-                repo_type="model"
+                repo_type='model'
             )
 
-        print(f"✅ Successfully processed {model_name}")
+        print(f'✅ Successfully processed {model_name}')
 
-        print("⏳ Waiting 30s to avoid Rate Limit...")
+        print('⏳ Waiting 30s to avoid Rate Limit...')
         time.sleep(30)
 
         return True
     except Exception as e:
-        print(f"❌ Upload failed: {e}")
-        if "429" in str(e):
-            print("🛑 Hit Rate Limit! Waiting 2 minutes...")
+        print(f'❌ Upload failed: {e}')
+        if '429' in str(e):
+            print('🛑 Hit Rate Limit! Waiting 2 minutes...')
             time.sleep(120)
         return False
 
 
 def main():
     try:
-        print("📊 Fetching models from API...")
+        print('📊 Fetching models from API...')
         epoch_max = 5
+        epoch_train_max = epoch_max
         dataset = 'cifar-10'
         task = 'img-classification'
         metric = 'acc'
-        REPO_NAME = "checkpoints-epoch-" + str(epoch_max)
-        repo_id = f"{HF_USERNAME}/{REPO_NAME}"
+        REPO_NAME = 'checkpoints-epoch-' + str(epoch_train_max)
+        repo_id = f'{HF_USERNAME}/{REPO_NAME}'
 
         df = (data(only_best_accuracy=True, task=task, dataset=dataset, metric=metric, epoch=epoch_max,
                    nn_prefixes=('rag-', 'unq-'))
@@ -228,33 +181,24 @@ def main():
 
         if TEST_MODE:
             df = df[:TEST_LIMIT]
-            print(f"⚠️ TEST MODE: Only running first {TEST_LIMIT} models.")
+            print(f'⚠️ TEST MODE: Only running first {TEST_LIMIT} models.')
 
         uploaded_models, summary_data = get_existing_models_and_summary(repo_id)
 
     except Exception as e:
-        print(f"❌ Error initializing: {e}")
+        print(f'❌ Error initializing: {e}')
         return
 
-    print(f"🔥 Starting Pipeline for {len(df)} models...")
+    print(f'🔥 Starting Pipeline for {len(df)} models...')
 
     for i, dt in df.iterrows():
         print(f"\n{'=' * 60}")
         model = dt['nn']
-        print(f"Processing Model: {i}/{len(df)} | {model}")
+        print(f'Processing Model: {i}/{len(df)} | {model}')
 
         if model in uploaded_models:
-            print(f"⏭️ Skipping {model} (Found in Master JSON)")
+            print(f'⏭️ Skipping {model} (Found in Master JSON)')
             continue
-
-        params = dt['prm']
-
-        if 'batch' in params:
-            if params['batch'] > 32:
-                print(f"   📉 Reducing Batch Size from {params['batch']} to 32 for safety.")
-                params['batch'] = 32
-        else:
-            params['batch'] = 32
 
         # Local cleanup per model to ensure fresh state
         if os.path.isdir(ckpt_dir):
@@ -263,19 +207,31 @@ def main():
             except:
                 pass
 
-        if os.path.isdir("out/checkpoints"):
+        if os.path.isdir('out/checkpoints'):
             try:
-                shutil.rmtree("out/checkpoints")
+                shutil.rmtree('out/checkpoints')
             except:
                 pass
 
-        success = train_and_save(model, params, epoch_max)
-        if success:
-            if upload_to_hf(model, epoch_max, dataset, task, metric, summary_data, repo_id):
+        print(f'🚀 Starting FRESH training for {model}...')
+        try:
+            params = dt['prm']
+            accuracy = train_main(
+                config=f'{task}_{dataset}_{metric}_{model}',
+                nn_prm=params,
+                epoch_max=epoch_train_max,
+                n_optuna_trials=-1,
+                save_pth_weights=True,
+                save_onnx_weights=False,
+                train_missing_pipelines=False,
+                num_workers=0
+            )
+            print(f'✅ Training completed call for {model}')
+            if accuracy and upload_to_hf(model, epoch_train_max, dataset, task, metric, accuracy, summary_data, repo_id, params):
                 uploaded_models.add(model)
+        except Exception as e:
+            print(f'❌ Training failed/crashed for {model}: {e}')
 
-        release_memory()
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
