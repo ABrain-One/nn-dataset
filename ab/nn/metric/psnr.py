@@ -1,11 +1,13 @@
 import torch
 import math
 
+
 class Net:
     """
     A stateful metric that calculates the Peak Signal-to-Noise Ratio (PSNR) 
     over an entire dataset by accumulating results from each batch.
     """
+
     def __init__(self):
         self.reset()
 
@@ -25,9 +27,9 @@ class Net:
         device = outputs.device
         outputs = outputs.to(device).float()
         labels = labels.to(device).float()
-        
+
         batch_mse = torch.sum((outputs - labels) ** 2)
-        
+
         self._total_mse += batch_mse.item()
         self._total_samples += outputs.numel()
 
@@ -47,11 +49,12 @@ class Net:
             return 100.0
 
         mean_mse = self._total_mse / self._total_samples
-        
+
         max_pixel = 1.0
         psnr = 20 * math.log10(max_pixel / math.sqrt(mean_mse))
-        
+
         return psnr
+
 
 def create_metric(out_shape=None):
     """
