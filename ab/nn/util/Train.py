@@ -3,8 +3,11 @@ import sys
 import time as time
 from os.path import join
 from typing import Union
+from dataclasses import dataclass, field, asdict
+from typing import Dict, List, Any, Optional
 
 import numpy as np
+import torch
 from torch.cuda import OutOfMemoryError
 
 import ab.nn.util.CodeEval as codeEvaluator
@@ -17,6 +20,49 @@ from ab.nn.util.db.Calc import save_results
 from ab.nn.util.db.Read import supported_transformers
 
 debug = False
+
+
+@dataclass
+class EpochMetrics:
+    """Stores metrics for a single epoch"""
+    epoch: int
+    # Loss metrics
+    train_loss: float = 0.0
+    test_loss: float = 0.0
+    # Accuracy metrics  
+    train_accuracy: float = 0.0
+    test_accuracy: float = 0.0
+    # Training dynamics
+    lr: float = 0.0
+    gradient_norm: float = 0.0
+    # Timing
+    samples_per_second: float = 0.0
+
+
+def compute_gradient_norm(model) -> float:
+    """Compute the L2 norm of gradients"""
+    total_norm = 0.0
+    for p in model.parameters():
+        if p.grad is not None:
+            param_norm = p.grad.data.norm(2)
+            total_norm += param_norm.item() ** 2
+    return total_norm ** 0.5
+
+
+def get_current_lr(optimizer) -> Optional[float]:
+    """Get current learning rate from optimizer"""
+    if optimizer:
+        for param_group in optimizer.param_groups:
+            return param_group['lr']
+    return None
+
+
+def get_gpu_memory_kb() -> Optional[float]:
+    """Get current GPU memory usage in KB"""
+    if torch.cuda.is_available():
+        return torch.cuda.max_memory_allocated() / 1024
+    return None
+
 
 def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout,
                      max_dropout, min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, epoch_max,
@@ -122,6 +168,61 @@ class Train:
         self.model = model_net(self.in_shape, out_shape, prm, self.device)
         self.model.to(self.device)
 
+        # Initialize loss function for tracking
+        self.loss_fn = self._get_loss_function()
+
+        # Epoch metrics history
+        self.epoch_history: List[EpochMetrics] = []
+        self.best_accuracy = 0.0
+        self.best_epoch = 0
+
+    def _get_loss_function(self):
+        """Get loss function for metric tracking"""
+        if hasattr(self.model, 'criterion'):
+            return self.model.criterion
+        elif hasattr(self.model, 'loss_fn'):
+            return self.model.loss_fn
+        else:
+            # Default based on task
+            if 'classification' in self.task or 'img-class' in self.task:
+                return torch.nn.CrossEntropyLoss()
+            elif 'segmentation' in self.task:
+                return torch.nn.CrossEntropyLoss()
+            else:
+                return torch.nn.MSELoss()
+
+    def _compute_loss(self, data_loader) -> float:
+        """Compute average loss over a dataset"""
+        self.model.eval()
+        total_loss = 0.0
+        num_batches = 0
+
+        with torch.no_grad():
+            for inputs, labels in data_loader:
+                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                try:
+                    outputs = self.model(inputs)
+                    loss = self.loss_fn(outputs, labels)
+                    total_loss += loss.item()
+                    num_batches += 1
+                except Exception:
+                    pass
+
+        return total_loss / max(num_batches, 1)
+
+    def _compute_accuracy(self, data_loader) -> float:
+        """Compute accuracy over a dataset using the metric function"""
+        self.model.eval()
+        self.metric_function.reset()
+
+        with torch.no_grad():
+            for inputs, labels in data_loader:
+                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                outputs = self.model(inputs)
+                self.metric_function(outputs, labels)
+
+        return self.metric_function.result()
+
     def load_metric_function(self, metric_name):
         """
         Dynamically load the metric function or class based on the metric_name.
@@ -138,20 +239,71 @@ class Train:
                 from e
 
     def train_n_eval(self, epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set, save_path: Union[str, Path] = None):
-        """ Training and evaluation """
+        """ Training and evaluation with comprehensive metrics tracking """
 
         start_time = time.time_ns()
         self.model.train_setup(self.prm)
         accuracy_to_time = 0.0
         duration = sys.maxsize
+
+        # Get optimizer reference for LR tracking
+        optimizer = getattr(self.model, 'optimizer', None)
+
         for epoch in range(1, epoch_max + 1):
+            epoch_start_time = time.time_ns()
             print(f"epoch {epoch}", flush=True)
+
+            # Training phase
             self.model.train()
             self.model.learn(DataRoll(self.train_loader, epoch_limit_minutes))
 
-            accuracy = self.eval(self.test_loader)
+            # Compute gradient norm after training
+            grad_norm = compute_gradient_norm(self.model)
+
+            # Get current learning rate
+            lr_now = get_current_lr(optimizer)
+
+            # Compute losses
+            train_loss = self._compute_loss(self.train_loader)
+            test_loss = self._compute_loss(self.test_loader)
+
+            # Compute accuracies
+            train_accuracy = self._compute_accuracy(self.train_loader)
+            test_accuracy = self.eval(self.test_loader)
+
+            accuracy = test_accuracy
             accuracy = 0.0 if math.isnan(accuracy) or math.isinf(accuracy) else accuracy
             duration = time.time_ns() - start_time
+            epoch_duration = (time.time_ns() - epoch_start_time) / 1e9  # seconds
+
+            # Calculate throughput
+            total_samples = len(self.train_dataset)
+            samples_per_second = total_samples / max(epoch_duration, 0.001)
+
+            # Track best accuracy
+            if accuracy > self.best_accuracy:
+                self.best_accuracy = accuracy
+                self.best_epoch = epoch
+
+            # Record epoch metrics
+            epoch_metrics = EpochMetrics(
+                epoch=epoch,
+                train_loss=train_loss,
+                test_loss=test_loss,
+                train_accuracy=train_accuracy,
+                test_accuracy=accuracy,
+                lr=lr_now,
+                gradient_norm=grad_norm,
+                samples_per_second=samples_per_second
+            )
+            self.epoch_history.append(epoch_metrics)
+
+            # Print detailed metrics
+            print(f"  Train Loss: {train_loss:.4f}, Test Loss: {test_loss:.4f}")
+            print(f"  Train Acc: {train_accuracy:.4f}, Test Acc: {accuracy:.4f}")
+            if lr_now and grad_norm and samples_per_second:
+                print(f"  LR: {lr_now:.6f}, Grad Norm: {grad_norm:.4f}, Throughput: {samples_per_second:.1f} samples/s")
+
             # The accuracy-to-time metric is not stored in the database as it can change over time and can be quickly calculated from saved values.
             accuracy_to_time = accuracy_to_time_metric(accuracy, self.minimum_accuracy, duration)
             if not good(accuracy, self.minimum_accuracy, duration):
@@ -161,8 +313,30 @@ class Train:
                                         f"' dataset is {self.minimum_accuracy}.")
             if save_pth_weights or save_onnx_weights:
                 save_if_best(self.model, self.model_name, accuracy, save_pth_weights, save_onnx_weights, train_set, self.num_workers, save_path=save_path)
-            only_prm = {k: v for k, v in self.prm.items() if  k not in {'uid', 'duration', 'accuracy', 'epoch'}}
-            prm = merge_prm(self.prm, {'uid': uuid4(only_prm), 'duration': duration, 'accuracy': accuracy})
+
+            # Build extended parameters with new metrics
+            only_prm = {k: v for k, v in self.prm.items() if k not in {'uid', 'duration', 'accuracy', 'epoch'}}
+            # Use 'lr' as the canonical learning-rate key to avoid duplication with 'learning_rate'
+            prm = merge_prm(self.prm, {
+                                          'uid': uuid4(only_prm),
+                                          'duration': duration,
+                                          'accuracy': accuracy,
+                                          # NEW: Loss metrics
+                                          'train_loss': train_loss,
+                                          'test_loss': test_loss,
+                                          # NEW: Accuracy metrics
+                                          'train_accuracy': train_accuracy,
+                                          # NEW: Training dynamics - store under 'lr' to match common hyperparameter naming
+                                          'gradient_norm': grad_norm,
+                                          # NEW: Timing metrics
+                                          'samples_per_second': samples_per_second,
+                                          # NEW: Best tracking
+                                          'best_accuracy': self.best_accuracy,
+                                          'best_epoch': self.best_epoch,
+                                      } | ({'lr_now': lr_now} if lr_now else {})
+                                      # NEW: GPU memory (if available)
+                                      | ({'gpu_memory_kb': get_gpu_memory_kb()} if get_gpu_memory_kb else {}))
+
             if self.save_to_db:
                 if self.is_code:  # We don't want the filename to contain full codes
                     if save_path:
@@ -174,7 +348,56 @@ class Train:
                         save_path = model_stat_dir(self.config)
                     save_results(self.config + (epoch,), join(save_path, f"{epoch}.json"), prm)
                     DB_Write.save_results(self.config + (epoch,), prm)  # Separated from Calc.save_results()
+
+        # Save training summary at the end
+        if save_path and self.epoch_history:
+            self._save_training_summary()
+
         return accuracy, accuracy_to_time, duration
+
+    def _save_training_summary(self):
+        """Save comprehensive training summary"""
+        import json
+        summary = {
+            'config': {
+                'task': self.config[0],
+                'dataset': self.config[1],
+                'metric': self.config[2],
+                'model': self.config[3] if len(self.config) > 3 else self.model_name,
+            },
+            'hyperparameters': {k: v for k, v in self.prm.items() if k not in {'uid', 'duration', 'accuracy'}},
+            'model_info': {
+                'input_shape': list(self.in_shape),
+                'output_shape': list(self.out_shape) if hasattr(self.out_shape, '__iter__') else self.out_shape,
+            },
+            'training_summary': {
+                'total_epochs': len(self.epoch_history),
+                'best_accuracy': self.best_accuracy,
+                'best_epoch': self.best_epoch,
+                'final_train_loss': self.epoch_history[-1].train_loss if self.epoch_history else 0,
+                'final_test_loss': self.epoch_history[-1].test_loss if self.epoch_history else 0,
+                'final_accuracy': self.epoch_history[-1].test_accuracy if self.epoch_history else 0,
+                'gpu_memory_kb': get_gpu_memory_kb(),
+            },
+            'learning_curves': {
+                'epochs': [e.epoch for e in self.epoch_history],
+                'train_loss': [e.train_loss for e in self.epoch_history],
+                'test_loss': [e.test_loss for e in self.epoch_history],
+                'train_accuracy': [e.train_accuracy for e in self.epoch_history],
+                'test_accuracy': [e.test_accuracy for e in self.epoch_history],
+                'lr': [e.lr for e in self.epoch_history],
+                'gradient_norm': [e.gradient_norm for e in self.epoch_history],
+            },
+            'epoch_details': [asdict(e) for e in self.epoch_history]
+        }
+
+        summary_path = out_dir / 'training_summary.json'
+        try:
+            with open(summary_path, 'w') as f:
+                json.dump(summary, f, indent=2)
+            print(f"Training summary saved to {summary_path}")
+        except Exception as e:
+            print(f"[WARN] Failed to save training summary: {e}")
 
     def eval(self, test_loader):
         """Evaluation with standardized metric interface"""
@@ -202,7 +425,8 @@ class Train:
         return self.metric_function.result()
 
 
-def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Union[str, None] = None, save_path: Union[str, None] = None, export_onnx=False, epoch_limit_minutes=default_epoch_limit_minutes, transform_dir= None):
+def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Union[str, None] = None, save_path: Union[str, None] = None, export_onnx=False,
+              epoch_limit_minutes=default_epoch_limit_minutes, transform_dir=None):
     """
     train the model with the given code and hyperparameters and evaluate it.
 
