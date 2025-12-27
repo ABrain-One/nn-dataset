@@ -91,6 +91,14 @@ python -m ab.nn.train -c img-classification_cifar-10_acc_ComplexNet -f complex -
 ```
 <p>See more examples of models in <code>/ab/nn/nn</code> and generated statistics in <code>/ab/nn/stat</code>.</p>
 
+<p>
+  The <strong>LEMUR neural network</strong> checkpoints on 
+  <a href="https://huggingface.co/NN-Dataset" target="_blank" rel="noopener noreferrer">
+    Hugging Face
+  </a>.
+</p>
+
+
 ## Installation or Update of the NN Dataset with pip
 Remove an old version of the LEMUR Dataset and its database:
 ```bash
