@@ -136,7 +136,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
                                                                                     min_momentum, max_momentum, min_dropout, max_dropout,
                                                                                     min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, epoch_max,
                                                                                     pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights)
-                            calculate_and_save_stats(nn, dataset)
+                            # calculate_and_save_stats(nn, dataset) # todo: uncomment temporary commented functionality
                             if good(accuracy, min_accuracy(dataset), duration):
                                 fail_iterations = nn_fail_attempts
                             last_accuracy = accuracy
