@@ -44,6 +44,7 @@ def data(only_best_accuracy: bool = False,
          max_rows: Optional[int] = None,
          nn_prefixes: Optional[tuple] = None,
          sql: Optional[JoinConf] = None,
+         unique_nn: bool=False,
          ) -> tuple[
     dict[str, int | float | str | dict[str, int | float | str]], ...
 ]:
@@ -72,12 +73,12 @@ def data(only_best_accuracy: bool = False,
 
     # Build filtering conditions based on provided parameters.
     params, where_clause = sql_where([task, dataset, metric, nn, epoch])
-
     if nn_prefixes:
         where_clause += ' AND (' + ' OR '.join([f"nn LIKE '{prefix}%'" for prefix in nn_prefixes]) + ')'
 
     source = f'(SELECT s.* FROM stat s {where_clause})'
-
+    if unique_nn:
+        source = f'(SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY nn ORDER BY accuracy DESC) rn FROM {source}) WHERE rn = 1)'
     if only_best_accuracy:
         source = """
             (WITH filtered_stat AS {source}
@@ -120,6 +121,7 @@ def data(only_best_accuracy: bool = False,
         return tuple(results)
     finally:
         if conn: close_conn(conn)
+
 
 def run_data(
         model_name: str | None = None,
