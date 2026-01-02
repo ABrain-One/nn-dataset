@@ -89,7 +89,8 @@ To contribute a new neural network (NN) model to the NN Dataset, please ensure t
 ```bash
 python -m ab.nn.train -c img-classification_cifar-10_acc_ComplexNet -f complex -t 100 -e 5
 ```
-Before creating a pull request, delete the local database directory <strong>db</strong> in the project root and run the tests <strong>test.py</strong> to ensure that your changes do not break the main NN Dataset pipelines.
+
+Before creating a pull request, run the tests in <strong>test.py</strong> to ensure that your changes do not break the core functionality of the NN Dataset.
 
 <p>See more examples of models in <code>/ab/nn/nn</code> and generated statistics in <code>/ab/nn/stat</code>.</p>
 
