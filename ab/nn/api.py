@@ -10,7 +10,8 @@ from ab.nn.util.db.Query import JoinConf
 
 
 @functools.lru_cache(maxsize=10)
-def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None, epoch=None, max_rows=None, sql: Optional[JoinConf] = None, nn_prefixes=None) -> DataFrame:
+def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None, epoch=None, max_rows=None, sql: Optional[JoinConf] = None, nn_prefixes=None,
+         unique_nn=False) -> DataFrame:
     """
     Get the NN model code and all related statistics as a pandas DataFrame.
 
@@ -30,7 +31,7 @@ def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None
           'prm', and 'transform_code'.
     """
     dt: tuple[dict, ...] = DB_Read.data(only_best_accuracy, task=task, dataset=dataset, metric=metric, nn=nn, epoch=epoch, max_rows=max_rows,
-                                        sql=sql, nn_prefixes=nn_prefixes)
+                                        sql=sql, nn_prefixes=nn_prefixes, unique_nn=unique_nn)
     return DataFrame.from_records(dt)
 
 
