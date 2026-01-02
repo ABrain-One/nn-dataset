@@ -53,7 +53,7 @@ transform_dir = nn_path('transform')
 stat_dir = nn_path('stat')
 stat_train_dir = stat_dir / 'train'
 stat_run_dir = stat_dir / 'run'
-
+stat_nn_dir = stat_dir / 'nn'
 
 def __project_root_path():
     """
