@@ -1,8 +1,10 @@
+import os
+import json
 import optuna
-
 from ab.nn.util.Exception import *
 from ab.nn.util.Train import optuna_objective
 from ab.nn.util.Util import *
+from ab.nn.util.NNAnalysis import log_nn_stat
 from ab.nn.util.db.Calc import patterns_to_configs
 from ab.nn.util.db.Read import remaining_trials
 from types import MappingProxyType
@@ -91,6 +93,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
                                                                                     min_momentum, max_momentum, min_dropout, max_dropout,
                                                                                     min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, epoch_max,
                                                                                     pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights)
+                            log_nn_stat(nn)
                             if good(accuracy, min_accuracy(dataset), duration):
                                 fail_iterations = nn_fail_attempts
                             last_accuracy = accuracy
