@@ -148,7 +148,12 @@ def run_data(
     try:
         cur.execute(
             f"""
-            SELECT id, model_name, device_type, os_version, valid, emulator, error_message, duration, device_analytics_json
+            SELECT id, model_name, device_type, os_version, valid, emulator, error_message, duration,
+                   iterations, unit, cpu_duration, cpu_min_duration, cpu_max_duration, cpu_std_dev, cpu_error,
+                   gpu_duration, gpu_min_duration, gpu_max_duration, gpu_std_dev, gpu_error,
+                   npu_duration, npu_min_duration, npu_max_duration, npu_std_dev, npu_error,
+                   total_ram_kb, free_ram_kb, available_ram_kb, cached_kb,
+                   in_dim_0, in_dim_1, in_dim_2, in_dim_3, device_analytics_json
             FROM {run_table}
             {where_clause}
             ORDER BY model_name
