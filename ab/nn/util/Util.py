@@ -7,6 +7,7 @@ import inspect
 import random
 import re
 import json
+from typing import Any
 
 import torch
 from os import makedirs, remove
@@ -232,10 +233,19 @@ def save_if_best(model, model_name, current_score, save_pth_weights, save_onnx_w
         # Use the required function to save the PyTorch weights.
         if save_pth_weights: export_torch_weights(model, best_checkpoint_path)
         if save_onnx_weights:
-            for input_tensor, _ in train_loader_f(train_set, 1, num_workers):
-                t = input_tensor.to(torch_device())
-                export_model_to_onnx(model, t, join(checkpoint_dir, "best_model.onnx") if save_path else onnx_file)
-                break
+            t = first_tensor(train_set, num_workers)
+            export_model_to_onnx(model, t, join(checkpoint_dir, "best_model.onnx") if save_path else onnx_file)
+
+
+def first_tensor(train_set, num_workers=default_num_workers) -> Any:
+    t = None
+    for input_tensor, _ in train_loader_f(train_set, 1, num_workers):
+        t = input_tensor.to(torch_device())
+        break
+    return t
+
+def get_in_shape(train_set, num_workers=default_num_workers):
+    return first_tensor(train_set, num_workers).cpu().numpy().shape
 
 
 #  FUNCTIONS FOR SAVING AND LOADING WEIGHTS
