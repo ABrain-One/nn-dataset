@@ -1,3 +1,5 @@
+import os
+import shutil
 import time
 import unittest
 import uuid
@@ -10,13 +12,9 @@ import ab.nn.train as train
 import ab.nn.util.db.Init as DB_Init
 import ab.nn.util.db.Read as DB_Read
 import ab.nn.util.db.Write as DB_Write
-from ab.nn.util.Const import (
-    default_nn_path,
-    default_nn_name,
-    param_tables,
-)
-from ab.nn.util.Util import read_py_file_as_string
 from ab.nn.api import JoinConf
+from ab.nn.util.Const import *
+from ab.nn.util.Util import read_py_file_as_string
 
 
 class Testing(unittest.TestCase):
@@ -25,6 +23,9 @@ class Testing(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        if os.path.exists(db_dir):
+            shutil.rmtree(db_dir)
+            DB_Read.init_population()
         uid = str(uuid.uuid4())
         cls.inserted_uid = uid
         tmp_nn = f"tmp_{uid[:8]}"
