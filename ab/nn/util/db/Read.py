@@ -44,6 +44,7 @@ def data(only_best_accuracy: bool = False,
          max_rows: Optional[int] = None,
          nn_prefixes: Optional[tuple] = None,
          sql: Optional[JoinConf] = None,
+         unique_nn: bool=False,
          ) -> tuple[
     dict[str, int | float | str | dict[str, int | float | str]], ...
 ]:
@@ -72,12 +73,12 @@ def data(only_best_accuracy: bool = False,
 
     # Build filtering conditions based on provided parameters.
     params, where_clause = sql_where([task, dataset, metric, nn, epoch])
-
     if nn_prefixes:
         where_clause += ' AND (' + ' OR '.join([f"nn LIKE '{prefix}%'" for prefix in nn_prefixes]) + ')'
 
     source = f'(SELECT s.* FROM stat s {where_clause})'
-
+    if unique_nn:
+        source = f'(SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY nn ORDER BY accuracy DESC) rn FROM {source}) WHERE rn = 1)'
     if only_best_accuracy:
         source = """
             (WITH filtered_stat AS {source}
@@ -121,6 +122,7 @@ def data(only_best_accuracy: bool = False,
     finally:
         if conn: close_conn(conn)
 
+
 def run_data(
         model_name: str | None = None,
         device_type: str | None = None,
@@ -146,7 +148,12 @@ def run_data(
     try:
         cur.execute(
             f"""
-            SELECT id, model_name, device_type, os_version, valid, emulator, error_message, duration, device_analytics_json
+            SELECT id, model_name, device_type, os_version, valid, emulator, error_message, duration,
+                   iterations, unit, cpu_duration, cpu_min_duration, cpu_max_duration, cpu_std_dev, cpu_error,
+                   gpu_duration, gpu_min_duration, gpu_max_duration, gpu_std_dev, gpu_error,
+                   npu_duration, npu_min_duration, npu_max_duration, npu_std_dev, npu_error,
+                   total_ram_kb, free_ram_kb, available_ram_kb, cached_kb,
+                   in_dim_0, in_dim_1, in_dim_2, in_dim_3, device_analytics_json
             FROM {run_table}
             {where_clause}
             ORDER BY model_name
