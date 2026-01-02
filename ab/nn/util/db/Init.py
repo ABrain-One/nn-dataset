@@ -82,6 +82,38 @@ def init_db():
         emulator BOOLEAN,
         error_message TEXT,
         duration INTEGER,
+        
+        iterations INTEGER,
+        unit TEXT,
+        
+        cpu_duration INTEGER,
+        cpu_min_duration INTEGER,
+        cpu_max_duration INTEGER,
+        cpu_std_dev REAL,
+        cpu_error TEXT,
+        
+        gpu_duration INTEGER,
+        gpu_min_duration INTEGER,
+        gpu_max_duration INTEGER,
+        gpu_std_dev REAL,
+        gpu_error TEXT,
+        
+        npu_duration INTEGER,
+        npu_min_duration INTEGER,
+        npu_max_duration INTEGER,
+        npu_std_dev REAL,
+        npu_error TEXT,
+        
+        total_ram_kb INTEGER,
+        free_ram_kb INTEGER,
+        available_ram_kb INTEGER,
+        cached_kb INTEGER,
+        
+        in_dim_0 INTEGER,
+        in_dim_1 INTEGER,
+        in_dim_2 INTEGER,
+        in_dim_3 INTEGER,
+        
         device_analytics_json TEXT,
         FOREIGN KEY (model_name) REFERENCES nn (name) ON DELETE CASCADE
     )
