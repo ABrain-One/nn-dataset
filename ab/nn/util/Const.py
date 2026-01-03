@@ -80,6 +80,7 @@ data_dir = ab_root_path / 'data'
 db_dir = ab_root_path / 'db'
 demo_dir = ab_root_path / 'demo'
 db_file = db_dir / 'ab.nn.db'
+zst_db_file = db_dir / 'ab.nn.zst'
 
 onnx_dir = out_dir / 'onnx'
 onnx_file = onnx_dir / 'nn.onnx'
