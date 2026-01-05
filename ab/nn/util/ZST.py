@@ -1,7 +1,7 @@
+import os
+from pathlib import Path
+
 import zstandard as zstd
-
-from ab.nn.util.hf.HF import *
-
 
 def compress(input_path: Path, output_path: Path, remove: bool = False):
     compressor = zstd.ZstdCompressor(
