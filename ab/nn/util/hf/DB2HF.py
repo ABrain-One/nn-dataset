@@ -12,7 +12,7 @@ def clean_gen_folders():
         shutil.rmtree(gen_folder)
 
 
-def db2hf(remove_gen_folders: bool = False):
+def db2hf(remove_gen_folders = False):
     init_population()
     compress(db_file, zst_db_file, True)
     upload_file(repo_id, zst_db_file, zst_db_file, True)
@@ -21,6 +21,8 @@ def db2hf(remove_gen_folders: bool = False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--remove_gen_folders', type=bool, default=False)
+    parser.add_argument('--remove_gen_folders', action=argparse.BooleanOptionalAction)
+    parser.add_argument('--HF_TOKEN', type=str, default=None)
     a = parser.parse_args()
+    if a.HF_TOKEN: os.environ["MY_API_KEY"] = a.HF_TOKEN
     db2hf(remove_gen_folders=a.remove_gen_folders)
