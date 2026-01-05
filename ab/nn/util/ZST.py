@@ -1,8 +1,6 @@
-import os
-
 import zstandard as zstd
 
-from ab.nn.util.Const import *
+from ab.nn.util.hf.HF import *
 
 
 def compress(input_path: Path, output_path: Path, remove: bool = False):
@@ -21,21 +19,3 @@ def decompress(input_path: Path, output_path: Path, remove: bool = False):
     with open(input_path, "rb") as fin, open(output_path, "wb") as f:
         decompressor.copy_stream(fin, f)
     if remove: os.remove(input_path)
-
-
-def clean_gen_folders():
-    pass
-
-
-def compress_db():
-    compress(db_file, zst_db_file, True)
-    clean_gen_folders()
-
-
-def decompress_db():
-    decompress(zst_db_file, db_file, True)
-
-
-if __name__ == "__main__":
-    compress_db()
-    decompress_db()

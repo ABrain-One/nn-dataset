@@ -55,6 +55,9 @@ stat_train_dir = stat_dir / 'train'
 stat_run_dir = stat_dir / 'run'
 stat_nn_dir = stat_dir / 'nn'
 
+code_folder = (transform_dir, nn_dir, metric_dir)
+gen_folders = code_folder + (stat_dir,)
+
 def __project_root_path():
     """
     Defines a path to the project root directory.
@@ -81,6 +84,7 @@ db_dir = ab_root_path / 'db'
 demo_dir = ab_root_path / 'demo'
 db_file = db_dir / 'ab.nn.db'
 zst_db_file = db_dir / 'ab.nn.zst'
+
 
 onnx_dir = out_dir / 'onnx'
 onnx_file = onnx_dir / 'nn.onnx'

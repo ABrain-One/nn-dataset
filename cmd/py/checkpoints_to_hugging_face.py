@@ -24,7 +24,7 @@ try:
     from ab.nn.train import main as train_main
     from ab.nn.util.Const import stat_train_dir, ckpt_dir, HF_NN
     from ab.nn.util.Util import release_memory
-    import ab.nn.util.HF as HF
+    import ab.nn.util.hf.HF as HF
 except ImportError:
     print("\n❌ Critical Error: Could not import 'ab.nn' modules.")
     print("   Please ensure you are running this script from the project root or 'cmd/py' folder.")
