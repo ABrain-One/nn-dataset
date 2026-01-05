@@ -1,15 +1,14 @@
 import sys
 import os
+from ab.nn.util.Const import ab_root_path
 
 # --- AUTO-PATH SETUP (Make script Plug & Play) ---
 # Automatically detects project root and adds it to system path.
 # This ensures the script runs without manually setting 'export PYTHONPATH'.
 try:
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(current_dir, '../../'))
-    if project_root not in sys.path:
-        sys.path.append(project_root)
-    print(f'✅ Project Root detected at: {project_root}')
+    if ab_root_path not in sys.path:
+        sys.path.append(ab_root_path)
+    print(f'✅ Project Root detected at: {ab_root_path}')
 except Exception as e:
     print(f'⚠️ Warning: Auto-path setup failed: {e}')
 
@@ -18,26 +17,20 @@ import json
 import shutil
 import time
 from pathlib import Path
-from huggingface_hub import HfApi, hf_hub_download
 
 # --- PROJECT IMPORTS ---
 try:
     from ab.nn.api import data
     from ab.nn.train import main as train_main
-    from ab.nn.util.Const import stat_train_dir, ckpt_dir
+    from ab.nn.util.Const import stat_train_dir, ckpt_dir, HF_NN
     from ab.nn.util.Util import release_memory
+    import ab.nn.util.HF as HF
 except ImportError:
     print("\n❌ Critical Error: Could not import 'ab.nn' modules.")
     print("   Please ensure you are running this script from the project root or 'cmd/py' folder.")
     sys.exit(1)
 
 # --- CONFIGURATION ---
-HF_TOKEN = os.environ.get('HF_TOKEN')
-if not HF_TOKEN:
-    # Fallback for testing
-    HF_TOKEN = ""
-    print('⚠️ Warning: No HF_TOKEN found. Please set environment variable.')
-HF_USERNAME = 'NN-Dataset'
 SUMMARY_FILENAME = 'all_models_summary.json'
 
 # =================================================================
@@ -45,7 +38,6 @@ SUMMARY_FILENAME = 'all_models_summary.json'
 # =================================================================
 TEST_MODE = False
 TEST_LIMIT = 10
-
 
 # =================================================================
 
@@ -61,12 +53,7 @@ def get_existing_models_and_summary(repo_id):
     uploaded_models = set()
 
     try:
-        local_path = hf_hub_download(
-            repo_id=repo_id,
-            filename=SUMMARY_FILENAME,
-            token=HF_TOKEN,
-            local_dir='.'
-        )
+        local_path = HF.download(repo_id, SUMMARY_FILENAME, '.')
         with open(local_path, 'r') as f:
             summary_data = json.load(f)
 
@@ -87,7 +74,7 @@ def upload_to_hf(model_name, epoch_max, dataset, task, metric, accuracy, summary
     # --- SUPER FIX: BLIND SEARCH ---
     # Strategy: Since we clean the output folder before training, 
     # we don't need to match the filename. We simply grab the newest .pth file found.
-    expected_file = None
+    local_checkpoint = None
 
     # Check 1: ckpt_dir (standard path)
     files_in_ckpt = list(ckpt_dir.rglob('*.pth'))
@@ -106,23 +93,13 @@ def upload_to_hf(model_name, epoch_max, dataset, task, metric, accuracy, summary
         # Pick the most recent file (Created within the last minute)
         latest_file = max(valid_files, key=os.path.getmtime)
         print(f'   🔍 Super-Search found latest file: {latest_file}')
-        expected_file = latest_file
+        local_checkpoint = latest_file
     else:
         # Green warning (No panic) - likely low accuracy model
         print('   ℹ️ No .pth file generated (Likely due to low accuracy). Uploading Metadata only.')
 
-    api = HfApi(token=HF_TOKEN)
     try:
-        api.create_repo(repo_id=repo_id, repo_type='model', exist_ok=True)
-
-        # 1. Upload .pth (If exists)
-        if expected_file and expected_file.exists():
-            api.upload_file(
-                path_or_fileobj=str(expected_file),
-                path_in_repo=f'{model_name}.pth',
-                repo_id=repo_id,
-                repo_type='model'
-            )
+        HF.upload_file(repo_id, local_checkpoint,  f'{model_name}.pth')
 
         # 2. Update Master Data
         new_metadata = {
@@ -143,12 +120,7 @@ def upload_to_hf(model_name, epoch_max, dataset, task, metric, accuracy, summary
                 json.dump(summary_data, f, indent=4)
 
             # 3. Upload Master JSON
-            api.upload_file(
-                path_or_fileobj=SUMMARY_FILENAME,
-                path_in_repo=SUMMARY_FILENAME,
-                repo_id=repo_id,
-                repo_type='model'
-            )
+            HF.upload_file(repo_id, SUMMARY_FILENAME, SUMMARY_FILENAME)
 
         print(f'✅ Successfully processed {model_name}')
 
@@ -173,7 +145,7 @@ def main():
         task = 'img-classification'
         metric = 'acc'
         REPO_NAME = 'checkpoints-epoch-' + str(epoch_train_max)
-        repo_id = f'{HF_USERNAME}/{REPO_NAME}'
+        repo_id = f'{HF_NN}/{REPO_NAME}'
 
         df = (data(only_best_accuracy=True, task=task, dataset=dataset, metric=metric, epoch=epoch_max,
                    nn_prefixes=('rag-', 'unq-'))
