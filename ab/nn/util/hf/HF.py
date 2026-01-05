@@ -31,4 +31,4 @@ def upload_file(repo_id, local_file, path_in_repo, remove: bool = False, hf_toke
             path_in_repo=str(Path(path_in_repo).name),
             repo_id=repo_id,
             repo_type='model')
-        if remove: os.remove(local_file)
+        if remove: Path(local_file).unlink()
