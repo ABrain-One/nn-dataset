@@ -1,6 +1,7 @@
 import sys
 import os
 from ab.nn.util.Const import ab_root_path
+from ab.nn.util.db.Util import unique_nn_cls
 
 # --- AUTO-PATH SETUP (Make script Plug & Play) ---
 # Automatically detects project root and adds it to system path.
@@ -38,6 +39,7 @@ SUMMARY_FILENAME = 'all_models_summary.json'
 # =================================================================
 TEST_MODE = False
 TEST_LIMIT = 10
+
 
 # =================================================================
 
@@ -99,7 +101,7 @@ def upload_to_hf(model_name, epoch_max, dataset, task, metric, accuracy, summary
         print('   ℹ️ No .pth file generated (Likely due to low accuracy). Uploading Metadata only.')
 
     try:
-        HF.upload_file(repo_id, local_checkpoint,  f'{model_name}.pth')
+        HF.upload_file(repo_id, local_checkpoint, f'{model_name}.pth')
 
         # 2. Update Master Data
         new_metadata = {
@@ -146,10 +148,7 @@ def main():
         metric = 'acc'
         REPO_NAME = 'checkpoints-epoch-' + str(epoch_train_max)
         repo_id = f'{HF_NN}/{REPO_NAME}'
-
-        df = (data(only_best_accuracy=True, task=task, dataset=dataset, metric=metric, epoch=epoch_max,
-                   nn_prefixes=('rag-', 'unq-'))
-              .sort_values(by='accuracy', ascending=False))
+        df = unique_nn_cls(epoch_max, dataset, task, metric)
 
         if TEST_MODE:
             df = df[:TEST_LIMIT]
