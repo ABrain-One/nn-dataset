@@ -1,4 +1,9 @@
+from importlib.metadata import version
 from pathlib import Path
+
+def add_version(nm: str) -> str:
+    return nm #+ '-' + version(__package__)
+
 
 default_config = ''
 default_epochs = 1
@@ -54,7 +59,7 @@ stat_train_dir = stat_dir / 'train'
 stat_run_dir = stat_dir / 'run'
 stat_nn_dir = stat_dir / 'nn'
 
-code_folder = (transform_dir, nn_dir, metric_dir)
+code_folder = (nn_dir, metric_dir)  # transform_dir,
 gen_folders = code_folder + (stat_dir,)
 
 
@@ -83,7 +88,7 @@ data_dir = ab_root_path / 'data'
 db_dir = ab_root_path / 'db'
 demo_dir = ab_root_path / 'demo'
 db_file = db_dir / 'ab.nn.db'
-zst_db_file = db_dir / 'ab.nn.zst'
+zst_db_file = db_dir / add_version('ab.nn.zst')
 
 onnx_dir = out_dir / 'onnx'
 onnx_file = onnx_dir / 'nn.onnx'

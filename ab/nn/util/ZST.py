@@ -4,7 +4,7 @@ import zstandard as zstd
 
 def compress(input_path: Path, output_path: Path, remove: bool = False):
     compressor = zstd.ZstdCompressor(
-        level=22,  # strongest standard compression
+        level=16,  # strongest standard compression
         threads=0  # use all CPU cores
     )
     with open(input_path, "rb") as fin, open(output_path, "wb") as f:
