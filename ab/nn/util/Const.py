@@ -54,7 +54,7 @@ stat_train_dir = stat_dir / 'train'
 stat_run_dir = stat_dir / 'run'
 stat_nn_dir = stat_dir / 'nn'
 
-code_folder = (transform_dir, nn_dir, metric_dir)
+code_folder = (nn_dir, metric_dir) # transform_dir,
 gen_folders = code_folder + (stat_dir,)
 
 
