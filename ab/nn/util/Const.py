@@ -1,8 +1,30 @@
-from importlib.metadata import version
+import os
 from pathlib import Path
 
+
+def get_version(version_file='version'):
+    try:
+        from importlib.metadata import version
+        return version(__package__)
+    except:
+        pass
+
+    """Reads the version from the VERSION file located in the project root."""
+    current_dir = Path(__file__)
+
+    while current_dir != current_dir.parent and not ((current_dir / version_file).exists() and (current_dir / "pyproject.toml").exists()):
+        current_dir = current_dir.parent
+    version_path = current_dir / version_file
+    if not os.path.isfile(version_path):
+        raise FileNotFoundError(f"{version_file} not found in the project directory.")
+
+    with open(version_path, "r") as f:
+        version = f.read().strip()
+    return version
+
+
 def add_version(nm: str) -> str:
-    return nm #+ '-' + version(__package__)
+    return nm + '-' + get_version()
 
 
 default_config = ''
