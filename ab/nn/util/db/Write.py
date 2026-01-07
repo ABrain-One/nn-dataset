@@ -1,20 +1,22 @@
 import sys
-import json
+
 from tqdm import tqdm
-from pathlib import Path
 
 from ab.nn.util.Util import *
 from ab.nn.util.db.Init import init_db, sql_conn, close_conn
-
+from ab.nn.util.hf.DB_from_HF import db_from_hf
 
 def init_population():
     if not db_file.exists():
-        init_db()
-        json_train_to_db()
-        try:
-            json_run_to_db()
-        except Exception as e:
-            print(f"Runtime analytics import failed: {e}")
+        if stat_dir.exists():
+            init_db()
+            json_train_to_db()
+            try:
+                json_run_to_db()
+            except Exception as e:
+                print(f"Runtime analytics import failed: {e}")
+        else:
+            db_from_hf()
 
 
 def code_to_db(cursor, table_name, code=None, code_file=None, force_name = None):
