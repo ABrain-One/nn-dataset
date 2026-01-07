@@ -5,7 +5,7 @@ from pathlib import Path
 def get_version(version_file='version'):
     try:
         from importlib.metadata import version
-        return version(__package__)
+        return version('nn-dataset')
     except:
         pass
 
