@@ -39,12 +39,12 @@ def data(only_best_accuracy: bool = False,
          task: Optional[str] = None,
          dataset: Optional[str] = None,
          metric: Optional[str] = None,
-         nn: Optional[str] = None,
+         nn: Optional[str | tuple[str]] = None,
          epoch: Optional[int] = None,
          max_rows: Optional[int] = None,
          nn_prefixes: Optional[tuple] = None,
          sql: Optional[JoinConf] = None,
-         unique_nn: bool=False,
+         unique_nn: bool = False,
          ) -> tuple[
     dict[str, int | float | str | dict[str, int | float | str]], ...
 ]:
@@ -62,7 +62,7 @@ def data(only_best_accuracy: bool = False,
       - 'dataset': str
       - 'metric': str
       - 'metric_code': str    (source code from the metric table)
-      - 'nn': str
+      - 'nn': str or tuple[str]
       - 'nn_code': str        (source code from the nn table)
       - 'epoch': int
       - 'accuracy': float
@@ -183,8 +183,13 @@ def sql_where(value_list):
     params = []
     for nm, v in zip(main_columns_ext, value_list):
         if v is not None:
-            filters.append(f"s.{nm} = ?")
-            params.append(v)
+            if isinstance(v, tuple):
+                phs = ",".join("?" for _ in v)
+                filters.append(f"s.{nm} in ({phs})")
+                params.extend(v)
+            else:
+                filters.append(f"s.{nm} = ?")
+                params.append(v)
     return params, ' WHERE ' + ' AND '.join(filters) if filters else ''
 
 

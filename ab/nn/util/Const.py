@@ -1,4 +1,31 @@
+import os
 from pathlib import Path
+
+
+def get_version(version_file='version'):
+    try:
+        from importlib.metadata import version
+        return version('nn-dataset')
+    except:
+        pass
+
+    """Reads the version from the VERSION file located in the project root."""
+    current_dir = Path(__file__)
+
+    while current_dir != current_dir.parent and not ((current_dir / version_file).exists() and (current_dir / "pyproject.toml").exists()):
+        current_dir = current_dir.parent
+    version_path = current_dir / version_file
+    if not os.path.isfile(version_path):
+        raise FileNotFoundError(f"{version_file} not found in the project directory.")
+
+    with open(version_path, "r") as f:
+        version = f.read().strip()
+    return version
+
+
+def add_version(nm: str) -> str:
+    return nm + '-' + get_version()
+
 
 default_config = ''
 default_epochs = 1
@@ -22,8 +49,7 @@ default_random_config_order = False
 default_save_pth_weights = False
 default_save_onnx_weights = False
 
-default_epoch_limit_minutes = 30 # minutes
-
+default_epoch_limit_minutes = 30  # minutes
 
 base_module = 'ab'
 to_nn = (base_module, 'nn')
@@ -55,6 +81,10 @@ stat_train_dir = stat_dir / 'train'
 stat_run_dir = stat_dir / 'run'
 stat_nn_dir = stat_dir / 'nn'
 
+code_folder = (nn_dir, metric_dir)  # transform_dir,
+gen_folders = code_folder + (stat_dir,)
+
+
 def __project_root_path():
     """
     Defines a path to the project root directory.
@@ -80,6 +110,7 @@ data_dir = ab_root_path / 'data'
 db_dir = ab_root_path / 'db'
 demo_dir = ab_root_path / 'demo'
 db_file = db_dir / 'ab.nn.db'
+zst_db_file = db_dir / add_version('ab.nn.zst')
 
 onnx_dir = out_dir / 'onnx'
 onnx_file = onnx_dir / 'nn.onnx'
@@ -100,7 +131,63 @@ run_table = 'run'
 run_main_index = ('task', 'dataset', 'metric', 'nn')
 run_extra_columns = (
     'device_type', 'os_version', 'valid', 'emulator', 'error_message',
-    'duration', 'device_analytics_json'
-)
+    'duration', 'device_analytics_json')
 
 tmp_data = 'temp_data'
+
+HF_NN = 'NN-Dataset'
+
+core_nn_cls = (
+    # img-classification
+    'AirNet',
+    'AirNext',
+    'AlexNet',
+    'BagNet',
+    'ComplexNet',
+    'BayesianNet-1',
+    'ConvNeXt',
+    'ConvNeXtTransformer',
+    'DPN107',
+    'DPN131',
+    'DPN68',
+    'DarkNet',
+    'DenseNet',
+    'Diffuser',
+    'EfficientNet',
+    'FractalNet',
+    'GoogLeNet',
+    'ICNet',
+    'InceptionV3-1',
+    'MNASNet',
+    'MaxVit',
+    'MoE-hetero4-Alex-Dense-Air-Bag',
+    'MobileNetV2',
+    'MobileNetV3',
+    'RegNet',
+    'ResNet',
+    'ShuffleNet',
+    'SqueezeNet-1',
+    'SwinTransformer',
+    'UNet2D',
+    'VGG',
+    'VisionTransformer')
+
+core_nn = core_nn_cls + (
+    # img-segmentation
+    'DeepLabV3-1',
+    'FCN8s',
+    'FCN16s',
+    'FCN32s-1',
+    'LRASPP',
+    'UNet-1',
+    # obj-detection
+    'FasterRCNN',
+    'FCOS',
+    'RetinaNet',
+    'SSDLite',
+    # txt-generation
+    'LSTM',
+    'RNN',
+    # img-captioning
+    'RESNETLSTM',
+    'ResNetTransformer')
