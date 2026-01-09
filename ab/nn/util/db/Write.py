@@ -87,14 +87,13 @@ def json_train_to_db():
     Reload all statistics into the database for all subconfigs and epochs.
     """
     conn, cursor = sql_conn()
-    stat_base_path = Path(stat_train_dir)
-    sub_configs = [d.name for d in stat_base_path.iterdir() if d.is_dir()]
+    sub_configs = [d.name for d in stat_train_dir.iterdir() if d.is_dir()]
 
     print(f"Importing all statistics from JSON files in {stat_train_dir} into database {db_file} ...")
 
     last_error = None
     for sub_config_str in tqdm(sub_configs):
-        model_stat_dir = stat_base_path / sub_config_str
+        model_stat_dir = stat_train_dir / sub_config_str
 
         for epoch_file in Path(model_stat_dir).iterdir():
             model_stat_file = model_stat_dir / epoch_file
