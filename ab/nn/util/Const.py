@@ -81,8 +81,8 @@ stat_train_dir = stat_dir / 'train'
 stat_run_dir = stat_dir / 'run'
 stat_nn_dir = stat_dir / 'nn'
 
-code_folder = (nn_dir, metric_dir)  # transform_dir,
-gen_folders = code_folder + (stat_dir,)
+code_folders = (nn_dir, metric_dir)  # transform_dir,
+gen_folders = (stat_dir,)
 
 
 def __project_root_path():

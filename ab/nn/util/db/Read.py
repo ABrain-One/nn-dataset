@@ -35,6 +35,12 @@ def query_cols_rows(q) -> tuple[list, list]:
     return columns, rows
 
 
+def code(table: str, nm: str) -> str:
+    return query_rows(f'SELECT code FROM {table} where name = ?', [nm])[0][0]
+
+def nn_code(nm: str) -> str:
+    return code('nn', nm)
+
 def data(only_best_accuracy: bool = False,
          task: Optional[str] = None,
          dataset: Optional[str] = None,
