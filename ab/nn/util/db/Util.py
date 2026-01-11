@@ -1,3 +1,5 @@
+from typing import Optional
+
 import pandas as pd
 
 from ab.nn.util.Util import *
@@ -19,11 +21,11 @@ def unique_nn_cls(epoch_max, dataset='cifar-10', task='img-classification', metr
 def get_attr(mod, f):
     return get_obj_attr(__import__(mod, fromlist=[f]), f)
 
-def get_package_location(package_name):
+def get_package_location(package_name) -> Optional[Path]:
     import pkg_resources
     try:
         distribution = pkg_resources.get_distribution(package_name)
-        return distribution.location
+        return Path(distribution.location)
     except pkg_resources.DistributionNotFound:
         return None
 
