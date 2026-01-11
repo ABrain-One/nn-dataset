@@ -14,7 +14,6 @@ import ab.nn.util.db.Read as DB_Read
 import ab.nn.util.db.Write as DB_Write
 from ab.nn.api import JoinConf
 from ab.nn.util.Const import *
-from ab.nn.util.Util import read_py_file_as_string
 
 
 class Testing(unittest.TestCase):
@@ -119,7 +118,7 @@ class Testing(unittest.TestCase):
     #  check_nn with trainer stubbed out
     # ------------------------------------------------------------------
     def test_check_nn(self):
-        code = read_py_file_as_string(default_nn_path)
+        code = DB_Read.nn_code(default_nn_name)
 
         result = api.check_nn(
             code,

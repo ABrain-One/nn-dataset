@@ -19,10 +19,18 @@ def unique_nn_cls(epoch_max, dataset='cifar-10', task='img-classification', metr
 def get_attr(mod, f):
     return get_obj_attr(__import__(mod, fromlist=[f]), f)
 
+def get_package_location(package_name):
+    import pkg_resources
+    try:
+        distribution = pkg_resources.get_distribution(package_name)
+        return distribution.location
+    except pkg_resources.DistributionNotFound:
+        return None
 
 def nn_mod(*nms):
+    lemur_root = get_package_location(nn_dataset) or ab_root_path
     mod = ".".join(to_nn + nms)
-    code_file = ab_root_path / (mod.replace('.', '/') + '.py')
+    code_file = lemur_root / (mod.replace('.', '/') + '.py')
     if not code_file.exists():
         code_file.parent.mkdir(parents=True, exist_ok=True)
         mod_l = mod.split('.')

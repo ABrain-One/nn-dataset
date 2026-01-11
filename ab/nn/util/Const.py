@@ -1,11 +1,12 @@
 import os
 from pathlib import Path
 
+nn_dataset = 'nn-dataset'
 
 def get_version(version_file='version'):
     try:
         from importlib.metadata import version
-        return version('nn-dataset')
+        return version(nn_dataset)
     except:
         pass
 
