@@ -81,7 +81,7 @@ class Testing(unittest.TestCase):
     def test_data(self):
         all_rows = DB_Read.data()
         img_rows = DB_Read.data(task="img-classification", nn=default_nn_name)
-        img_3_rows = DB_Read.data(task="img-classification", nn=default_nn_name, max_rows=3, only_best_accuracy=True)
+        img_3_rows = DB_Read.data(task="img-classification", nn=default_nn_name, max_rows=3, only_best_accuracy=True, include_nn_stats=True)
         print(img_3_rows)
         self.assertGreater(len(all_rows), len(img_rows))
         self.assertGreater(len(img_rows), len(img_3_rows))
@@ -95,7 +95,7 @@ class Testing(unittest.TestCase):
     # ------------------------------------------------------------------
     def test_data_join(self):
         df = api.data(only_best_accuracy=True, task="img-classification",
-                        nn_prefixes=('rag-',), max_rows=500,
+                        nn_prefixes=('rag-',), max_rows=500, include_nn_stats=True,
                         sql=JoinConf(num_joint_nns=2,
                                      same_columns=('task', 'dataset', 'metric', 'epoch'),
                                      diff_columns=('nn',),
