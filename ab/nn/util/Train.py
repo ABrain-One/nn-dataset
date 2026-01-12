@@ -1,13 +1,10 @@
 import importlib
 import sys
 import time as time
-from os.path import join
+from dataclasses import dataclass, asdict
+from typing import List, Optional
 from typing import Union
-from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Any, Optional
 
-import numpy as np
-import torch
 from torch.cuda import OutOfMemoryError
 
 import ab.nn.util.CodeEval as codeEvaluator
@@ -18,6 +15,7 @@ from ab.nn.util.Loader import load_dataset
 from ab.nn.util.Util import *
 from ab.nn.util.db.Calc import save_results
 from ab.nn.util.db.Read import supported_transformers
+from ab.nn.util.db.Util import *
 
 debug = False
 
@@ -157,9 +155,7 @@ class Train:
         self.train_loader = train_loader_f(self.train_dataset, self.batch, num_workers)
         self.test_loader = test_loader_f(self.test_dataset, self.batch, num_workers)
 
-        for input_tensor, _ in self.train_loader:
-            self.in_shape = np.array(input_tensor).shape  # Model input tensor shape (e.g., (8, 3, 32, 32) for a batch size 8, RGB image 32x32 px).
-            break
+        self.in_shape = get_in_shape(train_dataset, num_workers) # Model input tensor shape (e.g., (8, 3, 32, 32) for a batch size 8, RGB image 32x32 px).
         self.device = torch_device()
 
         # Load model

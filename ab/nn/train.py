@@ -1,57 +1,13 @@
-import os
-import json
 import optuna
-import torch
-
-from ab.nn.api import data
 from ab.nn.util.Exception import *
-from ab.nn.util import NNAnalysis, Const
 from ab.nn.util.Train import optuna_objective
+from ab.nn.util.db.Util import *
 from ab.nn.util.Util import *
+from ab.nn.util.NNAnalysis import log_nn_stat
 from ab.nn.util.db.Calc import patterns_to_configs
 from ab.nn.util.db.Read import remaining_trials
 from types import MappingProxyType
 
-
-DATASET_CONFIG = {
-    'cifar-10': {'in_shape': (1, 3, 32, 32), 'out_shape': (10,)},
-    'cifar-100': {'in_shape': (1, 3, 32, 32), 'out_shape': (100,)},
-    'mnist': {'in_shape': (1, 1, 28, 28), 'out_shape': (10,)},
-    'fashion-mnist': {'in_shape': (1, 1, 28, 28), 'out_shape': (10,)},
-    'svhn': {'in_shape': (1, 3, 32, 32), 'out_shape': (10,)},
-    'utkface': {'in_shape': (1, 3, 200, 200), 'out_shape': (1,)},
-    'coco': {'in_shape': (1, 3, 224, 224), 'out_shape': (1000,)},
-}
-
-def calculate_and_save_stats(nn_name: str, dataset_name: str):
-    try:
-        df = data(dataset=dataset_name, nn=nn_name)
-        if df is None or df.empty: return
-        
-        if not hasattr(Const, 'stat_dir'): return
-        os.makedirs(Const.stat_dir, exist_ok=True)
-        
-        config = DATASET_CONFIG.get(dataset_name.lower())
-        if not config: return
-        
-        for _, row in df.iterrows():
-            prm_id = row.get('prm_id')
-            if not prm_id or os.path.exists(os.path.join(Const.stat_dir, f"{prm_id}.json")): continue
-            
-            try:
-                prm = row.get('prm')
-                if isinstance(prm, str): prm = json.loads(prm.replace("'", '"'))
-                
-                local_scope = {'torch': torch, 'nn': torch.nn}
-                exec(row.get('nn_code'), local_scope, local_scope)
-                model = local_scope['Net'](config['in_shape'], config['out_shape'], prm, torch.device('cpu'))
-                
-                stats = NNAnalysis.analyze_model_comprehensive(model, row.get('nn_code'), config['in_shape'])
-                stats.update({'nn': row.get('nn'), 'prm_id': prm_id})
-                with open(os.path.join(Const.stat_dir, f"{prm_id}.json"), 'w') as f: json.dump(stats, f, indent=4)
-            except Exception as e:
-                with open(os.path.join(Const.stat_dir, f"{prm_id}.json"), 'w') as f: json.dump({'nn': row.get('nn'), 'prm_id': prm_id, 'error': repr(e)}, f, indent=4)
-    except: pass
 
 def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_hyperparameters, epoch_max: int = default_epochs, n_optuna_trials: int | str = default_trials,
          min_batch_binary_power: int = default_min_batch_power, max_batch_binary_power: int = default_max_batch_power,
@@ -136,7 +92,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
                                                                                     min_momentum, max_momentum, min_dropout, max_dropout,
                                                                                     min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, epoch_max,
                                                                                     pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights)
-                            # calculate_and_save_stats(nn, dataset) # todo: uncomment temporary commented functionality
+                            log_nn_stat(nn)
                             if good(accuracy, min_accuracy(dataset), duration):
                                 fail_iterations = nn_fail_attempts
                             last_accuracy = accuracy

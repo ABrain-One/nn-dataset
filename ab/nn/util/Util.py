@@ -7,16 +7,13 @@ import inspect
 import random
 import re
 import json
+from typing import Any
 
 import torch
 from os import makedirs, remove
 from os.path import exists, dirname, join
 
 from ab.nn.util.Const import *
-
-
-def nn_mod(*nms):
-    return ".".join(to_nn + nms)
 
 
 def create_file(file_dir, file_name, content=''):
@@ -42,18 +39,6 @@ def torch_device():
     else:
         device = torch.device("cpu")
     return device
-
-
-def get_attr(mod, f):
-    return get_obj_attr(__import__(mod, fromlist=[f]), f)
-
-
-def get_ab_nn_attr(mod, f):
-    return get_attr(nn_mod(mod), f)
-
-
-def min_accuracy(dataset):
-    return get_ab_nn_attr(f"loader.{dataset}", 'MINIMUM_ACCURACY')
 
 
 def order_configs(configs, random_config_order):
@@ -145,28 +130,6 @@ def release_memory():
         print(f"Exception during memory release: {e}")
 
 
-def read_py_file_as_string(file_path):
-    """
-    read_py_file_as_string。
-
-    param:
-        file_path (str): path of the file to read.
-
-    Return:
-        str: Content of the file.
-    """
-    try:
-        spec = importlib.util.spec_from_file_location("module_name", file_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        source_code = inspect.getsource(module)
-        return source_code
-    except Exception as e:
-        print(f"error when reading file: {e}")
-        return None
-
-
 def str_not_none(prefix, value):
     if value:
         return ' ' + prefix + str(value)
@@ -232,10 +195,19 @@ def save_if_best(model, model_name, current_score, save_pth_weights, save_onnx_w
         # Use the required function to save the PyTorch weights.
         if save_pth_weights: export_torch_weights(model, best_checkpoint_path)
         if save_onnx_weights:
-            for input_tensor, _ in train_loader_f(train_set, 1, num_workers):
-                t = input_tensor.to(torch_device())
-                export_model_to_onnx(model, t, join(checkpoint_dir, "best_model.onnx") if save_path else onnx_file)
-                break
+            t = first_tensor(train_set, num_workers)
+            export_model_to_onnx(model, t, join(checkpoint_dir, "best_model.onnx") if save_path else onnx_file)
+
+
+def first_tensor(train_set, num_workers=default_num_workers) -> Any:
+    t = None
+    for input_tensor, _ in train_loader_f(train_set, 1, num_workers):
+        t = input_tensor.to(torch_device())
+        break
+    return t
+
+def get_in_shape(train_set, num_workers=default_num_workers):
+    return first_tensor(train_set, num_workers).cpu().numpy().shape
 
 
 #  FUNCTIONS FOR SAVING AND LOADING WEIGHTS

@@ -46,7 +46,7 @@ def save_results(config_ext: tuple[str, str, str, str, int], model_stat_file: st
 
     trials_dict_all = sorted(trials_dict_all, key=lambda x: x['accuracy'], reverse=True)
     # Save trials.json
-    Path(model_stat_file).parent.absolute().mkdir(exist_ok=True)
+    Path(model_stat_file).parent.absolute().mkdir(parents=True, exist_ok=True)
     with open(model_stat_file, 'w') as f:
         json.dump(trials_dict_all, f, indent=4)
 

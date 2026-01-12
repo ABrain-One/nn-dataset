@@ -35,49 +35,88 @@ def query_cols_rows(q) -> tuple[list, list]:
     return columns, rows
 
 
+def code(table: str, nm: str) -> str:
+    return query_rows(f'SELECT code FROM {table} where name = ?', [nm])[0][0]
+
+def nn_code(nm: str) -> str:
+    return code('nn', nm)
+
 def data(only_best_accuracy: bool = False,
          task: Optional[str] = None,
          dataset: Optional[str] = None,
          metric: Optional[str] = None,
-         nn: Optional[str] = None,
+         nn: Optional[str | tuple[str]] = None,
          epoch: Optional[int] = None,
          max_rows: Optional[int] = None,
          nn_prefixes: Optional[tuple] = None,
          sql: Optional[JoinConf] = None,
+         unique_nn: bool = False,
+         include_nn_stats: bool = False,
          ) -> tuple[
     dict[str, int | float | str | dict[str, int | float | str]], ...
 ]:
     """
     Get the NN model code and all related statistics from the database.
-    
-    - If only_best_accuracy == True, then for every unique combination of 
+
+    - If only_best_accuracy == True, then for every unique combination of
       (task, dataset, metric, nn, epoch) only the row with the highest accuracy is returned.
     - If only_best_accuracy == False, all matching rows are returned.
     - Additionally, if any of the parameters (task, dataset, metric, nn, epoch) is not None,
       the results are filtered accordingly in the SQL query.
-      
+
     Each returned dictionary has the following keys:
       - 'task': str
       - 'dataset': str
       - 'metric': str
       - 'metric_code': str    (source code from the metric table)
-      - 'nn': str
+      - 'nn': str or tuple[str]
       - 'nn_code': str        (source code from the nn table)
       - 'epoch': int
       - 'accuracy': float
       - 'duration': int
       - 'prm': dict           (hyperparameters, reconstructed from the "prm" table)
       - 'transform_code': str (source code from the transform table)
+
+    If include_nn_stats == True, additional NN statistics fields are included:
+      - 'nn_total_params': int        (total model parameters)
+      - 'nn_trainable_params': int    (trainable parameters)
+      - 'nn_frozen_params': int       (frozen parameters)
+      - 'nn_total_layers': int        (total number of layers)
+      - 'nn_leaf_layers': int         (number of leaf layers)
+      - 'nn_max_depth': int           (maximum depth of the model)
+      - 'nn_flops': int               (floating point operations)
+      - 'nn_model_size_mb': float     (model size in MB)
+      - 'nn_buffer_size_mb': float    (buffer size in MB)
+      - 'nn_total_memory_mb': float   (total memory in MB)
+      - 'nn_dropout_count': int       (number of dropout layers)
+      - 'nn_has_attention': bool      (has attention mechanism)
+      - 'nn_has_residual': bool       (has residual connections)
+      - 'nn_is_resnet_like': bool     (ResNet-like architecture)
+      - 'nn_is_vgg_like': bool        (VGG-like architecture)
+      - 'nn_is_inception_like': bool  (Inception-like architecture)
+      - 'nn_is_densenet_like': bool   (DenseNet-like architecture)
+      - 'nn_is_unet_like': bool       (U-Net-like architecture)
+      - 'nn_is_transformer_like': bool (Transformer-like architecture)
+      - 'nn_is_mobilenet_like': bool  (MobileNet-like architecture)
+      - 'nn_is_efficientnet_like': bool (EfficientNet-like architecture)
+      - 'nn_code_length': int         (length of code in characters)
+      - 'nn_num_classes': int         (number of classes defined)
+      - 'nn_num_functions': int       (number of functions defined)
+      - 'nn_uses_sequential': bool    (uses Sequential module)
+      - 'nn_uses_modulelist': bool    (uses ModuleList)
+      - 'nn_uses_moduledict': bool    (uses ModuleDict)
+      - 'nn_stats_meta': dict         (additional metadata as JSON)
+      - 'nn_stats_error': str         (error message if statistics failed)
     """
 
     # Build filtering conditions based on provided parameters.
     params, where_clause = sql_where([task, dataset, metric, nn, epoch])
-
     if nn_prefixes:
         where_clause += ' AND (' + ' OR '.join([f"nn LIKE '{prefix}%'" for prefix in nn_prefixes]) + ')'
 
     source = f'(SELECT s.* FROM stat s {where_clause})'
-
+    if unique_nn:
+        source = f'(SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY nn ORDER BY accuracy DESC) rn FROM {source}) WHERE rn = 1)'
     if only_best_accuracy:
         source = """
             (WITH filtered_stat AS {source}
@@ -91,15 +130,63 @@ def data(only_best_accuracy: bool = False,
                AND f.nn = b.nn AND f.epoch = b.epoch AND f.accuracy = b.max_accuracy
         )""".format(source=source)
 
-    base_query = """
-        SELECT s.id, s.task, s.dataset, s.metric, m.code AS metric_code, m.id AS metric_id,
-               s.nn, n.code AS nn_code, n.id AS nn_id, s.epoch, s.accuracy, s.duration,
-               s.prm AS prm_id, t.code AS transform_code, t.id AS transform_id, s.transform
-        FROM {source} s
-        LEFT JOIN nn       n ON s.nn = n.name
-        LEFT JOIN metric   m ON s.metric = m.name
-        LEFT JOIN transform t ON s.transform = t.name       
-    """.format(source=source)
+    # Build the SELECT clause based on whether nn_stats are requested
+    if include_nn_stats:
+        select_clause = """
+            SELECT s.id, s.task, s.dataset, s.metric, m.code AS metric_code, m.id AS metric_id,
+                   s.nn, n.code AS nn_code, n.id AS nn_id, s.epoch, s.accuracy, s.duration,
+                   s.prm AS prm_id, t.code AS transform_code, t.id AS transform_id, s.transform,
+                   ns.total_params AS nn_total_params,
+                   ns.trainable_params AS nn_trainable_params,
+                   ns.frozen_params AS nn_frozen_params,
+                   ns.total_layers AS nn_total_layers,
+                   ns.leaf_layers AS nn_leaf_layers,
+                   ns.max_depth AS nn_max_depth,
+                   ns.flops AS nn_flops,
+                   ns.model_size_mb AS nn_model_size_mb,
+                   ns.buffer_size_mb AS nn_buffer_size_mb,
+                   ns.total_memory_mb AS nn_total_memory_mb,
+                   ns.dropout_count AS nn_dropout_count,
+                   ns.has_attention AS nn_has_attention,
+                   ns.has_residual_connections AS nn_has_residual,
+                   ns.is_resnet_like AS nn_is_resnet_like,
+                   ns.is_vgg_like AS nn_is_vgg_like,
+                   ns.is_inception_like AS nn_is_inception_like,
+                   ns.is_densenet_like AS nn_is_densenet_like,
+                   ns.is_unet_like AS nn_is_unet_like,
+                   ns.is_transformer_like AS nn_is_transformer_like,
+                   ns.is_mobilenet_like AS nn_is_mobilenet_like,
+                   ns.is_efficientnet_like AS nn_is_efficientnet_like,
+                   ns.code_length AS nn_code_length,
+                   ns.num_classes_defined AS nn_num_classes,
+                   ns.num_functions_defined AS nn_num_functions,
+                   ns.uses_sequential AS nn_uses_sequential,
+                   ns.uses_modulelist AS nn_uses_modulelist,
+                   ns.uses_moduledict AS nn_uses_moduledict,
+                   ns.meta_json AS nn_stats_meta,
+                   ns.error AS nn_stats_error
+        """
+        join_clause = """
+            FROM {source} s
+            LEFT JOIN nn       n ON s.nn = n.name
+            LEFT JOIN metric   m ON s.metric = m.name
+            LEFT JOIN transform t ON s.transform = t.name
+            LEFT JOIN nn_stat ns ON s.nn = ns.nn_name AND s.prm = ns.prm_id
+        """
+    else:
+        select_clause = """
+            SELECT s.id, s.task, s.dataset, s.metric, m.code AS metric_code, m.id AS metric_id,
+                   s.nn, n.code AS nn_code, n.id AS nn_id, s.epoch, s.accuracy, s.duration,
+                   s.prm AS prm_id, t.code AS transform_code, t.id AS transform_id, s.transform
+        """
+        join_clause = """
+            FROM {source} s
+            LEFT JOIN nn       n ON s.nn = n.name
+            LEFT JOIN metric   m ON s.metric = m.name
+            LEFT JOIN transform t ON s.transform = t.name
+        """
+
+    base_query = select_clause + join_clause.format(source=source)
 
     limit_clause = str_not_none('LIMIT ', max_rows)
 
@@ -109,17 +196,18 @@ def data(only_best_accuracy: bool = False,
         conn, cur = sql_conn()
         if sql: cur.execute(f'DROP TABLE IF EXISTS {tmp_data}')
         cur.execute(f'CREATE TEMP TABLE {tmp_data} AS {base_query} ORDER BY RANDOM()' if sql else
-                    f'''{base_query} 
-                        ORDER BY s.task, s.dataset, s.metric, s.nn, s.epoch 
+                    f'''{base_query}
+                        ORDER BY s.task, s.dataset, s.metric, s.nn, s.epoch
                         {limit_clause}''',
                     params)
         if sql:
             results = join_nn_query(sql, limit_clause, cur)
         else:
-            results = fill_hyper_prm(cur)
+            results = fill_hyper_prm(cur, include_nn_stats=include_nn_stats)
         return tuple(results)
     finally:
         if conn: close_conn(conn)
+
 
 def run_data(
         model_name: str | None = None,
@@ -146,7 +234,12 @@ def run_data(
     try:
         cur.execute(
             f"""
-            SELECT id, model_name, device_type, os_version, valid, emulator, error_message, duration, device_analytics_json
+            SELECT id, model_name, device_type, os_version, valid, emulator, error_message, duration,
+                   iterations, unit, cpu_duration, cpu_min_duration, cpu_max_duration, cpu_std_dev, cpu_error,
+                   gpu_duration, gpu_min_duration, gpu_max_duration, gpu_std_dev, gpu_error,
+                   npu_duration, npu_min_duration, npu_max_duration, npu_std_dev, npu_error,
+                   total_ram_kb, free_ram_kb, available_ram_kb, cached_kb,
+                   in_dim_0, in_dim_1, in_dim_2, in_dim_3, device_analytics_json
             FROM {run_table}
             {where_clause}
             ORDER BY model_name
@@ -176,8 +269,13 @@ def sql_where(value_list):
     params = []
     for nm, v in zip(main_columns_ext, value_list):
         if v is not None:
-            filters.append(f"s.{nm} = ?")
-            params.append(v)
+            if isinstance(v, tuple):
+                phs = ",".join("?" for _ in v)
+                filters.append(f"s.{nm} in ({phs})")
+                params.extend(v)
+            else:
+                filters.append(f"s.{nm} = ?")
+                params.append(v)
     return params, ' WHERE ' + ' AND '.join(filters) if filters else ''
 
 
@@ -223,6 +321,71 @@ def remaining_trials(config_ext, n_optuna_trials) -> tuple[int, int]:
 
     close_conn(conn)
     return n_remaining_trials, n_passed_trials
+
+
+def nn_stat_data(
+        nn_name: str | None = None,
+        prm_id: str | None = None,
+        max_rows: int | None = None,
+):
+    """
+    Query NN statistics from the `nn_stat` table with optional filters.
+    Returns a tuple of dicts with columns and parsed meta JSON.
+
+    :param nn_name: Filter by neural network name
+    :param prm_id: Filter by parameter configuration ID
+    :param max_rows: Maximum number of results to return
+    :return: Tuple of dictionaries containing NN statistics
+    """
+    params = []
+    filters = []
+    if nn_name is not None:
+        filters.append('nn_name = ?')
+        params.append(nn_name)
+    if prm_id is not None:
+        filters.append('prm_id = ?')
+        params.append(prm_id)
+
+    where_clause = (' WHERE ' + ' AND '.join(filters)) if filters else ''
+    limit_clause = (' LIMIT ' + str(max_rows)) if max_rows else ''
+
+    conn, cur = sql_conn()
+    try:
+        cur.execute(
+            f"""
+            SELECT id, nn_name, prm_id,
+                   total_layers, leaf_layers, max_depth,
+                   total_params, trainable_params, frozen_params,
+                   flops, model_size_mb, buffer_size_mb, total_memory_mb,
+                   dropout_count, has_attention, has_residual_connections,
+                   is_resnet_like, is_vgg_like, is_inception_like,
+                   is_densenet_like, is_unet_like, is_transformer_like,
+                   is_mobilenet_like, is_efficientnet_like,
+                   code_length, num_classes_defined, num_functions_defined,
+                   uses_sequential, uses_modulelist, uses_moduledict,
+                   meta_json, error
+            FROM nn_stat
+            {where_clause}
+            ORDER BY nn_name
+            {limit_clause}
+            """,
+            params,
+        )
+        rows = cur.fetchall()
+        columns = [c[0] for c in cur.description]
+        results = []
+        for r in rows:
+            rec = dict(zip(columns, r))
+            try:
+                if rec.get('meta_json'):
+                    rec['meta'] = json.loads(rec['meta_json'])
+            except Exception:
+                rec['meta'] = None
+            rec.pop('meta_json', None)
+            results.append(rec)
+        return tuple(results)
+    finally:
+        close_conn(conn)
 
 
 def supported_transformers() -> list[str]:
