@@ -134,6 +134,9 @@ run_extra_columns = (
     'device_type', 'os_version', 'valid', 'emulator', 'error_message',
     'duration', 'device_analytics_json')
 
+# NN statistics table
+nn_stat_table = 'nn_stat'
+
 tmp_data = 'temp_data'
 
 HF_NN = 'NN-Dataset'

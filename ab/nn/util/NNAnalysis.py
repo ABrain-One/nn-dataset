@@ -9,6 +9,7 @@ from ab.nn.api import data
 from ab.nn.util.Const import stat_nn_dir
 from ab.nn.util.Loader import load_dataset
 from ab.nn.util.Util import get_in_shape, torch_device, first_tensor
+from ab.nn.util.db.Write import save_nn_stat
 
 
 def get_max_depth(module, depth=0):
@@ -293,7 +294,7 @@ def read_json(path: Path) -> dict[str, dict]:
         return json.load(f)
 
 
-def log_nn_stat(nn_name: str, max_rows: Optional[int] = None, rewrite: bool = False):
+def log_nn_stat(nn_name: str, max_rows: Optional[int] = None, rewrite: bool = False, save_to_db: bool = True):
     try:
         df = data(nn=nn_name, max_rows=max_rows, unique_nn=True)
 
@@ -321,11 +322,26 @@ def log_nn_stat(nn_name: str, max_rows: Optional[int] = None, rewrite: bool = Fa
                     model.to(torch_device())
                     stats = analyze_model_comprehensive(model, nn_code, input_tensor)
                     stats.update({'prm_id': prm_id})
+
+                    # Save to JSON file
                     with open(f_nm, 'w') as f:
                         json.dump(stats, f, indent=4)
+
+                    # Save to database if requested
+                    if save_to_db:
+                        save_nn_stat(nn_name, prm_id, stats)
+
                 except Exception as e:
+                    error_stats = {'prm_id': prm_id, 'error': repr(e)}
+
+                    # Save error to JSON file
                     with open(f_nm, 'w') as f:
-                        json.dump({'prm_id': prm_id, 'error': repr(e)}, f, indent=4)
+                        json.dump(error_stats, f, indent=4)
+
+                    # Save error to database if requested
+                    if save_to_db:
+                        save_nn_stat(nn_name, prm_id, error_stats)
+
     except Exception as e:
         print(e)
         pass

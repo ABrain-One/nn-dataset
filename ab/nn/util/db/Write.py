@@ -5,6 +5,8 @@ from tqdm import tqdm
 from ab.nn.util.Util import *
 from ab.nn.util.db.Init import init_db, sql_conn, close_conn
 from ab.nn.util.hf.DB_from_HF import db_from_hf
+from ab.nn.util.Const import nn_stat_table
+
 
 def init_population():
     if not db_file.exists():
@@ -223,6 +225,171 @@ def save_nn(nn_code: str, task: str, dataset: str, metric: str, epoch: int, prm:
     save_stat((task, dataset, metric, nn, epoch), prm, cursor)
     close_conn(conn)
     return nn
+
+
+def save_nn_stat(nn_name: str, prm_id: str, stats: dict):
+    """
+    Save NN statistics to the database.
+
+    :param nn_name: Name of the neural network model
+    :param prm_id: Parameter ID (hyperparameter configuration identifier)
+    :param stats: Dictionary containing all statistics (should match the structure from analyze_model_comprehensive)
+    """
+    conn, cursor = sql_conn()
+
+    try:
+        # Generate unique ID for this statistics entry
+        id_val = uuid4([nn_name, prm_id])
+
+        # Check if entry already exists
+        cursor.execute(f"SELECT id FROM {nn_stat_table} WHERE nn_name = ? AND prm_id = ?", (nn_name, prm_id))
+        existing_entry = cursor.fetchone()
+
+        if existing_entry:
+            # Update existing entry
+            if 'error' in stats:
+                # If there's an error, only update the error field
+                cursor.execute(
+                    f"UPDATE {nn_stat_table} SET error = ? WHERE nn_name = ? AND prm_id = ?",
+                    (stats.get('error'), nn_name, prm_id)
+                )
+            else:
+                # Extract meta information as JSON
+                meta_json = json.dumps(stats.get('meta', {}))
+
+                # Update all fields
+                cursor.execute(f"""
+                UPDATE {nn_stat_table} SET
+                    total_layers = ?,
+                    leaf_layers = ?,
+                    max_depth = ?,
+                    total_params = ?,
+                    trainable_params = ?,
+                    frozen_params = ?,
+                    flops = ?,
+                    model_size_mb = ?,
+                    buffer_size_mb = ?,
+                    total_memory_mb = ?,
+                    dropout_count = ?,
+                    has_attention = ?,
+                    has_residual_connections = ?,
+                    is_resnet_like = ?,
+                    is_vgg_like = ?,
+                    is_inception_like = ?,
+                    is_densenet_like = ?,
+                    is_unet_like = ?,
+                    is_transformer_like = ?,
+                    is_mobilenet_like = ?,
+                    is_efficientnet_like = ?,
+                    code_length = ?,
+                    num_classes_defined = ?,
+                    num_functions_defined = ?,
+                    uses_sequential = ?,
+                    uses_modulelist = ?,
+                    uses_moduledict = ?,
+                    meta_json = ?,
+                    error = NULL
+                WHERE nn_name = ? AND prm_id = ?
+                """, (
+                    stats.get('total_layers'),
+                    stats.get('leaf_layers'),
+                    stats.get('max_depth'),
+                    stats.get('total_params'),
+                    stats.get('trainable_params'),
+                    stats.get('frozen_params'),
+                    stats.get('flops'),
+                    stats.get('model_size_mb'),
+                    stats.get('buffer_size_mb'),
+                    stats.get('total_memory_mb'),
+                    stats.get('dropout_count'),
+                    stats.get('has_attention'),
+                    stats.get('has_residual_connections'),
+                    stats.get('is_resnet_like'),
+                    stats.get('is_vgg_like'),
+                    stats.get('is_inception_like'),
+                    stats.get('is_densenet_like'),
+                    stats.get('is_unet_like'),
+                    stats.get('is_transformer_like'),
+                    stats.get('is_mobilenet_like'),
+                    stats.get('is_efficientnet_like'),
+                    stats.get('code_length'),
+                    stats.get('num_classes_defined'),
+                    stats.get('num_functions_defined'),
+                    stats.get('uses_sequential'),
+                    stats.get('uses_modulelist'),
+                    stats.get('uses_moduledict'),
+                    meta_json,
+                    nn_name,
+                    prm_id
+                ))
+        else:
+            # Insert new entry
+            if 'error' in stats:
+                # If there's an error, insert minimal entry with error
+                cursor.execute(
+                    f"""
+                    INSERT INTO {nn_stat_table} (id, nn_name, prm_id, error)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (id_val, nn_name, prm_id, stats.get('error'))
+                )
+            else:
+                # Extract meta information as JSON
+                meta_json = json.dumps(stats.get('meta', {}))
+
+                # Insert all fields
+                cursor.execute(f"""
+                INSERT INTO {nn_stat_table} (
+                    id, nn_name, prm_id,
+                    total_layers, leaf_layers, max_depth,
+                    total_params, trainable_params, frozen_params,
+                    flops, model_size_mb, buffer_size_mb, total_memory_mb,
+                    dropout_count, has_attention, has_residual_connections,
+                    is_resnet_like, is_vgg_like, is_inception_like,
+                    is_densenet_like, is_unet_like, is_transformer_like,
+                    is_mobilenet_like, is_efficientnet_like,
+                    code_length, num_classes_defined, num_functions_defined,
+                    uses_sequential, uses_modulelist, uses_moduledict,
+                    meta_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    id_val, nn_name, prm_id,
+                    stats.get('total_layers'),
+                    stats.get('leaf_layers'),
+                    stats.get('max_depth'),
+                    stats.get('total_params'),
+                    stats.get('trainable_params'),
+                    stats.get('frozen_params'),
+                    stats.get('flops'),
+                    stats.get('model_size_mb'),
+                    stats.get('buffer_size_mb'),
+                    stats.get('total_memory_mb'),
+                    stats.get('dropout_count'),
+                    stats.get('has_attention'),
+                    stats.get('has_residual_connections'),
+                    stats.get('is_resnet_like'),
+                    stats.get('is_vgg_like'),
+                    stats.get('is_inception_like'),
+                    stats.get('is_densenet_like'),
+                    stats.get('is_unet_like'),
+                    stats.get('is_transformer_like'),
+                    stats.get('is_mobilenet_like'),
+                    stats.get('is_efficientnet_like'),
+                    stats.get('code_length'),
+                    stats.get('num_classes_defined'),
+                    stats.get('num_functions_defined'),
+                    stats.get('uses_sequential'),
+                    stats.get('uses_modulelist'),
+                    stats.get('uses_moduledict'),
+                    meta_json
+                ))
+
+        close_conn(conn)
+        return True
+    except Exception as e:
+        close_conn(conn)
+        print(f"Error saving NN statistics to database: {e}")
+        return False
 
 
 init_population()
