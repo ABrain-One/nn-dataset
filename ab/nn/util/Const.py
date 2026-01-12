@@ -4,28 +4,46 @@ from pathlib import Path
 nn_dataset = 'nn-dataset'
 
 def get_version(version_file='version'):
+    """Reads the version from the VERSION file located in the project root."""
     try:
         from importlib.metadata import version
-        return version(nn_dataset)
-    except:
+        ver = version(nn_dataset)
+        if ver:
+            return ver
+    except Exception:
         pass
 
-    """Reads the version from the VERSION file located in the project root."""
-    current_dir = Path(__file__)
+    # Start from the directory containing this file and resolve to absolute path
+    current_dir = Path(__file__).parent.resolve()
 
-    while current_dir != current_dir.parent and not ((current_dir / version_file).exists() and (current_dir / "pyproject.toml").exists()):
-        current_dir = current_dir.parent
+    # Traverse up to find the project root (where both version and pyproject.toml exist)
+    max_iterations = 20  # Prevent infinite loops
+    for _ in range(max_iterations):
+        if (current_dir / version_file).exists() and (current_dir / "pyproject.toml").exists():
+            break
+        parent = current_dir.parent
+        if parent == current_dir:  # Reached filesystem root
+            break
+        current_dir = parent
+
     version_path = current_dir / version_file
-    if not os.path.isfile(version_path):
-        raise FileNotFoundError(f"{version_file} not found in the project directory.")
+    if not version_path.is_file():
+        raise FileNotFoundError(f"{version_file} not found in the project directory. Searched up to: {current_dir}")
 
     with open(version_path, "r") as f:
-        version = f.read().strip()
-    return version
+        version_str = f.read().strip()
+
+    if not version_str:
+        raise ValueError(f"Version file {version_path} is empty")
+
+    return version_str
 
 
 def add_version(nm: str) -> str:
-    return nm + '-' + get_version()
+    ver = get_version()
+    if not ver:
+        raise ValueError(f"get_version() returned None or empty string")
+    return nm + '-' + ver
 
 
 default_config = ''
@@ -133,6 +151,9 @@ run_main_index = ('task', 'dataset', 'metric', 'nn')
 run_extra_columns = (
     'device_type', 'os_version', 'valid', 'emulator', 'error_message',
     'duration', 'device_analytics_json')
+
+# NN statistics table
+nn_stat_table = 'nn_stat'
 
 tmp_data = 'temp_data'
 
