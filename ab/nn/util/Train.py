@@ -1,7 +1,10 @@
 import importlib
+import platform
+import psutil
 import sys
 import time as time
 from dataclasses import dataclass, asdict
+from pathlib import Path
 from typing import List, Optional
 from typing import Union
 
@@ -60,6 +63,50 @@ def get_gpu_memory_kb() -> Optional[float]:
     if torch.cuda.is_available():
         return torch.cuda.max_memory_allocated() / 1024
     return None
+
+
+def get_system_info() -> dict:
+    """Collect comprehensive system information"""
+    info = {
+        'cpu_type': platform.processor() or platform.machine(),
+        'cpu_count': psutil.cpu_count(logical=True),
+        'total_ram_gb': round(psutil.virtual_memory().total / (1024**3), 2),
+    }
+    
+    # GPU information
+    if torch.cuda.is_available():
+        try:
+            gpu_props = torch.cuda.get_device_properties(0)
+            info['gpu_type'] = gpu_props.name
+            info['gpu_total_memory_gb'] = round(gpu_props.total_memory / (1024**3), 2)
+        except Exception:
+            info['gpu_type'] = 'CUDA Available (details unavailable)'
+    else:
+        info['gpu_type'] = 'No GPU'
+    
+    return info
+
+
+def get_current_resource_usage() -> dict:
+    """Get current resource usage metrics"""
+    usage = {
+        'occupied_ram_gb': round(psutil.virtual_memory().used / (1024**3), 2),
+        'ram_usage_percent': psutil.virtual_memory().percent,
+        'cpu_usage_percent': psutil.cpu_percent(interval=0.1),
+    }
+    
+    # GPU memory usage
+    if torch.cuda.is_available():
+        try:
+            occupied_gpu_mb = torch.cuda.memory_allocated() / (1024**2)
+            usage['occupied_gpu_memory_mb'] = round(occupied_gpu_mb, 2)
+            usage['gpu_memory_usage_percent'] = round(
+                (torch.cuda.memory_allocated() / torch.cuda.get_device_properties(0).total_memory) * 100, 2
+            )
+        except Exception:
+            pass
+    
+    return usage
 
 
 def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout,
@@ -171,6 +218,10 @@ class Train:
         self.epoch_history: List[EpochMetrics] = []
         self.best_accuracy = 0.0
         self.best_epoch = 0
+        self.save_path = None
+        
+        # System information (collected once at initialization)
+        self.system_info = get_system_info()
 
     def _get_loss_function(self):
         """Get loss function for metric tracking"""
@@ -236,6 +287,11 @@ class Train:
 
     def train_n_eval(self, epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set, save_path: Union[str, Path] = None):
         """ Training and evaluation with comprehensive metrics tracking """
+
+        # Set save_path if not provided (for non-code training)
+        if save_path is None and not self.is_code:
+            save_path = model_stat_dir(self.config)
+        self.save_path = save_path
 
         start_time = time.time_ns()
         self.model.train_setup(self.prm)
@@ -313,40 +369,46 @@ class Train:
             # Build extended parameters with new metrics
             only_prm = {k: v for k, v in self.prm.items() if k not in {'uid', 'duration', 'accuracy', 'epoch'}}
             # Use 'lr' as the canonical learning-rate key to avoid duplication with 'learning_rate'
+            
+            # Collect current resource usage
+            resource_usage = get_current_resource_usage()
+            
             prm = merge_prm(self.prm, {
                                           'uid': uuid4(only_prm),
                                           'duration': duration,
                                           'accuracy': accuracy,
-                                          # NEW: Loss metrics
+                                          # Loss metrics
                                           'train_loss': train_loss,
                                           'test_loss': test_loss,
-                                          # NEW: Accuracy metrics
+                                          # Accuracy metrics
                                           'train_accuracy': train_accuracy,
-                                          # NEW: Training dynamics - store under 'lr' to match common hyperparameter naming
+                                          # Training dynamics
                                           'gradient_norm': grad_norm,
-                                          # NEW: Timing metrics
+                                          # Timing metrics
                                           'samples_per_second': samples_per_second,
-                                          # NEW: Best tracking
+                                          # Best tracking
                                           'best_accuracy': self.best_accuracy,
                                           'best_epoch': self.best_epoch,
-                                      } | ({'lr_now': lr_now} if lr_now else {})
-                                      # NEW: GPU memory (if available)
+                                      } 
+                                      # System information
+                                      | self.system_info
+                                      # Current resource usage
+                                      | resource_usage
+                                      # GPU memory (if available)
                                       | ({'gpu_memory_kb': get_gpu_memory_kb()} if get_gpu_memory_kb else {}))
 
             if self.save_to_db:
                 if self.is_code:  # We don't want the filename to contain full codes
-                    if save_path:
-                        save_results(self.config + (epoch,), join(save_path, f"{epoch}.json"), prm)
+                    if self.save_path:
+                        save_results(self.config + (epoch,), join(self.save_path, f"{epoch}.json"), prm)
                     else:
                         print(f"[WARN]parameter `save_Path` set to null, the statics will not be saved into a file.")
                 else:  # Legacy save result codes in file
-                    if save_path is None:
-                        save_path = model_stat_dir(self.config)
-                    save_results(self.config + (epoch,), join(save_path, f"{epoch}.json"), prm)
+                    save_results(self.config + (epoch,), join(self.save_path, f"{epoch}.json"), prm)
                     DB_Write.save_results(self.config + (epoch,), prm)  # Separated from Calc.save_results()
 
         # Save training summary at the end
-        if save_path and self.epoch_history:
+        if self.save_path and self.epoch_history:
             self._save_training_summary()
 
         return accuracy, accuracy_to_time, duration
@@ -354,6 +416,10 @@ class Train:
     def _save_training_summary(self):
         """Save comprehensive training summary"""
         import json
+        
+        # Get final resource usage
+        final_resource_usage = get_current_resource_usage()
+        
         summary = {
             'config': {
                 'task': self.config[0],
@@ -366,6 +432,7 @@ class Train:
                 'input_shape': list(self.in_shape),
                 'output_shape': list(self.out_shape) if hasattr(self.out_shape, '__iter__') else self.out_shape,
             },
+            'system_info': self.system_info,
             'training_summary': {
                 'total_epochs': len(self.epoch_history),
                 'best_accuracy': self.best_accuracy,
@@ -375,6 +442,7 @@ class Train:
                 'final_accuracy': self.epoch_history[-1].test_accuracy if self.epoch_history else 0,
                 'gpu_memory_kb': get_gpu_memory_kb(),
             },
+            'final_resource_usage': final_resource_usage,
             'learning_curves': {
                 'epochs': [e.epoch for e in self.epoch_history],
                 'train_loss': [e.train_loss for e in self.epoch_history],
@@ -387,7 +455,7 @@ class Train:
             'epoch_details': [asdict(e) for e in self.epoch_history]
         }
 
-        summary_path = out_dir / 'training_summary.json'
+        summary_path = Path(self.save_path) / 'training_summary.json'
         try:
             with open(summary_path, 'w') as f:
                 json.dump(summary, f, indent=2)
