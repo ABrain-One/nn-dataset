@@ -10,27 +10,42 @@ from ab.nn.util.db.Query import JoinConf
 
 
 @functools.lru_cache(maxsize=10)
-def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None, epoch=None, max_rows=None, sql: Optional[JoinConf] = None, nn_prefixes=None) -> DataFrame:
+def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None, epoch=None, max_rows=None, sql: Optional[JoinConf] = None, nn_prefixes=None,
+         unique_nn=False, include_nn_stats=False) -> DataFrame:
     """
     Get the NN model code and all related statistics as a pandas DataFrame.
 
     For the detailed description of arguments see :ref:`ab.nn.util.db.Read.data()`.
-    
+
     Parameters:
-      - only_best_accuracy (bool): If True, for each unique combination of 
+      - only_best_accuracy (bool): If True, for each unique combination of
           (task, dataset, metric, nn, epoch) only the row with the highest accuracy is returned.
           If False, all matching rows are returned.
       - task, dataset, metric, nn, epoch: Optional filters to restrict the results.
       - max_rows (int): Specifies the maximum number of results.
+      - include_nn_stats (bool): If True, include NN architecture statistics in the results.
+          This adds columns like 'nn_total_params', 'nn_flops', 'nn_model_size_mb', etc.
 
     Returns:
       - A pandas DataFrame where each row is a dictionary containing:
           'task', 'dataset', 'metric', 'metric_code',
           'nn', 'nn_code', 'epoch', 'accuracy', 'duration',
           'prm', and 'transform_code'.
+
+        If include_nn_stats=True, additional columns are included:
+          'nn_total_params', 'nn_trainable_params', 'nn_frozen_params',
+          'nn_total_layers', 'nn_leaf_layers', 'nn_max_depth',
+          'nn_flops', 'nn_model_size_mb', 'nn_buffer_size_mb', 'nn_total_memory_mb',
+          'nn_dropout_count', 'nn_has_attention', 'nn_has_residual',
+          'nn_is_resnet_like', 'nn_is_vgg_like', 'nn_is_inception_like',
+          'nn_is_densenet_like', 'nn_is_unet_like', 'nn_is_transformer_like',
+          'nn_is_mobilenet_like', 'nn_is_efficientnet_like',
+          'nn_code_length', 'nn_num_classes', 'nn_num_functions',
+          'nn_uses_sequential', 'nn_uses_modulelist', 'nn_uses_moduledict',
+          'nn_stats_meta' (dict with additional metadata), 'nn_stats_error'
     """
     dt: tuple[dict, ...] = DB_Read.data(only_best_accuracy, task=task, dataset=dataset, metric=metric, nn=nn, epoch=epoch, max_rows=max_rows,
-                                        sql=sql, nn_prefixes=nn_prefixes)
+                                        sql=sql, nn_prefixes=nn_prefixes, unique_nn=unique_nn, include_nn_stats=include_nn_stats)
     return DataFrame.from_records(dt)
 
 
@@ -49,6 +64,34 @@ def run_data(model_name=None, device_type=None, max_rows=None) -> DataFrame:
         'id', 'model_name', 'device_type', 'os_version', 'valid', 'emulator', 'error_message', 'duration', 'device_analytics'
     """
     dt: tuple[dict, ...] = DB_Read.run_data(model_name=model_name, device_type=device_type, max_rows=max_rows)
+    return DataFrame.from_records(dt)
+
+
+@functools.lru_cache(maxsize=10)
+def nn_stat_data(nn_name=None, prm_id=None, max_rows=None) -> DataFrame:
+    """
+    Get NN architecture statistics as a pandas DataFrame.
+
+    Parameters:
+      - nn_name (str | None): filter by neural network name
+      - prm_id (str | None): filter by parameter configuration ID
+      - max_rows (int | None): maximum number of results
+
+    Returns:
+      - A pandas DataFrame with columns:
+        'id', 'nn_name', 'prm_id',
+        'total_layers', 'leaf_layers', 'max_depth',
+        'total_params', 'trainable_params', 'frozen_params',
+        'flops', 'model_size_mb', 'buffer_size_mb', 'total_memory_mb',
+        'dropout_count', 'has_attention', 'has_residual_connections',
+        'is_resnet_like', 'is_vgg_like', 'is_inception_like',
+        'is_densenet_like', 'is_unet_like', 'is_transformer_like',
+        'is_mobilenet_like', 'is_efficientnet_like',
+        'code_length', 'num_classes_defined', 'num_functions_defined',
+        'uses_sequential', 'uses_modulelist', 'uses_moduledict',
+        'meta' (dict with additional metadata), 'error'
+    """
+    dt: tuple[dict, ...] = DB_Read.nn_stat_data(nn_name=nn_name, prm_id=prm_id, max_rows=max_rows)
     return DataFrame.from_records(dt)
 
 
