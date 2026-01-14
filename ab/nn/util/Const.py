@@ -1,4 +1,50 @@
+import os
 from pathlib import Path
+
+nn_dataset = 'nn-dataset'
+
+def get_version(version_file='version'):
+    """Reads the version from the VERSION file located in the project root."""
+    try:
+        from importlib.metadata import version
+        ver = version(nn_dataset)
+        if ver:
+            return ver
+    except Exception:
+        pass
+
+    # Start from the directory containing this file and resolve to absolute path
+    current_dir = Path(__file__).parent.resolve()
+
+    # Traverse up to find the project root (where both version and pyproject.toml exist)
+    max_iterations = 20  # Prevent infinite loops
+    for _ in range(max_iterations):
+        if (current_dir / version_file).exists() and (current_dir / "pyproject.toml").exists():
+            break
+        parent = current_dir.parent
+        if parent == current_dir:  # Reached filesystem root
+            break
+        current_dir = parent
+
+    version_path = current_dir / version_file
+    if not version_path.is_file():
+        raise FileNotFoundError(f"{version_file} not found in the project directory. Searched up to: {current_dir}")
+
+    with open(version_path, "r") as f:
+        version_str = f.read().strip()
+
+    if not version_str:
+        raise ValueError(f"Version file {version_path} is empty")
+
+    return version_str
+
+
+def add_version(nm: str) -> str:
+    ver = get_version()
+    if not ver:
+        raise ValueError(f"get_version() returned None or empty string")
+    return nm + '-' + ver
+
 
 default_config = ''
 default_epochs = 1
@@ -22,8 +68,7 @@ default_random_config_order = False
 default_save_pth_weights = False
 default_save_onnx_weights = False
 
-default_epoch_limit_minutes = 30 # minutes
-
+default_epoch_limit_minutes = 30  # minutes
 
 base_module = 'ab'
 to_nn = (base_module, 'nn')
@@ -53,6 +98,10 @@ transform_dir = nn_path('transform')
 stat_dir = nn_path('stat')
 stat_train_dir = stat_dir / 'train'
 stat_run_dir = stat_dir / 'run'
+stat_nn_dir = stat_dir / 'nn'
+
+code_folders = (nn_dir, metric_dir)  # transform_dir,
+gen_folders = (stat_dir,)
 
 
 def __project_root_path():
@@ -75,10 +124,12 @@ ab_root_path = __project_root_path()
 print(f"LEMUR root {ab_root_path}")
 out = 'out'
 out_dir = ab_root_path / out
+ckpt_dir = out_dir / 'ckpt'
 data_dir = ab_root_path / 'data'
 db_dir = ab_root_path / 'db'
 demo_dir = ab_root_path / 'demo'
 db_file = db_dir / 'ab.nn.db'
+zst_db_file = db_dir / add_version('ab.nn.zst')
 
 onnx_dir = out_dir / 'onnx'
 onnx_file = onnx_dir / 'nn.onnx'
@@ -99,7 +150,66 @@ run_table = 'run'
 run_main_index = ('task', 'dataset', 'metric', 'nn')
 run_extra_columns = (
     'device_type', 'os_version', 'valid', 'emulator', 'error_message',
-    'duration', 'device_analytics_json'
-)
+    'duration', 'device_analytics_json')
+
+# NN statistics table
+nn_stat_table = 'nn_stat'
 
 tmp_data = 'temp_data'
+
+HF_NN = 'NN-Dataset'
+
+core_nn_cls = (
+    # img-classification
+    'AirNet',
+    'AirNext',
+    'AlexNet',
+    'BagNet',
+    'ComplexNet',
+    'BayesianNet-1',
+    'ConvNeXt',
+    'ConvNeXtTransformer',
+    'DPN107',
+    'DPN131',
+    'DPN68',
+    'DarkNet',
+    'DenseNet',
+    'Diffuser',
+    'EfficientNet',
+    'FractalNet',
+    'GoogLeNet',
+    'ICNet',
+    'InceptionV3-1',
+    'MNASNet',
+    'MaxVit',
+    'MoE-hetero4-Alex-Dense-Air-Bag',
+    'MobileNetV2',
+    'MobileNetV3',
+    'RegNet',
+    'ResNet',
+    'ShuffleNet',
+    'SqueezeNet-1',
+    'SwinTransformer',
+    'UNet2D',
+    'VGG',
+    'VisionTransformer')
+
+core_nn = core_nn_cls + (
+    # img-segmentation
+    'DeepLabV3-1',
+    'FCN8s',
+    'FCN16s',
+    'FCN32s-1',
+    'LRASPP',
+    'UNet-1',
+    # obj-detection
+    'FasterRCNN',
+    'FCOS',
+    'RetinaNet',
+    'SSDLite',
+    # txt-generation
+    'LSTM',
+    'RNN',
+    # img-captioning
+    'RESNETLSTM',
+    'ResNetTransformer')

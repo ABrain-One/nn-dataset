@@ -7,16 +7,13 @@ import inspect
 import random
 import re
 import json
+from typing import Any
 
 import torch
 from os import makedirs, remove
 from os.path import exists, dirname, join
 
 from ab.nn.util.Const import *
-
-
-def nn_mod(*nms):
-    return ".".join(to_nn + nms)
 
 
 def create_file(file_dir, file_name, content=''):
@@ -44,18 +41,6 @@ def torch_device():
     return device
 
 
-def get_attr(mod, f):
-    return get_obj_attr(__import__(mod, fromlist=[f]), f)
-
-
-def get_ab_nn_attr(mod, f):
-    return get_attr(nn_mod(mod), f)
-
-
-def min_accuracy(dataset):
-    return get_ab_nn_attr(f"loader.{dataset}", 'MINIMUM_ACCURACY')
-
-
 def order_configs(configs, random_config_order):
     configs = list(configs)
     if random_config_order:
@@ -73,6 +58,7 @@ def add_categorical_if_absent(trial, prms, nm, fn, default=None):
     if not (nm in prms and prms[nm]):
         prms[nm] = trial.suggest_categorical(nm, default or fn())
     return prms[nm]
+
 
 def is_full_config(l: list[str] | tuple[str, ...]):
     return 4 == len(l) and (nn_dir / (l[-1] + '.py')).exists()
@@ -92,16 +78,19 @@ def model_stat_dir(config):
     return stat_train_dir / config_splitter.join(config)
 
 
-def accuracy_to_time_metric(accuracy, min_accuracy, training_duration) -> float:
+def accuracy_to_time_metric(accuracy, min_accuracy, duration) -> float:
     """
-    Naive 'accuracy to time' metric for fixed number of training epochs.
-    This metric is essential for detecting the fastest accuracy improvements during neural network training.
+    Naive 'accuracy to time' metric. Can be used for the inference or fixed number of training epochs.
+
+    :param duration: inference or training time for the model, nanoseconds
+
+    This metric is essential for detecting the fastest accuracy improvements during neural network training or optimization of the inference model.
     """
     if accuracy is None:
         accuracy = 0.0
     if min_accuracy is None:
         min_accuracy = 0.0
-    d = max(0.0, (accuracy - min_accuracy)) / (training_duration / 1e11)
+    d = max(0.0, (accuracy - min_accuracy)) / (duration / 1e11)
     print(f"accuracy_to_time_metric {d}")
     return d
 
@@ -119,10 +108,14 @@ def uuid4(obj):
 
 
 def validate_prm(batch_min, batch_max, lr_min, lr_max, momentum_min, momentum_max, dropout_min, dropout_max):
-    if batch_min and batch_max and batch_min > batch_max: raise Exception(f"min_batch_binary_power {batch_min} > max_batch_binary_power {batch_max}")
-    if lr_min and lr_max and lr_min > lr_max: raise Exception(f"min_learning_rate {lr_min} > max_learning_rate {lr_max}")
-    if momentum_min and momentum_max and momentum_min > momentum_max: raise Exception(f"min_momentum {momentum_min} > max_momentum {momentum_max}")
-    if dropout_min and dropout_max and dropout_min > dropout_max: raise Exception(f"min_momentum {dropout_min} > max_momentum {dropout_max}")
+    if batch_min and batch_max and batch_min > batch_max: raise Exception(
+        f"min_batch_binary_power {batch_min} > max_batch_binary_power {batch_max}")
+    if lr_min and lr_max and lr_min > lr_max: raise Exception(
+        f"min_learning_rate {lr_min} > max_learning_rate {lr_max}")
+    if momentum_min and momentum_max and momentum_min > momentum_max: raise Exception(
+        f"min_momentum {momentum_min} > max_momentum {momentum_max}")
+    if dropout_min and dropout_max and dropout_min > dropout_max: raise Exception(
+        f"min_momentum {dropout_min} > max_momentum {dropout_max}")
 
 
 def format_time(sec):
@@ -135,28 +128,6 @@ def release_memory():
         if torch.cuda.is_available(): torch.cuda.empty_cache()
     except Exception as e:
         print(f"Exception during memory release: {e}")
-
-
-def read_py_file_as_string(file_path):
-    """
-    read_py_file_as_string。
-
-    param:
-        file_path (str): path of the file to read.
-
-    Return:
-        str: Content of the file.
-    """
-    try:
-        spec = importlib.util.spec_from_file_location("module_name", file_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        source_code = inspect.getsource(module)
-        return source_code
-    except Exception as e:
-        print(f"error when reading file: {e}")
-        return None
 
 
 def str_not_none(prefix, value):
@@ -209,11 +180,12 @@ def test_loader_f(test_dataset, batch, num_workers):
                                        collate_fn=get_obj_attr(test_dataset, 'collate_fn'))
 
 
-def save_if_best(model, model_name, current_score, save_pth_weights, save_onnx_weights, train_set, num_workers, save_path=None):
+def save_if_best(model, model_name, current_score, save_pth_weights, save_onnx_weights, train_set, num_workers,
+                 save_path=None):
     """
     Called by the training framework to save weights if performance improves.
     """
-    checkpoint_dir = out_dir / 'checkpoints' / model_name
+    checkpoint_dir = ckpt_dir / model_name.split('.')[-1]
     makedirs(checkpoint_dir, exist_ok=True)
     # Compare the current score with the best score recorded.
     if current_score > getattr(model, "best_score", 0):
@@ -223,10 +195,19 @@ def save_if_best(model, model_name, current_score, save_pth_weights, save_onnx_w
         # Use the required function to save the PyTorch weights.
         if save_pth_weights: export_torch_weights(model, best_checkpoint_path)
         if save_onnx_weights:
-            for input_tensor, _ in train_loader_f(train_set, 1, num_workers):
-                t = input_tensor.to(torch_device())
-                export_model_to_onnx(model, t, join(checkpoint_dir, "best_model.onnx") if save_path else onnx_file)
-                break
+            t = first_tensor(train_set, num_workers)
+            export_model_to_onnx(model, t, join(checkpoint_dir, "best_model.onnx") if save_path else onnx_file)
+
+
+def first_tensor(train_set, num_workers=default_num_workers) -> Any:
+    t = None
+    for input_tensor, _ in train_loader_f(train_set, 1, num_workers):
+        t = input_tensor.to(torch_device())
+        break
+    return t
+
+def get_in_shape(train_set, num_workers=default_num_workers):
+    return first_tensor(train_set, num_workers).cpu().numpy().shape
 
 
 #  FUNCTIONS FOR SAVING AND LOADING WEIGHTS
