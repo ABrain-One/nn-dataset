@@ -179,7 +179,11 @@ class CiderMetric:
             
         self.scorer.compute_doc_freq() 
         scores = self.scorer.compute_cider()
-        return np.mean(scores)
+        # Normalize CIDEr to 0-1 range by dividing by 3.0
+        # CIDEr typically ranges 0-3 for good captions
+        raw_score = np.mean(scores)
+        normalized_score = raw_score / 3.0
+        return min(normalized_score, 1.0)  # Cap at 1.0
 
 def create_metric(out_shape=None):
     return CiderMetric(out_shape)
