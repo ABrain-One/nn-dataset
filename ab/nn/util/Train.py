@@ -101,8 +101,12 @@ class Train:
         self.task = task
         self.prm = prm
 
-        self.metric_name = metric
-        self.metric_function = self.load_metric_function(metric)
+        # Support multiple comma-separated metrics: "bleu,meteor,cider"
+        self.metric_names = [m.strip() for m in metric.split(',')]
+        self.metric_functions = {name: self.load_metric_function(name) for name in self.metric_names}
+        self.primary_metric = self.metric_names[0]  # First metric used for accuracy comparison
+        self.metric_name = metric  # Keep original for compatibility
+        self.all_metric_results = {}  # Store all metric results
         self.save_to_db = save_to_db
         self.is_code = is_code
 
@@ -148,7 +152,7 @@ class Train:
             self.model.train()
             self.model.learn(DataRoll(self.train_loader, epoch_limit_minutes))
 
-            accuracy = self.eval(self.test_loader)
+            accuracy, self.all_metric_results = self.eval(self.test_loader)
             accuracy = 0.0 if math.isnan(accuracy) or math.isinf(accuracy) else accuracy
             duration = time.time_ns() - start_time
             # The accuracy-to-time metric is not stored in the database as it can change over time and can be quickly calculated from saved values.
@@ -161,7 +165,9 @@ class Train:
             if save_pth_weights or save_onnx_weights:
                 save_if_best(self.model, self.model_name, accuracy, save_pth_weights, save_onnx_weights, train_set, self.num_workers, save_path=save_path)
             only_prm = {k: v for k, v in self.prm.items() if  k not in {'uid', 'duration', 'accuracy', 'epoch'}}
-            prm = merge_prm(self.prm, {'uid': uuid4(only_prm), 'duration': duration, 'accuracy': accuracy})
+            # Include all metric results in saved parameters
+            metric_results_dict = {name: val for name, val in self.all_metric_results.items()}
+            prm = merge_prm(self.prm, {'uid': uuid4(only_prm), 'duration': duration, 'accuracy': accuracy, **metric_results_dict})
             if self.save_to_db:
                 if self.is_code:  # We don't want the filename to contain full codes
                     if save_path:
@@ -176,7 +182,7 @@ class Train:
         return accuracy, accuracy_to_time, duration
 
     def eval(self, test_loader):
-        """Evaluation with standardized metric interface"""
+        """Evaluation with standardized metric interface - supports multiple metrics"""
         if debug:
             for inputs, labels in test_loader:
                 print(f"[EVAL DEBUG] labels type: {type(labels)}")
@@ -186,19 +192,25 @@ class Train:
                     print(f"[EVAL DEBUG] labels sample: {labels[:2]}")
         self.model.eval()
 
-        # Reset the metric at the start of evaluation
-        self.metric_function.reset()
+        # Reset ALL metrics at the start of evaluation
+        for metric_fn in self.metric_functions.values():
+            metric_fn.reset()
 
         with torch.no_grad():
             for inputs, labels in test_loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 outputs = self.model(inputs)
 
-                # Call the metric - all metrics now use the same interface
-                self.metric_function(outputs, labels)
+                # Call ALL metrics - they all use the same interface
+                for metric_fn in self.metric_functions.values():
+                    metric_fn(outputs, labels)
 
-        # Get the final result from the metric
-        return self.metric_function.result()
+        # Collect results from ALL metrics
+        all_results = {name: fn.result() for name, fn in self.metric_functions.items()}
+        
+        # Return primary metric (first one) for accuracy comparison, and all results
+        primary_accuracy = all_results[self.primary_metric]
+        return primary_accuracy, all_results
 
 
 def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Union[str, None] = None, save_path: Union[str, None] = None, export_onnx=False, epoch_limit_minutes=default_epoch_limit_minutes, transform_dir= None):
