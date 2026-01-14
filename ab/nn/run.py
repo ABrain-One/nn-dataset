@@ -1,25 +1,16 @@
 #!/usr/bin/env python3
 """
-Inference for nn-dataset Models (run.py)
-
-Saves run outputs into folders under:
-    ab/nn/stat/run/<taskname>-<architecturename>/report.json
-
-Folder naming rules:
-  - If --config is provided: folder_name == <config>
-  - Otherwise: folder_name == <architecture> (model class name)
-
-Example:
-  python -m ab.nn.run --model-class ab.nn.nn.ComplexNet.Net --dataset cifar10 --config img-classification --no-profiler
-
-Result:
-  ab/nn/stat/run/ComplexNet-20251207T123456Z/report.json
+run.py — inference profiler that uses existing Train.Train.eval(test_loader) when available.
+- CLI: python -m ab.nn.run --model-class ab.nn.nn.ComplexNet.Net --dataset cifar-10 --config img-classification --no-profiler
+- Output folder: ab/nn/stat/run/<config>_<architecture>-<timestamp> (or <architecture>-<timestamp>)
+- Output filename: windows_devicetype.json
 """
 
 from __future__ import annotations
 
 import argparse
 import importlib
+import inspect
 import json
 import os
 import platform
@@ -39,13 +30,27 @@ except Exception:
     psutil = None
 
 
-def import_by_path(path: str):
+# ---------------- utilities ----------------
 
+def import_by_path(path: str):
     mod_path, _, cls_name = path.rpartition(".")
     if not mod_path:
         raise ImportError(f"Invalid import path: {path}")
     mod = importlib.import_module(mod_path)
     return getattr(mod, cls_name)
+
+def get_device_type() -> str:
+    try:
+        name = platform.node()
+        if name:
+            return name
+    except Exception:
+        pass
+    return "unknown_device"
+
+def sanitize_filename(s: str) -> str:
+    return "".join(c if (c.isalnum() or c in ("-", "_")) else "_" for c in s)
+
 
 
 def ensure_outdir(path: str) -> str:
@@ -55,29 +60,42 @@ def ensure_outdir(path: str) -> str:
 
 
 def sanitize_name(name: str) -> str:
-
     if not name:
         return "run"
     return "".join(c if (c.isalnum() or c in ("-", "_")) else "_" for c in name)
 
 
-def default_outpath(model_name: str, config: Optional[str] = None) -> str:
+def extract_arch_name(model_class_path: str) -> str:
+    parts = model_class_path.split(".")
+    if len(parts) >= 2:
+        return parts[-2]
+    return parts[-1]
 
+
+def default_outpath(model_name: str, config: Optional[str] = None) -> str:
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    this_dir = os.path.dirname(__file__)  # expected: .../ab/nn
+    this_dir = os.path.dirname(__file__)  # expected: ab/nn
+
     if config:
-        folder_base = config
+        folder_base = f"{config}_{model_name}"
     else:
         folder_base = model_name or "model"
+
     folder_safe = sanitize_name(folder_base)
     folder_name = f"{folder_safe}-{ts}"
+
     run_dir = os.path.join(this_dir, "stat", "run", folder_name)
     os.makedirs(run_dir, exist_ok=True)
-    return os.path.join(run_dir, "report.json")
 
+    # Anonymized filename
+    device = sanitize_filename(get_device_type())
+    filename = f"windows_{device}.json"
+    return os.path.join(run_dir, filename)
+
+
+# ---------------- system sampling ----------------
 
 def sample_nvidia_smi():
-
     if shutil.which("nvidia-smi") is None:
         return None
     q = "--query-gpu=index,name,driver_version,memory.total,memory.used,memory.free,utilization.gpu --format=csv,noheader,nounits"
@@ -104,7 +122,6 @@ def sample_nvidia_smi():
 
 
 def sample_system():
-
     if psutil is None:
         return None
     vm = psutil.virtual_memory()
@@ -123,11 +140,9 @@ def sample_system():
     }
 
 
-# ----------------- dataset + model builders -----------------
-
+# ---------------- dataset + model builders ----------------
 
 def build_dataset_loader(dataset: str, batch_size: int, num_workers: int = 2):
-
     from torch.utils.data import DataLoader
     from torchvision import datasets, transforms
 
@@ -141,7 +156,6 @@ def build_dataset_loader(dataset: str, batch_size: int, num_workers: int = 2):
         ds = datasets.CIFAR100(root="./data", train=False, download=True, transform=transform)
         num_classes = 100
     elif ds_name.startswith("cifar"):
-        # default to cifar10 if user wrote cifar-10, CIFAR_10 etc.
         ds = datasets.CIFAR10(root="./data", train=False, download=True, transform=transform)
         num_classes = 10
     else:
@@ -156,11 +170,9 @@ def build_model(model_class: str,
                 out_shape: Tuple[int, ...],
                 device: torch.device,
                 errors: List[str]) -> nn.Module:
-
     cls = import_by_path(model_class)
     model = None
 
-    # 1) NN-dataset style ctor
     try:
         prm = {"lr": 0.01, "momentum": 0.9}
         model = cls(in_shape=in_shape, out_shape=out_shape, prm=prm, device=device)
@@ -170,7 +182,6 @@ def build_model(model_class: str,
     except Exception as e:
         errors.append(f"nn_style_ctor_other_error: {repr(e)}")
 
-    # 2a) plain ctor
     try:
         model = cls()
         return model
@@ -179,36 +190,15 @@ def build_model(model_class: str,
     except Exception as e:
         errors.append(f"default_ctor_failed: {repr(e)}")
 
-    # 2b) num_classes ctor
     try:
         model = cls(num_classes=out_shape[0])
         return model
     except Exception as e:
         errors.append(f"num_classes_ctor_failed: {repr(e)}")
-        raise RuntimeError(
-            f"Failed to construct model for class '{model_class}'. "
-            f"Errors: {errors}"
-        )
+        raise RuntimeError(f"Failed to construct model for class '{model_class}'. Errors: {errors}")
 
 
-class SimpleAccuracy:
-
-    def __init__(self):
-        self.correct = 0
-        self.total = 0
-
-    def reset(self):
-        self.correct = 0
-        self.total = 0
-
-    def __call__(self, outputs, labels):
-        preds = outputs.argmax(dim=1)
-        self.correct += int((preds == labels).sum().item())
-        self.total += labels.size(0)
-
-    def result(self):
-        return {"accuracy": (self.correct / self.total) if self.total > 0 else None}
-
+# ---------------- run_inference ----------------
 
 def run_inference(config: Optional[str],
                   model_class: str,
@@ -222,188 +212,198 @@ def run_inference(config: Optional[str],
                   force_cpu: bool):
     start_dt = datetime.utcnow()
     start_epoch = time.time()
-
     errors: List[str] = []
+
+    # architecture name
+    model_name = extract_arch_name(model_class)
 
     # device
     device = torch.device("cpu")
     if torch.cuda.is_available() and not force_cpu:
         device = torch.device("cuda")
 
-    # dataset
+    # dataset loader
     test_loader, num_classes = build_dataset_loader(dataset, batch_size)
 
-    # infer shape from real batch
+    # infer shapes by peeking a sample (for potential model build fallback)
     try:
         sample_inputs, _ = next(iter(test_loader))
     except StopIteration:
         raise RuntimeError("Test loader is empty - cannot run inference.")
-    in_shape = sample_inputs.shape  # e.g. [B, 3, 32, 32]
+    in_shape = sample_inputs.shape
     out_shape = (num_classes,)
 
-    # model
-    model = build_model(model_class, in_shape, out_shape, device, errors)
-    model_name = getattr(model, "__class__", type(model)).__name__
+    # attempt to build a model (best-effort; Train.Train may construct its own model)
+    model = None
+    try:
+        model = build_model(model_class, in_shape, out_shape, device, errors)
+    except Exception:
+        model = None
 
-    if checkpoint:
-        try:
-            ckpt = torch.load(checkpoint, map_location="cpu")
-            sd = ckpt.get("state_dict", ckpt) if isinstance(ckpt, dict) else ckpt
-            try:
-                model.load_state_dict(sd)
-            except Exception:
-                new_sd = {}
-                for k, v in sd.items():
-                    new_key = k.replace("module.", "") if k.startswith("module.") else k
-                    new_sd[new_key] = v
-                model.load_state_dict(new_sd, strict=False)
-        except Exception as e:
-            errors.append(f"checkpoint_load_failed: {repr(e)}")
-
-    # metric
-    metric = SimpleAccuracy()
-    metric.reset()
-
-    # state for timeline + profiling
+    # prepare containers
     timeline: List[dict[str, Any]] = []
     op_totals: dict[str, dict[str, Any]] = {}
     prof_traces: List[str] = []
     peak_cpu_rss = 0
     peak_gpu_mb = 0.0
     batches_run = 0
+    metric_result = None
+    eval_used = False
 
-    # iterator (we will manually stop after num_batches)
-    loader_iter = iter(test_loader)
+    # coarse "before eval" snapshot
+    timeline.append({
+        "phase": "before_eval",
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "sys": sample_system(),
+        "gpus": sample_nvidia_smi()
+    })
 
-    with torch.no_grad():
-        for bi in range(num_batches):
+    try:
+        train_mod = importlib.import_module("ab.nn.util.Train")
+        TrainClass = getattr(train_mod, "Train", None)
+        if TrainClass is not None:
+            # try best-effort instantiation
+            trainer = None
             try:
-                inputs, labels = next(loader_iter)
-            except StopIteration:
-                break
-
-            # --- before batch snapshot ---
-            ts_before = datetime.utcnow().isoformat() + "Z"
-            sys_before = sample_system()
-            gpus_before = sample_nvidia_smi()
-            timeline.append({
-                "phase": "before_batch",
-                "batch": bi,
-                "ts": ts_before,
-                "sys": sys_before,
-                "gpus": gpus_before
-            })
-
-            # move to device
-            inputs, labels = inputs.to(device), labels.to(device)
-
-            # ComplexNet expects complex input
-            if "ComplexNet" in model_class:
-                if not torch.is_complex(inputs):
-                    inputs = inputs.to(torch.complex64)
-
-            # --- run model (with or without profiler) ---
-            if use_profiler and hasattr(torch, "profiler"):
-                activities = [torch.profiler.ProfilerActivity.CPU]
-                if device.type == "cuda":
-                    activities.append(torch.profiler.ProfilerActivity.CUDA)
-
+                sig = inspect.signature(TrainClass.__init__)
+                ctor_kwargs = {}
+                # if Train accepts 'model' and we built one, pass it
+                if "model" in sig.parameters and model is not None:
+                    ctor_kwargs["model"] = model
+                if "device" in sig.parameters:
+                    ctor_kwargs["device"] = device
                 try:
-                    with torch.profiler.profile(
-                        activities=activities,
-                        record_shapes=True,
-                        profile_memory=True
-                    ) as prof:
-                        outputs = model(inputs)
+                    trainer = TrainClass(**ctor_kwargs)
+                except Exception:
+                    # fallback to no-arg constructor
+                    trainer = TrainClass()
+            except Exception:
+                try:
+                    trainer = TrainClass()
+                except Exception:
+                    trainer = None
 
-                    # aggregate op stats
-                    ka = prof.key_averages()
-                    for op in ka:
-                        name = op.key
-                        cpu_us = getattr(op, "cpu_time_total", None)
-                        if cpu_us is None:
-                            cpu_us = getattr(op, "self_cpu_time_total", 0.0)
-                        cpu_ms = float(cpu_us) / 1000.0 if cpu_us is not None else 0.0
-                        rec = op_totals.setdefault(name, {"cpu_ms": 0.0, "calls": 0, "mem_bytes": 0})
-                        rec["cpu_ms"] += cpu_ms
-                        rec["calls"] += int(getattr(op, "count", 1))
+            if trainer is not None and hasattr(trainer, "eval"):
+                try:
+                    # call trainer.eval(test_loader) per provided signature
+                    metric_result = trainer.eval(test_loader)
+                    eval_used = True
+                except Exception as e:
+                    errors.append(f"trainer_eval_exception: {repr(e)}")
+        else:
+            # try module-level eval(test_loader)
+            eval_fn = getattr(train_mod, "eval", None)
+            if callable(eval_fn):
+                try:
+                    metric_result = eval_fn(test_loader)
+                    eval_used = True
+                except Exception as e:
+                    errors.append(f"module_eval_exception: {repr(e)}")
+    except Exception as e:
+        errors.append(f"train_import_failed: {repr(e)}")
+
+    # coarse "after eval" snapshot
+    timeline.append({
+        "phase": "after_eval",
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "sys": sample_system(),
+        "gpus": sample_nvidia_smi()
+    })
+
+
+    if not eval_used:
+        loader_iter = iter(test_loader)
+        with torch.no_grad():
+            for bi in range(num_batches):
+                try:
+                    inputs, labels = next(loader_iter)
+                except StopIteration:
+                    break
+
+                # --- before_batch snapshot (per-batch, only in fallback) ---
+                timeline.append({
+                    "phase": "before_batch",
+                    "batch": bi,
+                    "ts": datetime.utcnow().isoformat() + "Z",
+                    "sys": sample_system(),
+                    "gpus": sample_nvidia_smi()
+                })
+
+                inputs, labels = inputs.to(device), labels.to(device)
+                if "ComplexNet" in model_class:
+                    if not torch.is_complex(inputs):
+                        inputs = inputs.to(torch.complex64)
+
+                if use_profiler and hasattr(torch, "profiler"):
+                    activities = [torch.profiler.ProfilerActivity.CPU]
+                    if device.type == "cuda":
+                        activities.append(torch.profiler.ProfilerActivity.CUDA)
+                    try:
+                        with torch.profiler.profile(activities=activities, record_shapes=True, profile_memory=True) as prof:
+                            outputs = model(inputs) if model is not None else None
+                        ka = prof.key_averages()
+                        for op in ka:
+                            name = op.key
+                            cpu_us = getattr(op, "cpu_time_total", None)
+                            if cpu_us is None:
+                                cpu_us = getattr(op, "self_cpu_time_total", 0.0)
+                            cpu_ms = float(cpu_us) / 1000.0 if cpu_us is not None else 0.0
+                            rec = op_totals.setdefault(name, {"cpu_ms": 0.0, "calls": 0, "mem_bytes": 0})
+                            rec["cpu_ms"] += cpu_ms
+                            rec["calls"] += int(getattr(op, "count", 1))
+                        trace_file = os.path.join(os.path.dirname(outpath), f"trace_batch{bi}.json")
                         try:
-                            mem_b = getattr(op, "self_cpu_memory_usage", 0) or 0
-                            rec["mem_bytes"] += int(mem_b)
+                            prof.export_chrome_trace(trace_file)
+                            prof_traces.append(trace_file)
                         except Exception:
                             pass
+                    except Exception as e:
+                        errors.append(f"profiler_batch_failed_{bi}: {repr(e)}")
+                        if model is not None:
+                            outputs = model(inputs)
+                else:
+                    if model is not None:
+                        outputs = model(inputs)
+                    else:
+                        outputs = None
 
-                    # export chrome trace into the same run folder as report.json
+                # --- after_batch snapshot ---
+                timeline.append({
+                    "phase": "after_batch",
+                    "batch": bi,
+                    "ts": datetime.utcnow().isoformat() + "Z",
+                    "sys": sample_system(),
+                    "gpus": sample_nvidia_smi()
+                })
+
+                # update peaks
+                last_sys = timeline[-1]["sys"] if timeline and "sys" in timeline[-1] else None
+                if last_sys and last_sys.get("process_rss_bytes") is not None:
+                    peak_cpu_rss = max(peak_cpu_rss, last_sys["process_rss_bytes"])
+
+                if device.type == "cuda":
                     try:
-                        trace_file = os.path.join(os.path.dirname(outpath), f"trace_batch{bi}.json")
-                        prof.export_chrome_trace(trace_file)
-                        prof_traces.append(trace_file)
+                        torch.cuda.synchronize()
+                        d = torch.cuda.current_device()
+                        mem_mb = torch.cuda.memory_allocated(d) / (1024 ** 2)
+                        peak_gpu_mb = max(peak_gpu_mb, mem_mb)
                     except Exception:
                         pass
-                except Exception as e:
-                    errors.append(f"profiler_batch_failed_{bi}: {repr(e)}")
-                    outputs = model(inputs)
-            else:
-                outputs = model(inputs)
 
-            # metric update (prof-style eval logic)
-            try:
-                metric(outputs, labels)
-            except Exception as e:
-                errors.append(f"metric_failed_batch_{bi}: {repr(e)}")
+                batches_run += 1
 
-            # --- after batch snapshot ---
-            ts_after = datetime.utcnow().isoformat() + "Z"
-            sys_after = sample_system()
-            gpus_after = sample_nvidia_smi()
-            timeline.append({
-                "phase": "after_batch",
-                "batch": bi,
-                "ts": ts_after,
-                "sys": sys_after,
-                "gpus": gpus_after
-            })
-
-            # peak memory
-            if sys_after and "process_rss_bytes" in sys_after and sys_after["process_rss_bytes"] is not None:
-                peak_cpu_rss = max(peak_cpu_rss, sys_after["process_rss_bytes"])
-
-            if device.type == "cuda":
-                try:
-                    torch.cuda.synchronize()
-                    d = torch.cuda.current_device()
-                    mem_mb = torch.cuda.memory_allocated(d) / (1024 ** 2)
-                    peak_gpu_mb = max(peak_gpu_mb, mem_mb)
-                except Exception:
-                    pass
-
-            batches_run += 1
-            if debug:
-                print(f"[inference_profiler] finished batch {bi}", flush=True)
-
-    # metric result
-    try:
-        metric_result = metric.result()
-    except Exception:
-        metric_result = None
+    else:
+        # estimate batches_run from timeline coarse info if metric_result doesn't include it
+        batches_run = None
 
     # summarize ops
-    ops = [
-        {
-            "name": k,
-            "cpu_ms": v["cpu_ms"],
-            "calls": v["calls"],
-            "mem_bytes": v.get("mem_bytes", None)
-        }
-        for k, v in op_totals.items()
-    ]
+    ops = [{"name": k, "cpu_ms": v["cpu_ms"], "calls": v["calls"], "mem_bytes": v.get("mem_bytes", None)} for k, v in op_totals.items()]
     ops_sorted = sorted(ops, key=lambda x: x["cpu_ms"], reverse=True)[:40]
 
     end_dt = datetime.utcnow()
     duration_seconds = (end_dt - start_dt).total_seconds()
     duration_ms = int(duration_seconds * 1000)
 
-    # system info at end
     vm = psutil.virtual_memory() if psutil else None
     total_ram_kb = f"{vm.total // 1024} kB" if vm else None
     free_ram_kb = f"{vm.free // 1024} kB" if (vm and hasattr(vm, "free")) else None
@@ -411,12 +411,9 @@ def run_inference(config: Optional[str],
     cached_kb = f"{getattr(vm, 'cached', 0) // 1024} kB" if (vm and hasattr(vm, "cached")) else None
 
     cpu_cores = psutil.cpu_count(logical=True) if psutil else None
-    processors = [{
-        "vendor_id": platform.processor() or None,
-        "model": platform.machine() or None,
-    }]
+    processors = [{"vendor_id": platform.processor() or None, "model": platform.machine() or None}]
 
-    device_type = platform.node() or "unknown_device"
+    device_type = get_device_type()
     os_version = platform.platform()
 
     final_report = {
@@ -441,22 +438,13 @@ def run_inference(config: Optional[str],
                 "processors": processors,
                 "arm_architecture": None
             },
-            "run_details": {
-                "config": config,
-                "model_class": model_class,
-                "dataset": dataset,
-                "device": str(device),
-                "num_batches_requested": num_batches,
-                "batches_run": batches_run,
-                "batch_size": batch_size,
-                "metric_result": metric_result,
-            },
             "timeline": timeline,
             "profile": {
                 "top_ops": ops_sorted,
                 "profiler_traces": prof_traces,
                 "peak_cpu_rss_bytes": peak_cpu_rss,
-                "peak_gpu_mb": peak_gpu_mb
+                "peak_gpu_mb": peak_gpu_mb,
+                "metric_result": metric_result
             }
         }
     }
@@ -468,66 +456,39 @@ def run_inference(config: Optional[str],
     return outpath
 
 
-# ----------------- CLI -----------------
-
+# ---------------- CLI ----------------
 
 def main():
-    p = argparse.ArgumentParser(
-        prog="ab.nn.run",
-        description="Profile inference and save JSON report (metrics + hardware + op stats)."
-    )
-    p.add_argument("--config", type=str, default=None,
-                   help="Optional config name (stored in JSON only).")
-    p.add_argument("--model-class", type=str, required=True,
-                   help="Model class path, e.g. ab.nn.nn.ComplexNet.Net")
-    p.add_argument("--checkpoint", type=str, default=None,
-                   help="Optional checkpoint path to load.")
-    p.add_argument("--dataset", type=str, default="cifar10",
-                   help="Dataset name (cifar10 or cifar100).")
-    p.add_argument("--num-batches", type=int, default=10,
-                   help="Number of batches to run.")
-    p.add_argument("--batch-size", type=int, default=32,
-                   help="Batch size.")
-    p.add_argument("--out", dest="outpath", type=str, default=None,
-                   help="Optional output JSON path. If omitted, a default path under ab/nn/stat/run/ is used.")
-    p.add_argument("--no-profiler", dest="no_profiler", action="store_true",
-                   help="Disable torch.profiler even if available.")
-    p.add_argument("--debug", action="store_true",
-                   help="Enable debug prints.")
-    p.add_argument("--force-cpu", action="store_true",
-                   help="Force using CPU even if CUDA available.")
+    p = argparse.ArgumentParser(prog="ab.nn.run", description="Profile inference and save JSON report.")
+    p.add_argument("--config", type=str, default=None, help="Optional config name (stored in JSON only).")
+    p.add_argument("--model-class", type=str, required=True, help="Model class path, e.g. ab.nn.nn.ComplexNet.Net")
+    p.add_argument("--checkpoint", type=str, default=None, help="Optional checkpoint path to load.")
+    p.add_argument("--dataset", type=str, default="cifar10", help="Dataset name (cifar10 or cifar100).")
+    p.add_argument("--num-batches", type=int, default=10, help="Number of batches to run.")
+    p.add_argument("--batch-size", type=int, default=32, help="Batch size.")
+    p.add_argument("--out", dest="outpath", type=str, default=None, help="Optional output JSON path.")
+    p.add_argument("--no-profiler", dest="no_profiler", action="store_true", help="Disable torch.profiler even if available.")
+    p.add_argument("--debug", action="store_true", help="Enable debug prints.")
+    p.add_argument("--force-cpu", action="store_true", help="Force using CPU even if CUDA available.")
     args = p.parse_args()
 
-    # Determine output path
     if args.outpath is None:
-        # Try to import the class to get a clean architecture name. If import fails,
-        # fall back to using the last segment of the provided model-class path.
-        try:
-            cls = import_by_path(args.model_class)
-            model_name = getattr(cls, "__name__", None)
-        except Exception:
-            # fallback to everything after the last dot or the whole string
-            _, _, tail = args.model_class.rpartition(".")
-            model_name = tail or args.model_class
+        model_name = extract_arch_name(args.model_class)
         outpath = default_outpath(model_name, config=args.config)
     else:
         outpath = args.outpath
 
-    run_inference(
-        config=args.config,
-        model_class=args.model_class,
-        checkpoint=args.checkpoint,
-        dataset=args.dataset,
-        num_batches=args.num_batches,
-        batch_size=args.batch_size,
-        outpath=outpath,
-        use_profiler=(not args.no_profiler),
-        debug=args.debug,
-        force_cpu=args.force_cpu,
-    )
+    run_inference(config=args.config,
+                  model_class=args.model_class,
+                  checkpoint=args.checkpoint,
+                  dataset=args.dataset,
+                  num_batches=args.num_batches,
+                  batch_size=args.batch_size,
+                  outpath=outpath,
+                  use_profiler=(not args.no_profiler),
+                  debug=args.debug,
+                  force_cpu=args.force_cpu)
 
 
 if __name__ == "__main__":
     main()
-
-

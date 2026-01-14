@@ -16,10 +16,6 @@ from os.path import exists, dirname, join
 from ab.nn.util.Const import *
 
 
-def nn_mod(*nms):
-    return ".".join(to_nn + nms)
-
-
 def create_file(file_dir, file_name, content=''):
     file_path = file_dir / file_name
     if not exists(file_path):
@@ -43,18 +39,6 @@ def torch_device():
     else:
         device = torch.device("cpu")
     return device
-
-
-def get_attr(mod, f):
-    return get_obj_attr(__import__(mod, fromlist=[f]), f)
-
-
-def get_ab_nn_attr(mod, f):
-    return get_attr(nn_mod(mod), f)
-
-
-def min_accuracy(dataset):
-    return get_ab_nn_attr(f"loader.{dataset}", 'MINIMUM_ACCURACY')
 
 
 def order_configs(configs, random_config_order):
@@ -144,28 +128,6 @@ def release_memory():
         if torch.cuda.is_available(): torch.cuda.empty_cache()
     except Exception as e:
         print(f"Exception during memory release: {e}")
-
-
-def read_py_file_as_string(file_path):
-    """
-    read_py_file_as_string。
-
-    param:
-        file_path (str): path of the file to read.
-
-    Return:
-        str: Content of the file.
-    """
-    try:
-        spec = importlib.util.spec_from_file_location("module_name", file_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        source_code = inspect.getsource(module)
-        return source_code
-    except Exception as e:
-        print(f"error when reading file: {e}")
-        return None
 
 
 def str_not_none(prefix, value):

@@ -84,7 +84,7 @@ LEFT JOIN {tmp_data} d2 ON d2.id = m.matched_id {limit_clause}''')
     return fill_hyper_prm(cur, sql.num_joint_nns)
 
 
-def fill_hyper_prm(cur: Cursor, num_joint_nns=1) -> list[dict]:
+def fill_hyper_prm(cur: Cursor, num_joint_nns=1, include_nn_stats=False) -> list[dict]:
     rows = cur.fetchall()
     if not rows: return []  # short-circuit for an empty result
     columns = [c[0] for c in cur.description]
@@ -106,5 +106,14 @@ def fill_hyper_prm(cur: Cursor, num_joint_nns=1) -> list[dict]:
             i = str(i)
             rec['prm_' + i] = prm_by_uid.get(rec['prm_id_' + i], {})
         rec.pop('transform', None)
+
+        # Parse nn_stats_meta JSON if present
+        if include_nn_stats and 'nn_stats_meta' in rec and rec['nn_stats_meta']:
+            try:
+                import json
+                rec['nn_stats_meta'] = json.loads(rec['nn_stats_meta'])
+            except Exception:
+                rec['nn_stats_meta'] = None
+
         results.append(rec)
     return results
