@@ -73,6 +73,19 @@ default_epoch_limit_minutes = 30  # minutes
 base_module = 'ab'
 to_nn = (base_module, 'nn')
 
+def nn_mod(module_type: str, module_name: str) -> str:
+    """
+    Build a fully qualified module path for nn components.
+    
+    Args:
+        module_type: Type of module ('nn', 'metric', 'loader', 'transform')
+        module_name: Name of the specific module
+    
+    Returns:
+        Full module path string (e.g., 'ab.nn.nn.RLFN')
+    """
+    return f"{base_module}.nn.{module_type}.{module_name}"
+
 config_splitter = '_'
 
 
@@ -192,7 +205,9 @@ core_nn_cls = (
     'SwinTransformer',
     'UNet2D',
     'VGG',
-    'VisionTransformer')
+    'VisionTransformer',
+    'RLFN',
+    'SwinIR')
 
 core_nn = core_nn_cls + (
     # img-segmentation

@@ -1,79 +1,89 @@
+
 import torch
 import math
 
-# --- 1. Define Normalization Constants ---
-# Max and Min PSNR as specified by your teacher (48 dB and 0 dB)
-MAX_PSNR_DB = 48.0
-MIN_PSNR_DB = 0.0
-
 class Net:
     """
-    A stateful metric that calculates the Peak Signal-to-Noise Ratio (PSNR) 
-    and returns the score normalized to the range [0, 1].
+    PSNR metric for Super Resolution.
+    - Computes PSNR on Y-channel (luminance) following standard SR evaluation
+    - Normalizes to 0.0-1.0 range using max PSNR of 48 dB
+    - Reuses implementation pattern from mai_psnr.py
     """
-    def __init__(self):
+    def __init__(self, out_shape=None):
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.reset()
 
     def reset(self):
-        """
-        Resets the internal state for a new evaluation.
-        """
-        self._total_mse = 0.0
-        self._total_samples = 0
+        """Clear accumulated metrics before new evaluation"""
+        self.total_mse = 0.0
+        self.count = 0
 
     def update(self, outputs: torch.Tensor, labels: torch.Tensor):
         """
-        Updates the state with the results from a new batch.
+        Update metric with batch of predictions and ground truth.
+        
+        Args:
+            outputs: Predicted images [Batch, C, H, W] in range [0, 1]
+            labels: Ground truth images [Batch, C, H, W] in range [0, 1]
         """
-        device = outputs.device
-        outputs = outputs.to(device).float()
-        labels = labels.to(device).float()
+        outputs = outputs.clamp(0, 1).to(self.device)
+        labels = labels.to(self.device)
+        
+        # Convert RGB to Y-channel (luminance) using ITU-R BT.601 standard
+        # Y = 0.299*R + 0.587*G + 0.114*B
+        if outputs.size(1) == 3:  # RGB image
+            y_outputs = 0.299 * outputs[:, 0] + 0.587 * outputs[:, 1] + 0.114 * outputs[:, 2]
+            y_labels = 0.299 * labels[:, 0] + 0.587 * labels[:, 1] + 0.114 * labels[:, 2]
+        else:  # Grayscale image
+            y_outputs = outputs[:, 0]
+            y_labels = labels[:, 0]
+        
+        # Calculate MSE on Y-channel
+        mse = torch.mean((y_outputs - y_labels) ** 2)
+        
+        # Accumulate
+        self.total_mse += mse.item() * outputs.size(0)
+        self.count += outputs.size(0)
 
-        batch_mse = torch.sum((outputs - labels) ** 2)
-
-        self._total_mse += batch_mse.item()
-        self._total_samples += outputs.numel()
-
-    def __call__(self, outputs, labels):
+    def compute(self):
         """
-        This method is called for each batch. It should only update the
-        internal state and NOT return a value to avoid framework errors.
+        Compute final PSNR normalized to [0.0, 1.0] range.
+        
+        Returns:
+            float: Normalized PSNR in range [0.0, 1.0]
         """
-        self.update(outputs, labels)
-
-    def result(self):
-        """
-        Computes the raw PSNR, normalizes it to [0, 1], and returns the
-        normalized score.
-        """
-        if self._total_samples == 0:
-            # If no samples, return a neutral score (e.g., normalized 0.5)
-            return 0.5
-
-        if self._total_mse == 0:
-            # If MSE is 0, PSNR is infinite, return the max normalized score
+        if self.count == 0:
+            return 0.0
+        
+        avg_mse = self.total_mse / self.count
+        
+        # Perfect reconstruction
+        if avg_mse == 0:
             return 1.0
+        
+        # Calculate PSNR in dB
+        raw_psnr = 10 * math.log10(1.0 / avg_mse)
+        
+        # Normalize by 48 dB (professor's requirement)
+        # This ensures metric is in [0.0, 1.0] range
+        normalized_psnr = min(raw_psnr / 48.0, 1.0)
+        
+        return normalized_psnr
+    
+    def __call__(self, outputs, labels):
+        """Convenience method for single-call evaluation"""
+        self.update(outputs, labels)
+        return self.compute()
+    
+    def result(self):
+        """Get final result without updating"""
+        return self.compute()
 
-        mean_mse = self._total_mse / self._total_samples
 
-        max_pixel = 1.0
+def create_metric(out_shape):
+    """Factory function for metric creation"""
+    return Net(out_shape)
 
-        # 1. Calculate the Raw PSNR (dB)
-        raw_psnr_db = 20 * math.log10(max_pixel / math.sqrt(mean_mse))
 
-        # --- 2. Normalize and Clip the PSNR Score to [0, 1] ---
-
-        # Clip the raw score to the defined range [0, 48]
-        psnr_clipped = max(MIN_PSNR_DB, min(MAX_PSNR_DB, raw_psnr_db))
-
-        # Apply normalization formula: (x - min) / (max - min)
-        # Note: (MAX_PSNR_DB - MIN_PSNR_DB) is just 48.0 in this case
-        normalized_score = (psnr_clipped - MIN_PSNR_DB) / (MAX_PSNR_DB - MIN_PSNR_DB)
-
-        return normalized_score
-
-def create_metric(out_shape=None):
-    """
-    Factory function required by the training framework to create the metric instance.
-    """
-    return Net()
+# Alias for compatibility with training framework
+Metric = Net

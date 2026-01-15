@@ -171,6 +171,48 @@ class Train:
         self.epoch_history: List[EpochMetrics] = []
         self.best_accuracy = 0.0
         self.best_epoch = 0
+        
+        # Benchmark metrics (MAI 2025 requirements)
+        self.benchmark_metrics = self._collect_benchmark_metrics()
+
+    def _collect_benchmark_metrics(self) -> dict:
+        """Collect benchmark metrics for MAI 2025 thesis"""
+        try:
+            from ab.nn.util.Benchmark import count_parameters, count_flops, measure_latency
+            
+            # Count parameters
+            params = count_parameters(self.model)
+            
+            # Count FLOPs
+            try:
+                flops = count_flops(self.model, self.in_shape)
+            except Exception as e:
+                print(f"[WARN] Could not compute FLOPs: {e}")
+                flops = {'total_flops': 0, 'gflops': 0, 'mflops': 0}
+            
+            # Measure latency (quick measurement with fewer runs)
+            try:
+                latency = measure_latency(self.model, self.in_shape, num_runs=10, warmup_runs=2, device='cpu')
+            except Exception as e:
+                print(f"[WARN] Could not measure latency: {e}")
+                latency = {'mean_ms': 0, 'fps': 0}
+            
+            benchmark = {
+                'parameters': params['total'],
+                'parameters_mb': params['total_mb'],
+                'gflops': flops['gflops'],
+                'latency_ms': latency['mean_ms'],
+                'fps': latency.get('fps', 0),
+            }
+            
+            print(f"[Benchmark] Params: {params['total']:,} ({params['total_mb']:.2f}MB), "
+                  f"FLOPs: {flops['gflops']:.2f}G, Latency: {latency['mean_ms']:.2f}ms")
+            
+            return benchmark
+            
+        except Exception as e:
+            print(f"[WARN] Benchmark collection failed: {e}")
+            return {}
 
     def _get_loss_function(self):
         """Get loss function for metric tracking"""
@@ -331,7 +373,9 @@ class Train:
                                           'best_epoch': self.best_epoch,
                                       } | ({'lr_now': lr_now} if lr_now else {})
                                       # NEW: GPU memory (if available)
-                                      | ({'gpu_memory_kb': get_gpu_memory_kb()} if get_gpu_memory_kb else {}))
+                                      | ({'gpu_memory_kb': get_gpu_memory_kb()} if get_gpu_memory_kb else {})
+                                      # NEW: MAI 2025 Benchmark metrics
+                                      | self.benchmark_metrics)
 
             if self.save_to_db:
                 if self.is_code:  # We don't want the filename to contain full codes
