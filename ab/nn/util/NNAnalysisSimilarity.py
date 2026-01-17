@@ -77,7 +77,7 @@ def load_signatures_from_stats(stats_dir: Path) -> Tuple[List[ModelSig], Dict[st
     }
 
 
-    # We expect num_perm/shingle_n to be consistent across the folder.
+    # expect num_perm/shingle_n to be consistent across the folder.
     expected_num_perm: Optional[int] = None
     expected_shingle_n: Optional[int] = None
 
@@ -128,7 +128,7 @@ def load_signatures_from_stats(stats_dir: Path) -> Tuple[List[ModelSig], Dict[st
         if expected_shingle_n is None:
             expected_shingle_n = shingle_n
 
-        # Keep one consistent signature configuration across the whole dataset.
+        # Keeping one consistent signature configuration across the whole dataset.
         if num_perm != expected_num_perm or shingle_n != expected_shingle_n:
             counters["skipped_inconsistent_params"] += 1
             continue
