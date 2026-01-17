@@ -98,8 +98,8 @@ def get_current_resource_usage() -> dict:
     # GPU memory usage
     if torch.cuda.is_available():
         try:
-            occupied_gpu_mb = torch.cuda.memory_allocated() / (1024**2)
-            usage['occupied_gpu_memory_mb'] = round(occupied_gpu_mb, 2)
+            occupied_gpu_kb = torch.cuda.memory_allocated() / 1024
+            usage['occupied_gpu_memory_kb'] = round(occupied_gpu_kb, 2)
             usage['gpu_memory_usage_percent'] = round(
                 (torch.cuda.memory_allocated() / torch.cuda.get_device_properties(0).total_memory) * 100, 2
             )
@@ -408,7 +408,7 @@ class Train:
                     DB_Write.save_results(self.config + (epoch,), prm)  # Separated from Calc.save_results()
 
         # Save training summary at the end
-        if self.save_path and self.epoch_history:
+        if save_path and self.epoch_history:
             self._save_training_summary()
 
         return accuracy, accuracy_to_time, duration
@@ -455,7 +455,7 @@ class Train:
             'epoch_details': [asdict(e) for e in self.epoch_history]
         }
 
-        summary_path = Path(self.save_path) / 'training_summary.json'
+        summary_path = out_dir / 'training_summary.json'
         try:
             with open(summary_path, 'w') as f:
                 json.dump(summary, f, indent=2)
