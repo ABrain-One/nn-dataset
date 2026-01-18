@@ -25,6 +25,29 @@ try:
 except Exception as e:
     raise RuntimeError("datasketch is required (pip install datasketch)") from e
 
+#-----------helpers (Stat generation-)-----------
+TOKEN_RE = re.compile(r"[A-Za-z_]\w*|[^\s]")
+
+
+#Tokenization function
+def _tokenize(code: str) -> List[str]:
+    return TOKEN_RE.findall(code or "")
+
+#Shingles function
+def _shingles(tokens: List[str], n: int = 7) -> List[str]:
+    if len(tokens) < n:
+        return [" ".join(tokens)] if tokens else []
+    return [" ".join(tokens[i:i + n]) for i in range(len(tokens) - n + 1)]
+
+#Covert code string to MinHash Signature
+def to_minhash(code: str, num_perm: int = 128, n:int = 7) -> "MinHash":
+    #Creates MinHash object
+    mh = MinHash(num_perm=num_perm)
+    #tokenizes code, creates shingles, loops through each shingle string
+    for sh in _shingles(_tokenize(code), n=n):
+        mh.update(sh.encode("utf-8"))
+    return mh
+
 # ---------- helpers ----------
 
 def safe_float(x: Optional[float]) -> float:
