@@ -1,25 +1,31 @@
-"""NNAnalysisSimilarity.py
-Compute code-level similarity metrics for all
-LEMUR models using datasketch MinHash + LSH, and store results into stat_dir/nn.json
-(merging into existing records by prm_id)."""
+"""
+NNAnalysisSimilarity (from per-model stats)
 
+Build code-level similarity for architectures using the already-generated per-model
+statistics in: ab/nn/stat/nn/*.json """
+
+from __future__ import annotations
+
+import argparse
+import gzip
 import json
 import math
+import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Any, List, Tuple, Optional
-import re
+from typing import Dict, Any, Iterable, List, Optional, Tuple
 
-# Optional Dependency import + feature flag
+try:
+    import numpy as np
+except Exception as e:
+    raise RuntimeError("numpy is required (pip install numpy)") from e
 
 try:
     from datasketch import MinHash, MinHashLSH
-    _HAS_DATASKETCH = True
-except Exception:
-    _HAS_DATASKETCH = False
+except Exception as e:
+    raise RuntimeError("datasketch is required (pip install datasketch)") from e
 
-from ab.nn.util.Const import stat_dir
-
-# Keep tokenizer/shingling consistent with nn_sftcodegen_rag.py in nn-gpt
+#-----------helpers (Stat generation-)-----------
 TOKEN_RE = re.compile(r"[A-Za-z_]\w*|[^\s]")
 
 
@@ -42,7 +48,8 @@ def to_minhash(code: str, num_perm: int = 128, n:int = 7) -> "MinHash":
         mh.update(sh.encode("utf-8"))
     return mh
 
-#Avoid crashing if jaccard gives weird values.
+# ---------- helpers ----------
+
 def safe_float(x: Optional[float]) -> float:
     try:
         if x is None:
@@ -53,87 +60,162 @@ def safe_float(x: Optional[float]) -> float:
     except Exception:
         return 0.0
 
-#Read existing JSON
-def read_existing_json(path: Path) -> List[Dict[str, Any]]:
-    if not path.exists():
-        return []
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+def open_text_writer(path: Path):
+    """
+    Returns a file-like object opened for text writing
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.name.endswith(".gz"):
+        return gzip.open(path, "wt", encoding="utf-8")
+    return path.open("w", encoding="utf-8")
+
+@dataclass
+class ModelSig:
+    prm_id: str
+    nn: str
+    num_perm: int
+    shingle_n: int
+    mh: MinHash
+
+def load_signatures_from_stats(stats_dir: Path) -> Tuple[List[ModelSig], Dict[str, str], Dict[str, int]]:
+    """
+    Load MinHash signatures from per-model stat JSONs.
+    Returns: list of ModelSig, pid -> nn mapping, counters dict
+    """
+    files = sorted(stats_dir.glob("*.json"))
+    sigs: List[ModelSig] = []
+    pid2nn: Dict[str, str] = {}
+    seen_pids = set()
+
+    counters = {
+        "total_files": len(files),
+        "loaded": 0,
+        "skipped_error_file": 0,
+        "skipped_missing_prm_id": 0,
+        "skipped_missing_code_minhash": 0,
+        "skipped_unavailable": 0,
+        "skipped_bad_hashvalues": 0,
+        "skipped_duplicate_prm_id": 0,
+        "skipped_inconsistent_params": 0,
+    }
 
 
-#Creat index by prm_id, turns list of records into dict
-def index_by_prm_id(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    out: Dict[str, Dict[str, Any]] = {}
-    for r in rows:
-        pid = r.get("prm_id")
-        if pid is None:
+    # expect num_perm/shingle_n to be consistent across the folder.
+    expected_num_perm: Optional[int] = None
+    expected_shingle_n: Optional[int] = None
+
+    for fp in files:
+        nn_name = fp.stem  # filename stem is the "architecture unit"
+        try:
+            with fp.open("r", encoding="utf-8") as f:
+                obj = json.load(f)
+        except Exception:
+            counters["skipped_error_file"] += 1
             continue
-        out[str(pid)] = r
-    return out
 
-#Computing Similarity for All
-def compute_similarity_for_all(
-    df,
-    *,
-    id_col: str = "prm_id",
-    name_col: str = "nn",
-    code_col: str = "nn_code",
-    threshold: float = 0.85,
-    num_perm: int = 128,
-    shingle_n: int = 7,
-    top_k: int = 25,
-) -> List[Dict[str, Any]]:
-
-    if not _HAS_DATASKETCH:
-        raise RuntimeError(
-            "datasketch is not installed. Install it with: pip install datasketch"
-        )
-    # 1) Build MinHash for each model
-    id2mh: Dict[str, MinHash] = {}
-    id2name: Dict[str, str] = {}
-
-    total = len(df)
-    for i, row in enumerate(df.itertuples(index=False), start = 1):
-        pid = getattr(row,id_col)
-        nn_name= getattr(row, name_col)
-        nn_code = getattr(row, code_col)
-
-        if pid is None or nn_code is None:
+        if "error" in obj:
+            counters["skipped_error_file"] += 1
             continue
-        pid_s = str(pid) #normalize id to string
-        id2name[pid_s] = str(nn_name)
+
+        prm_id = obj.get("prm_id")
+
+        if prm_id in seen_pids:
+            counters["skipped_duplicate_prm_id"] += 1
+            continue
+        seen_pids.add(prm_id)
+
+        if not prm_id:
+            counters["skipped_missing_prm_id"] += 1
+            continue
+        prm_id = str(prm_id)
+
+        cm = obj.get("code_minhash")
+        if not isinstance(cm, dict):
+            counters["skipped_missing_code_minhash"] += 1
+            continue
+
+        if int(cm.get("available", 0)) != 1:
+            counters["skipped_unavailable"] += 1
+            continue
+
+        num_perm = cm.get("num_perm")
+        shingle_n = cm.get("shingle_n")
+        hv = cm.get("hashvalues")
+
+        if not isinstance(num_perm, int) or not isinstance(shingle_n, int) or not isinstance(hv, list):
+            counters["skipped_bad_hashvalues"] += 1
+            continue
+
+        if expected_num_perm is None:
+            expected_num_perm = num_perm
+        if expected_shingle_n is None:
+            expected_shingle_n = shingle_n
+
+        # Keeping one consistent signature configuration across the whole dataset.
+        if num_perm != expected_num_perm or shingle_n != expected_shingle_n:
+            counters["skipped_inconsistent_params"] += 1
+            continue
+
+        if len(hv) != num_perm:
+            counters["skipped_bad_hashvalues"] += 1
+            continue
 
         try:
-            id2mh[pid_s] = to_minhash(str(nn_code), num_perm=num_perm, n=shingle_n)
-        except Exception as e:
-            # If one model has weird encoding, still keep going
-            # Store a None entry by skipping; later record will contain error.
-            print(f"[WARN] MinHash failed for prm_id={pid_s}: {type(e).__name__}: {e}")
+            hv_arr = np.array(hv, dtype=np.uint64)
+        except Exception:
+            counters["skipped_bad_hashvalues"] += 1
+            continue
 
-        #progess print
-        if i % 500 == 0:
-            print(f"[MinHash] {i}/{total} processed")
+        # Reconstruct MinHash from stored hashvalues.
+        mh = MinHash(num_perm=num_perm, hashvalues=hv_arr)
 
-    keys = list(id2mh.keys())
-    print(f"[INFO] Built MinHash for {len(keys)}/{total} models")
+        sigs.append(ModelSig(prm_id=prm_id, nn=nn_name, num_perm=num_perm, shingle_n=shingle_n, mh=mh))
+        pid2nn[prm_id] = nn_name
+        counters["loaded"] += 1
 
-    # 2) Build global LSH index
+    return sigs, pid2nn, counters
+
+def build_lsh(sigs: List[ModelSig], threshold: float) -> MinHashLSH:
+    if not sigs:
+        raise RuntimeError("No signatures loaded. Nothing to index.")
+    num_perm = sigs[0].num_perm
     lsh = MinHashLSH(threshold=threshold, num_perm=num_perm)
-    for k in keys:
-        lsh.insert(k, id2mh[k])
-    print(f"[INFO] LSH index built (threshold={threshold}, num_perm={num_perm})")
+    for s in sigs:
+        lsh.insert(s.prm_id, s.mh)
+    return lsh
 
-    # 3) Compute per-model similarity characteristics
-    out: List[Dict[str, Any]] = []
-    for idx, pid in enumerate(keys, start=1):
-        mh = id2mh[pid]
-        nn_name = id2name.get(pid, "")
+def compute_similarity(
+    sigs: List[ModelSig],
+    pid2nn: Dict[str, str],
+    *,
+    threshold: float,
+    top_k: int,
+) -> Iterable[Dict[str, Any]]:
+    """
+    Yields similarity records one-by-one
+    """
+    if not sigs:
+        return
+
+    num_perm = sigs[0].num_perm
+    shingle_n = sigs[0].shingle_n
+
+    lsh = build_lsh(sigs, threshold=threshold)
+    pid2mh = {s.prm_id: s.mh for s in sigs}
+
+    total = len(sigs)
+
+    for idx, s in enumerate(sigs, start=1):
+        pid = s.prm_id
+        mh = s.mh
+        nn_name = s.nn
 
         try:
-            cands = [c for c in lsh.query(mh) if c != pid]
+            candidates = [c for c in lsh.query(mh) if c != pid]
+
             scored: List[Tuple[str, float]] = []
-            for c in cands:
-                j = mh.jaccard(id2mh[c])
+            for c in candidates:
+                j = mh.jaccard(pid2mh[c])
                 scored.append((c, safe_float(j)))
 
             scored.sort(key=lambda x: x[1], reverse=True)
@@ -149,12 +231,12 @@ def compute_similarity_for_all(
                     "num_perm": num_perm,
                     "shingle_n": shingle_n,
                     "top_k": top_k,
-                    "candidate_count": len(cands),
+                    "candidate_count": len(candidates),
                     "near_dup_count": sum(1 for j in top_js if j >= threshold),
                     "max_jaccard": max(top_js) if top_js else 0.0,
                     "mean_topk_jaccard": (sum(top_js) / len(top_js)) if top_js else 0.0,
                     "neighbors": [
-                        {"prm_id": cid, "nn": id2name.get(cid, ""), "j": round(j, 4)}
+                        {"prm_id": cid, "nn": pid2nn.get(cid, ""), "j": round(j, 4)}
                         for cid, j in top
                     ],
                 },
@@ -173,93 +255,61 @@ def compute_similarity_for_all(
                 },
             }
 
-        out.append(rec)
+        if idx % 250 == 0:
+            print(f"[Similarity] {idx}/{total} processed", file=sys.stderr)
 
-        if idx % 500 == 0:
-            print(f"[Similarity] {idx}/{len(keys)} processed")
-
-    return out
-
-
-def merge_into_nn_json(
-        base_rows: List[Dict[str, Any]],
-        sim_rows: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    """
-    Merge sim_rows into base_rows by prm_id:
-    - If prm_id exists, set base['sim'] = sim['sim']
-    - If missing, append new record with prm_id/nn/sim
-    """
-    base_idx = index_by_prm_id(base_rows)
-
-    for s in sim_rows:
-        pid = str(s.get("prm_id"))
-        if pid in base_idx:
-            base_idx[pid]["sim"] = s.get("sim", {})
-            # optionally also backfill nn name
-            if "nn" not in base_idx[pid] and s.get("nn"):
-                base_idx[pid]["nn"] = s["nn"]
-        else:
-            base_rows.append(s)
-
-    return base_rows
+        yield rec
 
 
 def main():
-    # -------- Phase 1: load dataset --------
-    from ab.nn.api import data  # nn-dataset API
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--stats_dir", type=str, default="ab/nn/stat/nn",
+                    help="Directory with per-model stat JSONs (contains code_minhash.hashvalues).")
+    ap.add_argument("--out", type=str, default="ab/nn/stat/nn_sim.jsonl.gz",
+                    help="Output path. Use .jsonl or .jsonl.gz")
+    ap.add_argument("--threshold", type=float, default=0.90)
+    ap.add_argument("--top_k", type=int, default=25)
+    args = ap.parse_args()
 
-    df = data()
+    stats_dir = Path(args.stats_dir)
+    out_path = Path(args.out)
 
-    # Keep only what we need (fast + safe)
-    needed = ["nn", "nn_code", "prm_id"]
-    df = df[needed].head(5000)
+    if not stats_dir.exists():
+        raise RuntimeError(f"stats_dir not found: {stats_dir}")
 
-    # -------- Phase 2: configure similarity parameters --------
-    threshold = 0.85
-    num_perm = 128
-    shingle_n = 7
-    top_k = 25
+    print(f"[INFO] Loading per-model signatures from: {stats_dir}", file=sys.stderr)
+    sigs, pid2nn, counters = load_signatures_from_stats(stats_dir)
 
-    # Optional: dev limit to test quickly
-    # df = df.head(500)
+    print("[INFO] Load summary:", file=sys.stderr)
+    for k, v in counters.items():
+        print(f"  - {k}: {v}", file=sys.stderr)
 
-    print(f"[INFO] Models loaded: {len(df)}")
-    print(f"[INFO] Params: threshold={threshold}, num_perm={num_perm}, shingle_n={shingle_n}, top_k={top_k}")
+    if not sigs:
+        raise RuntimeError("No valid signatures loaded. Check per-model stats generation.")
 
-    # -------- Phase 3: compute similarity --------
-    sim_rows = compute_similarity_for_all(
-        df,
-        threshold=threshold,
-        num_perm=num_perm,
-        shingle_n=shingle_n,
-        top_k=top_k,
-    )
+    print(f"[INFO] Using num_perm={sigs[0].num_perm}, shingle_n={sigs[0].shingle_n}", file=sys.stderr)
+    print(f"[INFO] Building similarity: threshold={args.threshold}, top_k={args.top_k}", file=sys.stderr)
 
-    # -------- Phase 4: write / merge into nn.json --------
-    out_path = stat_dir / "nn.json"
-    base_rows = read_existing_json(out_path)
-    merged = merge_into_nn_json(base_rows, sim_rows)
+    ok = 0
+    bad = 0
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8") as f:
-        json.dump(merged, f, indent=2)
+    with open_text_writer(out_path) as w:
+        for rec in compute_similarity(
+            sigs,
+            pid2nn,
+            threshold=args.threshold,
+            top_k=args.top_k,
+        ):
+            w.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            if isinstance(rec.get("sim"), dict) and "error" in rec["sim"]:
+                bad += 1
+            else:
+                ok += 1
 
-    ok = sum(1 for r in sim_rows if "error" not in r.get("sim", {}))
-    bad = len(sim_rows) - ok
-
-    print(f"[DONE] Similarity computed for {len(sim_rows)} models (ok={ok}, fail={bad})")
-    print(f"[DONE] Updated JSON → {out_path}")
+    print(f"[DONE] Wrote: {out_path}", file=sys.stderr)
+    print(f"[DONE] Records: {len(sigs)} (ok={ok}, fail={bad})", file=sys.stderr)
 
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
 
