@@ -70,7 +70,7 @@ def get_system_info() -> dict:
     info = {
         'cpu_type': platform.processor() or platform.machine(),
         'cpu_count': psutil.cpu_count(logical=True),
-        'total_ram_gb': round(psutil.virtual_memory().total / (1024**3), 2),
+        'total_ram_kb': round(psutil.virtual_memory().total / 1024, 2),
     }
     
     # GPU information
@@ -78,7 +78,7 @@ def get_system_info() -> dict:
         try:
             gpu_props = torch.cuda.get_device_properties(0)
             info['gpu_type'] = gpu_props.name
-            info['gpu_total_memory_gb'] = round(gpu_props.total_memory / (1024**3), 2)
+            info['gpu_total_memory_kb'] = round(gpu_props.total_memory / 1024, 2)
         except Exception:
             info['gpu_type'] = 'CUDA Available (details unavailable)'
     else:
@@ -90,7 +90,7 @@ def get_system_info() -> dict:
 def get_current_resource_usage() -> dict:
     """Get current resource usage metrics"""
     usage = {
-        'occupied_ram_gb': round(psutil.virtual_memory().used / (1024**3), 2),
+        'occupied_ram_kb': round(psutil.virtual_memory().used / 1024, 2),
         'ram_usage_percent': psutil.virtual_memory().percent,
         'cpu_usage_percent': psutil.cpu_percent(interval=0.1),
     }
