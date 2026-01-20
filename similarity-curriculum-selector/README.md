@@ -13,7 +13,7 @@ This document outlines the step-by-step instructions to run the Similarity-Based
 First, navigate to the directory containing the updated source code.
 
 ```powershell
-cd c:\Users\mailm\SQL\updated_src
+cd nn-dataset\similarity-curriculum-selector
 ```
 
 ## 2. Execution Steps
