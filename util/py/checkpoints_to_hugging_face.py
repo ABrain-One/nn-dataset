@@ -1,7 +1,6 @@
 import sys
 import os
 from ab.nn.util.Const import ab_root_path
-from ab.nn.util.db.Util import unique_nn_cls
 
 # --- AUTO-PATH SETUP (Make script Plug & Play) ---
 # Automatically detects project root and adds it to system path.
@@ -26,6 +25,7 @@ try:
     from ab.nn.util.Const import stat_train_dir, ckpt_dir, HF_NN
     from ab.nn.util.Util import release_memory
     import ab.nn.util.hf.HF as HF
+    from ab.nn.util.db.Util import unique_nn_cls
 except ImportError:
     print("\n❌ Critical Error: Could not import 'ab.nn' modules.")
     print("   Please ensure you are running this script from the project root or 'cmd/py' folder.")
