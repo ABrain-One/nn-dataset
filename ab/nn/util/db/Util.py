@@ -1,4 +1,6 @@
 from typing import Optional
+import os
+import site
 
 import pandas as pd
 
@@ -29,9 +31,22 @@ def get_package_location(package_name) -> Optional[Path]:
     except pkg_resources.DistributionNotFound:
         return None
 
+def check_if_script_is_pip_installed() -> bool:
+    script_location = os.path.abspath(__file__)
+    site_packages_dirs = site.getsitepackages()
+
+    for site_package in site_packages_dirs:
+        if site_package in script_location:
+            return True
+    return False
+
+is_lemur_dependency = check_if_script_is_pip_installed()
+
+
 def nn_mod(*nms):
-    lemur_root = get_package_location(nn_dataset) or ab_root_path
-    mod = ".".join(to_nn + nms)
+    # print(f"lemur is a pip dependency: {is_lemur_dependency}")
+    mod = ".".join(to_nn + nms)    
+    lemur_root = get_package_location(nn_dataset) if is_lemur_dependency else ab_root_path    
     code_file = lemur_root / (mod.replace('.', '/') + '.py')
     if not code_file.exists():
         code_file.parent.mkdir(parents=True, exist_ok=True)

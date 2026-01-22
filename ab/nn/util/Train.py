@@ -195,7 +195,8 @@ class Train:
 
         # Support multiple comma-separated metrics: "bleu,meteor,cider"
         self.metric_names = [m.strip() for m in metric.split(',')]
-        self.metric_functions = {name: self.load_metric_function(name) for name in self.metric_names}
+        self.metric_fns = {name: self.load_metric_function(name) for name in self.metric_names}
+        self.primary_metric_fn = list(self.metric_fns.values())[0]  # First metric function used for accuracy comparison
         self.primary_metric = self.metric_names[0]  # First metric used for accuracy comparison
         self.metric_name = metric  # Keep original for compatibility
         self.all_metric_results = {}  # Store all metric results
@@ -264,15 +265,15 @@ class Train:
     def _compute_accuracy(self, data_loader) -> float:
         """Compute accuracy over a dataset using the metric function"""
         self.model.eval()
-        self.metric_function.reset()
+        self.primary_metric_fn.reset()
 
         with torch.no_grad():
             for inputs, labels in data_loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 outputs = self.model(inputs)
-                self.metric_function(outputs, labels)
+                self.primary_metric_fn(outputs, labels)
 
-        return self.metric_function.result()
+        return self.primary_metric_fn.result()
 
     def load_metric_function(self, metric_name):
         """
@@ -327,7 +328,7 @@ class Train:
             train_accuracy = self._compute_accuracy(self.train_loader)
             test_accuracy = self.eval(self.test_loader)
 
-            accuracy = test_accuracy
+            accuracy = test_accuracy[0]
             accuracy = 0.0 if math.isnan(accuracy) or math.isinf(accuracy) else accuracy
             duration = time.time_ns() - start_time
             epoch_duration = (time.time_ns() - epoch_start_time) / 1e9  # seconds
@@ -479,7 +480,7 @@ class Train:
         self.model.eval()
 
         # Reset ALL metrics at the start of evaluation
-        for metric_fn in self.metric_functions.values():
+        for metric_fn in self.metric_fns.values():
             metric_fn.reset()
 
         with torch.no_grad():
@@ -488,11 +489,11 @@ class Train:
                 outputs = self.model(inputs)
 
                 # Call ALL metrics - they all use the same interface
-                for metric_fn in self.metric_functions.values():
+                for metric_fn in self.metric_fns.values():
                     metric_fn(outputs, labels)
 
         # Collect results from ALL metrics
-        all_results = {name: fn.result() for name, fn in self.metric_functions.items()}
+        all_results = {name: fn.result() for name, fn in self.metric_fns.items()}
         
         # Return primary metric (first one) for accuracy comparison, and all results
         primary_accuracy = all_results[self.primary_metric]
