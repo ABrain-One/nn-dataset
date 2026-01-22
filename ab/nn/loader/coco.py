@@ -5,7 +5,7 @@ def loader(transform_fn, task):
         f = Detection
     elif task == 'img-segmentation':
         f = Segmentation
-    elif task == 'img-captioning':
+    elif task == 'img-caption' or task == 'img-captioning':
         f = Caption
     elif task == 'txt-image':
         f = Text2Image

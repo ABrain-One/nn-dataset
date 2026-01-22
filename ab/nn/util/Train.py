@@ -193,8 +193,12 @@ class Train:
         self.task = task
         self.prm = prm
 
-        self.metric_name = metric
-        self.metric_function = self.load_metric_function(metric)
+        # Support multiple comma-separated metrics: "bleu,meteor,cider"
+        self.metric_names = [m.strip() for m in metric.split(',')]
+        self.metric_functions = {name: self.load_metric_function(name) for name in self.metric_names}
+        self.primary_metric = self.metric_names[0]  # First metric used for accuracy comparison
+        self.metric_name = metric  # Keep original for compatibility
+        self.all_metric_results = {}  # Store all metric results
         self.save_to_db = save_to_db
         self.is_code = is_code
 
@@ -464,7 +468,7 @@ class Train:
             print(f"[WARN] Failed to save training summary: {e}")
 
     def eval(self, test_loader):
-        """Evaluation with standardized metric interface"""
+        """Evaluation with standardized metric interface - supports multiple metrics"""
         if debug:
             for inputs, labels in test_loader:
                 print(f"[EVAL DEBUG] labels type: {type(labels)}")
@@ -474,19 +478,25 @@ class Train:
                     print(f"[EVAL DEBUG] labels sample: {labels[:2]}")
         self.model.eval()
 
-        # Reset the metric at the start of evaluation
-        self.metric_function.reset()
+        # Reset ALL metrics at the start of evaluation
+        for metric_fn in self.metric_functions.values():
+            metric_fn.reset()
 
         with torch.no_grad():
             for inputs, labels in test_loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 outputs = self.model(inputs)
 
-                # Call the metric - all metrics now use the same interface
-                self.metric_function(outputs, labels)
+                # Call ALL metrics - they all use the same interface
+                for metric_fn in self.metric_functions.values():
+                    metric_fn(outputs, labels)
 
-        # Get the final result from the metric
-        return self.metric_function.result()
+        # Collect results from ALL metrics
+        all_results = {name: fn.result() for name, fn in self.metric_functions.items()}
+        
+        # Return primary metric (first one) for accuracy comparison, and all results
+        primary_accuracy = all_results[self.primary_metric]
+        return primary_accuracy, all_results
 
 
 def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Union[str, None] = None, save_path: Union[str, None] = None, export_onnx=False,
