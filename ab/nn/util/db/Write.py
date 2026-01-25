@@ -17,6 +17,10 @@ def init_population():
                 json_run_to_db()
             except Exception as e:
                 print(f"Runtime analytics import failed: {e}")
+            try:
+                json_nn_to_db()
+            except Exception as e:
+                print(f"NN statistics import failed: {e}")
         else:
             db_from_hf()
 
@@ -206,6 +210,53 @@ def json_run_to_db():
                 values,
             )
     close_conn(conn)
+
+
+def json_nn_to_db():
+    """
+    Import NN statistics from JSON files in stat/nn into the `nn_stat` table.
+    Each JSON file contains model statistics with the nn_name derived from filename
+    and prm_id stored within the JSON.
+    """
+    if not stat_nn_dir.exists():
+        return
+
+    json_files = list(stat_nn_dir.glob("*.json"))
+    if not json_files:
+        return
+
+    print(f"Importing NN statistics from {len(json_files)} JSON files in {stat_nn_dir} into database...")
+
+    success_count = 0
+    error_count = 0
+
+    for json_file in tqdm(json_files, desc="Importing NN stats"):
+        try:
+            # Extract nn_name from filename (without .json extension)
+            nn_name = json_file.stem
+
+            # Read JSON file
+            with open(json_file, 'r', encoding='utf-8') as f:
+                stats = json.load(f)
+
+            # Get prm_id from the JSON content
+            prm_id = stats.get('prm_id')
+
+            if not prm_id:
+                error_count += 1
+                continue
+
+            # Save to database using existing function
+            if save_nn_stat(nn_name, prm_id, stats):
+                success_count += 1
+            else:
+                error_count += 1
+
+        except Exception as e:
+            error_count += 1
+            print(f"Error processing {json_file.name}: {e}", file=sys.stderr)
+
+    print(f"NN statistics import complete: {success_count} succeeded, {error_count} failed.")
 
 
 def save_results(config_ext: tuple[str, str, str, str, int], prm: dict):

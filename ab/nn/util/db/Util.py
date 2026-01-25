@@ -1,40 +1,61 @@
-import importlib
-import math
+from typing import Optional
+import os
+import site
 
-from ab.nn.util.Const import *
+import pandas as pd
+
+from ab.nn.util.Util import *
+from ab.nn.util.db.Read import code
 
 
-def get_ab_nn_attr(module_path, attr_name=None):
-    """
-    Retrieve an attribute from a module dynamically.
-    
-    :param module_path: The python path to the module (e.g. 'ab.nn.nn.RLFN')
-    :param attr_name: The name of the attribute to retrieve from that module (e.g. 'supported_hyperparameters').
-                      Also acts as the default return value if lookup fails.
-    :return: The attribute object, or attr_name if not found.
-    """
-    if module_path is None:
-        return attr_name
-        
-    parts = module_path.split('.')
-    # If module_path doesn't start with 'ab', assume it's relative to 'ab.nn'
-    if parts[0] != 'ab':
-        modul = to_nn + tuple(parts)
-    else:
-        modul = tuple(parts)
+def unique_nn(epoch_max, nns, dataset, task, metric):
+    from ab.nn.api import data
+    df = data(nn_prefixes=('rag-', 'unq-'), only_best_accuracy=True, task=task, dataset=dataset, metric=metric, epoch=epoch_max)
+    df = pd.concat([df,
+                    data(nn=nns, only_best_accuracy=True, task=task, dataset=dataset, metric=metric, epoch=epoch_max)])
+    return df.sort_values(by='accuracy', ascending=False)
 
+
+def unique_nn_cls(epoch_max, dataset='cifar-10', task='img-classification', metric='acc'):
+    return unique_nn(epoch_max, core_nn_cls, dataset, task, metric)
+
+
+def get_attr(mod, f):
+    return get_obj_attr(__import__(mod, fromlist=[f]), f)
+
+def get_package_location(package_name) -> Optional[Path]:
+    import pkg_resources
     try:
-        # Import the module
-        module = importlib.import_module(".".join(modul))
-        
-        # Retrieve the attribute
-        if attr_name:
-            return getattr(module, attr_name)
-        else:
-            return module
-            
-    except (ModuleNotFoundError, AttributeError):
-        return attr_name
+        distribution = pkg_resources.get_distribution(package_name)
+        return Path(distribution.location)
+    except pkg_resources.DistributionNotFound:
+        return None
+      
+def check_if_script_is_pip_installed() -> bool:
+    script_location = os.path.abspath(__file__)
+    site_packages_dirs = site.getsitepackages()
+
+    for site_package in site_packages_dirs:
+        if site_package in script_location:
+            return True
+    return False
+
+is_lemur_dependency = check_if_script_is_pip_installed()
+
+
+def nn_mod(*nms):
+    # print(f"lemur is a pip dependency: {is_lemur_dependency}")
+    mod = ".".join(to_nn + nms)    
+    lemur_root = get_package_location(nn_dataset) if is_lemur_dependency else ab_root_path    
+    code_file = lemur_root / (mod.replace('.', '/') + '.py')
+    if not code_file.exists():
+        code_file.parent.mkdir(parents=True, exist_ok=True)
+        mod_l = mod.split('.')
+        code_file.write_text(code(mod_l[-2], mod_l[-1]))
+    return mod
+
+def get_ab_nn_attr(mod, f):
+    return get_attr(nn_mod(mod), f)
 
 def min_accuracy(dataset):
     """
