@@ -11,6 +11,9 @@ from ab.nn.util.hf.DB_from_HF import repo_id
 def clean_gen_folders():
     for gen_folder in gen_folders:
         shutil.rmtree(gen_folder)
+    for code_folder in code_folders:
+        for file in code_folder.iterdir():
+            if file.is_file(): file.unlink()
 
 
 def db2hf(remove_gen_folders=False, hf_token=None):
