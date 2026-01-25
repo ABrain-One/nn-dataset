@@ -1,4 +1,4 @@
-from ab.nn.util.Util import get_ab_nn_attr
+from ab.nn.util.db.Util import get_ab_nn_attr
 import os
 import importlib.util
 
