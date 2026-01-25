@@ -1,8 +1,7 @@
-import os
-import json
 import optuna
 from ab.nn.util.Exception import *
 from ab.nn.util.Train import optuna_objective
+from ab.nn.util.db.Util import *
 from ab.nn.util.Util import *
 from ab.nn.util.NNAnalysis import log_nn_stat
 from ab.nn.util.db.Calc import patterns_to_configs
