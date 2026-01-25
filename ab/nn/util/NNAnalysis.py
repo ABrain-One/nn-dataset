@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any, Dict
 
 import torch
 import torch.nn as nn
@@ -10,6 +10,12 @@ from ab.nn.util.Const import stat_nn_dir
 from ab.nn.util.Loader import load_dataset
 from ab.nn.util.Util import get_in_shape, torch_device, first_tensor
 
+try:
+    from ab.nn.util.NNAnalysisSimilarity import to_minhash
+    _HAS_DATASKETCH = True
+except Exception:
+    to_minhash = None
+    _HAS_DATASKETCH = False
 
 def get_max_depth(module, depth=0):
     '''Calculate maximum depth of the model.'''
@@ -284,6 +290,32 @@ def analyze_model_comprehensive(model: nn.Module, nn_code: str, input_tensor) ->
                     'pooling': pooling_types}},
                 'param_distribution': param_distribution}}))
 
+def code_minhash_signature(
+    nn_code: str,
+    *,
+    num_perm: int = 128,
+    shingle_n: int = 7,
+) -> Dict[str, Any]:
+    """
+    Return a JSON-serializable MinHash signature for code.
+    Stores ONLY hashvalues + metadata (portable + small).
+    """
+    if not _HAS_DATASKETCH or to_minhash is None:
+        return {
+            "method": "minhash",
+            "available": 0,
+            "error": "datasketch not installed / to_minhash not importable",
+        }
+
+    mh = to_minhash(nn_code or "", num_perm=num_perm, n=shingle_n)
+    # mh.hashvalues is a numpy array; tolist() makes it JSON friendly
+    return {
+        "method": "minhash",
+        "available": 1,
+        "num_perm": num_perm,
+        "shingle_n": shingle_n,
+        "hashvalues": mh.hashvalues.tolist(),
+    }
 
 # Read existing JSON
 def read_json(path: Path) -> dict[str, dict]:
@@ -293,39 +325,54 @@ def read_json(path: Path) -> dict[str, dict]:
         return json.load(f)
 
 
-def log_nn_stat(nn_name: str, max_rows: Optional[int] = None, rewrite: bool = False):
-    try:
-        df = data(nn=nn_name, max_rows=max_rows, unique_nn=True)
+def log_nn_stat(nn_name: Optional[str] = None, max_rows: Optional[int] = None, rewrite: bool = False):
+    df = data(nn=nn_name, max_rows=max_rows)
+    df = df.drop_duplicates(subset=["nn"], keep="first")
 
-        stat_nn_dir.mkdir(parents=True, exist_ok=True)
-        analyzed_nn = set([p.stem for p in stat_nn_dir.iterdir() if p.is_file()])
+    stat_nn_dir.mkdir(parents=True, exist_ok=True)
+    analyzed_nn = {p.stem for p in stat_nn_dir.iterdir() if p.is_file()}
 
-        i = 0
-        for _, row in df.iterrows():
-            nn_name = row['nn']
-            f_nm = stat_nn_dir / f'{nn_name}.json'
-            if rewrite or not nn_name in analyzed_nn:
-                prm_id = row['prm_id']
-                i += 1
-                print(f'{i}. analyzing NN: {nn_name}')
-                try:
-                    prm = row['prm']
-                    if isinstance(prm, str): prm = json.loads(prm.replace("'", '"'))
-                    local_scope = {'torch': torch, 'nn': torch.nn}
-                    nn_code = row['nn_code']
-                    exec(nn_code, local_scope, local_scope)
-                    out_shape, _, train_set, _ = load_dataset(row['task'], row['dataset'], prm['transform'])
-                    input_tensor = first_tensor(train_set)
-                    in_shape = get_in_shape(train_set)
-                    model = local_scope['Net'](in_shape, out_shape, prm, torch_device())
-                    model.to(torch_device())
-                    stats = analyze_model_comprehensive(model, nn_code, input_tensor)
-                    stats.update({'prm_id': prm_id})
-                    with open(f_nm, 'w') as f:
-                        json.dump(stats, f, indent=4)
-                except Exception as e:
-                    with open(f_nm, 'w') as f:
-                        json.dump({'prm_id': prm_id, 'error': repr(e)}, f, indent=4)
-    except Exception as e:
-        print(e)
-        pass
+    i = 0
+    for _, row in df.iterrows():
+        nn = row["nn"]
+        f_nm = stat_nn_dir / f"{nn}.json"
+        if not (rewrite or nn not in analyzed_nn):
+            continue
+
+        prm_id = row["prm_id"]
+        i += 1
+        print(f"{i}. analyzing NN: {nn}")
+
+        try:
+            prm = row["prm"]
+            if isinstance(prm, str):
+                prm = json.loads(prm.replace("'", '"'))
+
+            local_scope = {"torch": torch, "nn": torch.nn}
+            nn_code = row["nn_code"]
+            exec(nn_code, local_scope, local_scope)
+
+            out_shape, _, train_set, _ = load_dataset(row["task"], row["dataset"], prm["transform"])
+            input_tensor = first_tensor(train_set)
+            in_shape = get_in_shape(train_set)
+
+            model = local_scope["Net"](in_shape, out_shape, prm, torch_device()).to(torch_device())
+
+            stats = analyze_model_comprehensive(model, nn_code, input_tensor)
+
+            try:
+                stats["code_minhash"] = code_minhash_signature(nn_code, num_perm=128, shingle_n=7)
+            except Exception as e:
+                stats["code_minhash"] = {"available": 0, "error": repr(e)}
+
+            stats["prm_id"] = prm_id
+
+            with open(f_nm, "w", encoding="utf-8") as f:
+                json.dump(stats, f, indent=4, ensure_ascii=False)
+
+            analyzed_nn.add(nn)
+
+        except Exception as e:
+            with open(f_nm, "w", encoding="utf-8") as f:
+                json.dump({"prm_id": prm_id, "error": repr(e)}, f, indent=4, ensure_ascii=False)
+            analyzed_nn.add(nn)
