@@ -32,7 +32,7 @@ except ImportError:
     sys.exit(1)
 
 # --- CONFIGURATION ---
-SUMMARY_FILENAME = 'all_models_summary.json'
+SUMMARY_FILENAME = 'all_models.json'
 
 # =================================================================
 # ⚠️ SETTINGS
