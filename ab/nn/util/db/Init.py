@@ -160,9 +160,43 @@ def init_db():
         FOREIGN KEY (nn_name) REFERENCES nn (name) ON DELETE CASCADE
     )
     """)
+
     # Indexes for NN statistics
     cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{nn_stat_table}_nn ON {nn_stat_table} (nn_name);")
     cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{nn_stat_table}_prm ON {nn_stat_table} (prm_id);")
+
+    # Create NN code MinHash signatures table (DB-first diversity)
+    cursor.execute(f"""
+    CREATE TABLE IF NOT EXISTS nn_code_minhash (
+        nn_name TEXT PRIMARY KEY,
+        num_perm INTEGER NOT NULL,
+        shingle_n INTEGER NOT NULL,
+        hashvalues_json TEXT NOT NULL,
+        signature_version INTEGER NOT NULL DEFAULT 1,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (nn_name) REFERENCES nn (name) ON DELETE CASCADE
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nnmh_perm ON nn_code_minhash(num_perm);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nnmh_name ON nn_code_minhash(nn_name);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nnmh_shingle ON nn_code_minhash(shingle_n);")
+
+# NN Similarity Table
+    cursor.execute(f"""
+    CREATE TABLE IF NOT EXISTS nn_similarity (
+      nn_a TEXT NOT NULL,
+      nn_b TEXT NOT NULL,
+      jaccard REAL NOT NULL,
+      num_perm INTEGER NOT NULL,
+      shingle_n INTEGER NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (nn_a, nn_b),
+      FOREIGN KEY (nn_a) REFERENCES nn (name) ON DELETE CASCADE,
+      FOREIGN KEY (nn_b) REFERENCES nn (name) ON DELETE CASCADE
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nn_similarity_a_j ON nn_similarity(nn_a, jaccard);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nn_similarity_b ON nn_similarity(nn_b);")
 
     close_conn(conn)
     print(f"Database initialized at {db_file}")
@@ -180,4 +214,6 @@ def reset_db():
     for nm in all_tables:
         cursor.execute(f"DROP TABLE IF EXISTS {nm}")
     close_conn(conn)
+    init_db()
+if __name__ == "__main__":
     init_db()
