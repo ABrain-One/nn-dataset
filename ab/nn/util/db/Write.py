@@ -106,7 +106,9 @@ def json_train_to_db():
                     for trial in json.load(f):
                         _, _, metric, nn = sub_config = conf_to_names(sub_config_str)
                         populate_code_table('nn', cursor, name=nn)
-                        populate_code_table('metric', cursor, name=metric)
+                        # Handle comma-separated metrics (e.g., "bleu,meteor,cider")
+                        for single_metric in metric.split(','):
+                            populate_code_table('metric', cursor, name=single_metric.strip())
                         populate_code_table('transform', cursor, name=trial['transform'])
                         save_stat(sub_config + (epoch,), trial, cursor)
                 except Exception as e:
