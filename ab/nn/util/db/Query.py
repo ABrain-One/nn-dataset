@@ -4,6 +4,105 @@ from typing import Optional
 
 from ab.nn.util.Const import main_columns_ext, tmp_data
 
+<<<<<<< Updated upstream
+=======
+#-----curriculum bands-----
+
+SIM_BANDS: dict[str, tuple[float, float]] = {
+    "high": (0.95, 1.0000001),
+    "medium": (0.85, 0.95),
+    "low": (0.60, 0.85),
+    "very_low": (0.0, 0.60),
+}
+
+def band_to_range(band: Optional[str], default_min: float, default_max: float) -> tuple[float, float]:
+    if band is None:
+        return float(default_min), float(default_max)
+    if band not in SIM_BANDS:
+        raise ValueError(f"Invalid similarity_band: {band}")
+    mn, mx = SIM_BANDS[band]
+    return float(mn), float(mx)
+
+#-----Helpers-----
+def resolve_work_table(cur: Cursor, preferred: str = tmp_data, fallback: str = "stat") -> str:
+    cur.execute(
+        "SELECT 1 FROM sqlite_temp_master WHERE type IN ('table','view') AND name = ?",
+        (preferred,),
+    )
+    if cur.fetchone():
+        return preferred
+    cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name = ?",
+        (preferred,),
+    )
+    if cur.fetchone():
+        return preferred
+
+    return fallback
+
+def build_stat_filters_sql(sql: JoinConf, alias: str = "b") -> tuple[str, list]:
+    """
+    Build WHERE clause for task/dataset/metric filters.
+    """
+    clauses: list[str] = []
+    params: list = []
+
+    if sql.task:
+        clauses.append(f"{alias}.task = ?")
+        params.append(sql.task)
+
+    if sql.dataset:
+        clauses.append(f"{alias}.dataset = ?")
+        params.append(sql.dataset)
+
+    if sql.metric:
+        clauses.append(f"{alias}.metric = ?")
+        params.append(sql.metric)
+
+    if not clauses:
+        return "", []
+
+    return "WHERE " + " AND ".join(clauses), params
+# Anchor based curriculum band
+
+def _anchor_band(*, cur: Cursor, sql: JoinConf, work_table: str, anchor_nn: str, min_j: float, max_j: float, limit_k: int) -> None:
+    where_sql, where_params = build_stat_filters_sql(sql, alias="b")
+
+    cur.execute(
+        f"""
+        WITH base AS (
+          SELECT *
+          FROM {work_table} b
+          {where_sql}
+        ),
+        best_per_nn AS (
+          SELECT
+            b.*,
+            ROW_NUMBER() OVER (
+              PARTITION BY b.nn
+              ORDER BY b.accuracy DESC, b.epoch ASC, b.nn ASC
+            ) AS rn
+          FROM base b
+        ),
+        unique_nn AS (
+          SELECT * FROM best_per_nn WHERE rn = 1
+        )
+        SELECT u.*, s.jaccard AS anchor_jaccard
+        FROM nn_similarity s
+        JOIN unique_nn u
+          ON u.nn = s.nn_b
+        WHERE s.nn_a = ?
+          AND s.jaccard >= ?
+          AND s.jaccard <  ?
+        ORDER BY u.accuracy DESC, s.jaccard DESC, u.nn ASC, u.epoch ASC
+        LIMIT ?
+        """,
+        [*where_params, anchor_nn, float(min_j), float(max_j), int(limit_k)],
+    )
+
+
+#-----JoinConf-----
+>>>>>>> Stashed changes
 
 @dataclass(frozen=True)
 class JoinConf:
