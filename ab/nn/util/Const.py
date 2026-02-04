@@ -68,7 +68,8 @@ default_random_config_order = False
 default_save_pth_weights = False
 default_save_onnx_weights = False
 
-default_epoch_limit_minutes = 30  # minutes
+default_epoch_limit_minutes = None # minutes
+
 
 base_module = 'ab'
 to_nn = (base_module, 'nn')
