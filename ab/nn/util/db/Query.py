@@ -25,12 +25,32 @@ def band_to_range(band: Optional[str], default_min: float, default_max: float) -
     return float(mn), float(mx)
 
 #-----Helpers-----
+"""
 def resolve_work_table(cur: Cursor, preferred: str = "tmp_data", fallback: str = "stat") -> str:
     cur.execute(
         "SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name = ?",
         (preferred,),
     )
     return preferred if cur.fetchone() else fallback
+"""
+def resolve_work_table(cur: Cursor, preferred: str = tmp_data, fallback: str = "stat") -> str:
+    # Check TEMP tables/views first (CREATE TEMP TABLE ... lives here)
+    cur.execute(
+        "SELECT 1 FROM sqlite_temp_master WHERE type IN ('table','view') AND name = ?",
+        (preferred,),
+    )
+    if cur.fetchone():
+        return preferred
+
+    # Then check persistent tables/views
+    cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name = ?",
+        (preferred,),
+    )
+    if cur.fetchone():
+        return preferred
+
+    return fallback
 
 def build_stat_filters_sql(sql: JoinConf, alias: str = "b") -> tuple[str, list]:
     """
@@ -229,7 +249,12 @@ def join_nn_query(sql: JoinConf, cur: Cursor) -> list[dict]:
 
     # Use tmp_data if present, otherwise fall back to stat.
     work = resolve_work_table(cur, preferred=tmp_data, fallback="stat")
-
+    if work != tmp_data:
+        raise RuntimeError(
+            f"Expected '{tmp_data}' to exist, but it doesn't. "
+            "NNGPT requires nn_code/metric_code/transform_code columns which stat doesn't provide. "
+            "Rebuild tmp_data or run the pipeline that generates it."
+        )
     # ========================================================
     # Phase 2: anchor-band SQL
     # ========================================================
