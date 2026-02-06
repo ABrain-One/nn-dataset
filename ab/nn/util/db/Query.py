@@ -41,7 +41,7 @@ class JoinConf:
         # You can add more validation for the newly added parameter if needed
 
 
-def join_nn_query(sql: JoinConf, limit_clause: Optional[str], cur):
+def join_nn_query(sql: JoinConf, cur):
     cur.execute(f'CREATE INDEX IF NOT EXISTS i_id ON {tmp_data}(id)')
     if sql.same_columns or sql.diff_columns or sql.enhance_nn:
         t = tuple({*(sql.same_columns or set()), *(sql.diff_columns or set())}) + ('accuracy',) if sql.enhance_nn else ()
@@ -80,7 +80,7 @@ SELECT
     d2.duration AS duration_2,    
     d2.epoch AS epoch_2    
 FROM matches m
-LEFT JOIN {tmp_data} d2 ON d2.id = m.matched_id {limit_clause}''')
+LEFT JOIN {tmp_data} d2 ON d2.id = m.matched_id''')
     return fill_hyper_prm(cur, sql.num_joint_nns)
 
 
