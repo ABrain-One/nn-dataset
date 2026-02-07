@@ -156,6 +156,7 @@ dependent_tables = code_tables + param_tables
 all_tables = main_tables + dependent_tables
 index_colum = ('task', 'dataset') + dependent_tables
 extra_main_columns = ('duration', 'accuracy')
+nn_code_minhash_table = "nn_code_minhash"
 
 # Mobile analytics (runtime) table
 run_table = 'run'
@@ -167,10 +168,11 @@ run_extra_columns = (
 
 # NN statistics table
 nn_stat_table = 'nn_stat'
-
-tmp_data = 'temp_data'
-
 HF_NN = 'NN-Dataset'
+tmp_data = "tmp_data"
+STAT_TABLE = "stat"
+NN_SIM_TABLE = "nn_similarity"
+WORK_TABLE = "tmp_data"
 
 core_nn_cls = (
     # img-classification

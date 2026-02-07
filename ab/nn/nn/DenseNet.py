@@ -45,14 +45,6 @@ class _DenseLayer(nn.Module):
 
         return cp.checkpoint(closure, *input, use_reentrant=False)
 
-    @torch.jit._overload_method
-    def forward(self, input: List[Tensor]) -> Tensor:
-        pass
-
-    @torch.jit._overload_method
-    def forward(self, input: Tensor) -> Tensor:
-        pass
-
     def forward(self, input: Tensor) -> Tensor:
         if isinstance(input, Tensor):
             prev_features = [input]
