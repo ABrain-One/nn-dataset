@@ -70,11 +70,3 @@ def min_accuracy(dataset):
     except Exception:
         return 0.0
 
-# Re-implement other missing utility functions if they were in the deleted file
-# Based on usage in other files, likely needed functions:
-
-def unique_nn(task=None, dataset=None, metric=None):
-    raise NotImplementedError("Pandas dependency removed. unique_nn not available.")
-
-def unique_nn_cls(task=None, dataset=None, metric=None):
-     raise NotImplementedError("Pandas dependency removed. unique_nn_cls not available.")
