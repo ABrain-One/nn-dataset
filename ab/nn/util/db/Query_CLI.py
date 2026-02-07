@@ -2,138 +2,132 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+from typing import Optional, Tuple
 
-from ab.nn.api import data
-from ab.nn.util.db.Query import JoinConf
+from ab.nn.util.db.Init import sql_conn, close_conn
+from ab.nn.util.db.Query import JoinConf, join_nn_query
 
 
-def _csv_to_tuple(v: str | None):
+def _csv_to_tuple(v: str | None) -> Optional[tuple[str, ...]]:
     if not v:
         return None
     parts = [p.strip() for p in v.split(",") if p.strip()]
     return tuple(parts) if parts else None
 
 
-def _compact_view(rows: list[dict], *, keep_pairs_top: int = 5) -> list[dict]:
-    """
-    Make output human-readable:
-    - drop huge code fields
-    - show key stats + diversity explanation
-    """
-    drop_keys = {"nn_code", "metric_code", "transform_code"}
-    out = []
-
-    for r in rows:
-        rr = {k: v for k, v in r.items() if k not in drop_keys}
-
-        # Keep only the important bits from diversity_meta
-        dm = rr.get("diversity_meta")
-        if isinstance(dm, dict):
-            pw = dm.get("pairwise_summary")
-            if isinstance(pw, dict):
-                pw = dict(pw)
-                # shrink pairs list
-                if isinstance(pw.get("pairs_top"), list):
-                    pw["pairs_top"] = pw["pairs_top"][:keep_pairs_top]
-                dm = dict(dm)
-                dm["pairwise_summary"] = pw
-
-            rr["diversity_meta"] = {
-                "use_arch_diversity": dm.get("use_arch_diversity"),
-                "max_arch_jaccard": dm.get("max_arch_jaccard"),
-                "min_arch_jaccard": dm.get("min_arch_jaccard"),
-                "requested_k": dm.get("requested_k"),
-                "selected_k": dm.get("selected_k"),
-                "skipped_missing_signature": dm.get("skipped_missing_signature"),
-                "skipped_too_similar": dm.get("skipped_too_similar"),
-                "fallback_filled": dm.get("fallback_filled"),
-                "pairwise_summary": dm.get("pairwise_summary"),
-            }
-
-        # Optional: shrink prm too (can be huge)
-        prm = rr.get("prm")
-        if isinstance(prm, dict) and len(prm) > 30:
-            rr["prm"] = {k: prm[k] for k in list(prm.keys())[:30]}
-            rr["prm_truncated"] = True
-
-        out.append(rr)
-
-    return out
-
-
-def main():
-    ap = argparse.ArgumentParser(
-        prog="Query_CLI",
-        description="Phase-1: Retrieve N models for same task/dataset/metric with optional architecture diversity (code_minhash).",
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="General + Curriculum query runner (Phase 1 + Phase 2)"
     )
 
-    # Slice filters (functional equivalence)
-    ap.add_argument("--task", type=str, default=None)
-    ap.add_argument("--dataset", type=str, default=None)
-    ap.add_argument("--metric", type=str, default=None)
-    ap.add_argument("--nn", type=str, default=None)
-    ap.add_argument("--epoch", type=int, default=None)
-
-    # Output / sizing
-    ap.add_argument("--limit", type=int, default=5)
-    ap.add_argument("--pretty", action="store_true")
-    ap.add_argument("--summary", action="store_true", help="Compact output: hide large code fields, show diversity summary.")
-    ap.add_argument("--include-nn-stats", action="store_true", help="Join nn_stat columns from DB (enables arch_summary).")
-
-    # JoinConf core
-    ap.add_argument("--num-joint-nns", type=int, required=True)
-
-    ap.add_argument("--same-columns", type=str, default=None)
-    ap.add_argument("--diff-columns", type=str, default=None)
-    ap.add_argument("--enhance-nn", action="store_true")
-
-    # Architecture diversity (Option 1)
-    ap.add_argument("--use-arch-diversity", action="store_true")
-    ap.add_argument("--max-arch-jaccard", type=float, default=0.85)
-    ap.add_argument("--min-arch-jaccard", type=float, default=0.0)
-    ap.add_argument("--arch-stat-dir", type=str, default="ab/nn/stat/nn")
-    ap.add_argument("--overfetch-factor", type=int, default=20)
-    ap.add_argument("--no-fallback-fill", action="store_true")
-
-    args = ap.parse_args()
-
-    sql = JoinConf(
-        num_joint_nns=args.num_joint_nns,
-        same_columns=_csv_to_tuple(args.same_columns),
-        diff_columns=_csv_to_tuple(args.diff_columns),
-        enhance_nn=True if args.enhance_nn else None,
-        use_arch_diversity=bool(args.use_arch_diversity),
-        min_arch_jaccard=float(args.min_arch_jaccard),
-        max_arch_jaccard=float(args.max_arch_jaccard),
-        arch_stat_dir=str(args.arch_stat_dir),
-        overfetch_factor=int(args.overfetch_factor),
-        allow_fallback_fill=not bool(args.no_fallback_fill),
+    p.add_argument(
+        "--mode",
+        choices=["general", "curriculum"],
+        default="curriculum",
+        help="general: top-K best models; curriculum: anchor+band using nn_similarity",
     )
 
-    df = data(
-        task=args.task,
-        dataset=args.dataset,
-        metric=args.metric,
-        nn=args.nn,
-        epoch=args.epoch,
-        max_rows=None,
-        sql=sql,
-        unique_nn=False,
-        only_best_accuracy=False,
-        include_nn_stats=bool(args.include_nn_stats),
+    # Phase-1 style filters (only effective if your pipeline uses them)
+    p.add_argument("--task", help="Task name filter (if supported by your DB slice)")
+    p.add_argument("--dataset", help="Dataset name filter (if supported by your DB slice)")
+    p.add_argument("--metric", help="Metric name filter (if supported by your DB slice)")
+    p.add_argument("--nn", help="NN name filter (if supported by your DB slice)")
+    p.add_argument("--epoch", type=int, help="Epoch filter (if supported by your DB slice)")
+
+    # Phase-2 curriculum knobs
+    p.add_argument("--anchor", help="Anchor model name (required for --mode=curriculum)")
+    p.add_argument(
+        "--band",
+        choices=["high", "medium", "low", "very_low"],
+        default="medium",
+        help="Curriculum similarity band (curriculum mode only)",
     )
 
-    rows = df.to_dict(orient="records")[: int(args.limit)]
+    p.add_argument("--k", type=int, default=5, help="Number of models to retrieve")
+    p.add_argument("--json", action="store_true", help="Output full rows as JSON")
 
-    print(f"\n[RESULT] Retrieved {len(rows)} rows\n")
+    # Optional: ensure unique nn in general mode (recommended)
+    p.add_argument(
+        "--unique-nn",
+        action="store_true",
+        help="General mode: return at most one row per nn (best accuracy per nn).",
+    )
 
-    if args.summary:
-        rows = _compact_view(rows)
+    return p
 
-    if args.pretty or args.summary:
-        print(json.dumps(rows, indent=2, ensure_ascii=False))
-    else:
-        print(rows)
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    # Enforce anchor requirement only for curriculum mode
+    if args.mode == "curriculum":
+        if not args.anchor or args.anchor.strip().lower() in {"none", "null"}:
+            parser.error("--anchor is required when --mode=curriculum (use a real nn_similarity.nn_a value)")
+
+    conn, cur = sql_conn()
+
+    try:
+        # Build "same_columns" list for compatibility with your existing query config.
+        # NOTE: This only helps if your slice-builder uses it.
+        same_cols = []
+        if args.task:
+            same_cols.append("task")
+        if args.dataset:
+            same_cols.append("dataset")
+        if args.metric:
+            same_cols.append("metric")
+        if args.nn:
+            same_cols.append("nn")
+        if args.epoch is not None:
+            same_cols.append("epoch")
+        same_columns: Optional[Tuple[str, ...]] = tuple(same_cols) if same_cols else None
+
+        # General mode vs curriculum mode
+        if args.mode == "general":
+            conf = JoinConf(
+                num_joint_nns=int(args.k),
+                similarity_mode="none",
+                same_columns=same_columns,
+                diff_columns=("nn",) if args.unique_nn else None,
+                task=args.task,
+                dataset=args.dataset,
+                metric=args.metric,
+            )
+        else:
+            conf = JoinConf(
+                num_joint_nns=int(args.k),
+                similarity_mode="anchor_band_sql",
+                anchor_nn=args.anchor,
+                similarity_band=args.band,
+                same_columns=same_columns,
+                task=args.task,
+                dataset=args.dataset,
+                metric=args.metric,
+            )
+
+        rows = join_nn_query(conf, cur)
+
+        if not rows:
+            print("No models returned.", file=sys.stderr)
+            sys.exit(2)
+
+        if args.json:
+            print(json.dumps(rows, indent=2))
+        else:
+            for i, r in enumerate(rows, 1):
+                j = r.get("anchor_jaccard")
+                j_str = f"{j}" if j is not None else "-"
+                print(
+                    f"{i:02d}  "
+                    f"nn={r.get('nn')}  "
+                    f"acc={r.get('accuracy')}  "
+                    f"j={j_str}"
+                )
+
+    finally:
+        close_conn(conn)
 
 
 if __name__ == "__main__":
