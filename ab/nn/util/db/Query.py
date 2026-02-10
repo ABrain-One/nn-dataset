@@ -318,20 +318,20 @@ def attach_arch_summaries(selected: list[dict]) -> None:
         }
 # Main query (operates on tmp_data)
 
-def join_nn_query(sql: JoinConf, cur):
+def join_nn_query(sql: JoinConf,limit_clause: Optional[str], cur):
     if sql.similarity_mode == "anchor_band_otf":
-        return join_nn_query_anchor_otf(sql, cur)
+        return join_nn_query_anchor_otf(sql,limit_clause, cur)
 
     # similarity_mode == "none"
     if sql.num_joint_nns > 1 and not sql.same_columns and not sql.diff_columns:
         # NEW: pure SQL variable-N selection
-        return join_nn_query_sql_Var_num(sql, cur)
+        return join_nn_query_sql_Var_num(sql,limit_clause, cur)
 
     # fallback: legacy pairwise logic
-    return join_nn_query_legacy(sql, cur)
+    return join_nn_query_legacy(sql,limit_clause, cur)
 
 
-def join_nn_query_anchor_otf(sql: JoinConf, cur: Cursor) -> list[dict]:
+def join_nn_query_anchor_otf(sql: JoinConf,limit_clause:Optional[str], cur: Cursor) -> list[dict]:
     sql.validate()
     n = int(sql.num_joint_nns)
 
@@ -368,7 +368,7 @@ def join_nn_query_anchor_otf(sql: JoinConf, cur: Cursor) -> list[dict]:
 """SQL-only variable-N model selection.
 No similarity constraints. One row per model"""
 
-def join_nn_query_sql_Var_num(sql: JoinConf, cur: Cursor) -> list[dict]:
+def join_nn_query_sql_Var_num(sql: JoinConf,limit_clause:Optional[str], cur: Cursor) -> list[dict]:
     sql.validate()
     n = int(sql.num_joint_nns)
 
@@ -402,7 +402,7 @@ def join_nn_query_sql_Var_num(sql: JoinConf, cur: Cursor) -> list[dict]:
 
     return fill_hyper_prm(cur, num_joint_nns=1)
 
-def join_nn_query_legacy(sql: JoinConf, cur):
+def join_nn_query_legacy(sql: JoinConf,limit_clause:Optional[str], cur):
     if _is_real_table(cur, tmp_data):
         cur.execute(f'CREATE INDEX IF NOT EXISTS i_id ON {tmp_data}(id)')
 
@@ -456,7 +456,7 @@ SELECT
     d2.duration AS duration_2,    
     d2.epoch AS epoch_2    
 FROM matches m
-LEFT JOIN {tmp_data} d2 ON d2.id = m.matched_id''')
+LEFT JOIN {tmp_data} d2 ON d2.id = m.matched_id{limit_clause}''')
     return fill_hyper_prm(cur, sql.num_joint_nns)
 
 #------Hyperparameter assembly------
