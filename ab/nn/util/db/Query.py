@@ -319,13 +319,16 @@ def attach_arch_summaries(selected: list[dict]) -> None:
 # Main query (operates on tmp_data)
 
 def join_nn_query(sql: JoinConf, cur):
-    if sql.similarity_mode == "none":
-        return join_nn_query_legacy(sql, cur)
-
     if sql.similarity_mode == "anchor_band_otf":
         return join_nn_query_anchor_otf(sql, cur)
 
-    raise ValueError("Unsupported similarity_mode")
+    # similarity_mode == "none"
+    if sql.num_joint_nns > 1 and not sql.same_columns and not sql.diff_columns:
+        # NEW: pure SQL variable-N selection
+        return join_nn_query_sql_Var_num(sql, cur)
+
+    # fallback: legacy pairwise logic
+    return join_nn_query_legacy(sql, cur)
 
 
 def join_nn_query_anchor_otf(sql: JoinConf, cur: Cursor) -> list[dict]:
@@ -361,15 +364,62 @@ def join_nn_query_anchor_otf(sql: JoinConf, cur: Cursor) -> list[dict]:
                 "work_table": work,
             }
     return selected
+
+"""SQL-only variable-N model selection.
+No similarity constraints. One row per model"""
+
+def join_nn_query_sql_Var_num(sql: JoinConf, cur: Cursor) -> list[dict]:
+    sql.validate()
+    n = int(sql.num_joint_nns)
+
+    work = resolve_work_table(cur, preferred=tmp_data, fallback="stat")
+
+    where_sql, params = build_stat_filters_sql(sql, alias="b")
+
+    cur.execute(
+        f"""
+        WITH base AS (
+          SELECT *
+          FROM {work} b
+          {where_sql}
+        ),
+        best_per_nn AS (
+          SELECT b.*,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY b.nn
+                   ORDER BY b.accuracy DESC, b.epoch ASC, b.nn ASC
+                 ) AS rn
+          FROM base b
+        )
+        SELECT *
+        FROM best_per_nn
+        WHERE rn = 1
+        ORDER BY accuracy DESC
+        LIMIT ?
+        """,
+        params + [n],
+    )
+
+    return fill_hyper_prm(cur, num_joint_nns=1)
+
 def join_nn_query_legacy(sql: JoinConf, cur):
     if _is_real_table(cur, tmp_data):
         cur.execute(f'CREATE INDEX IF NOT EXISTS i_id ON {tmp_data}(id)')
 
-    if sql.same_columns or sql.diff_columns or sql.enhance_nn:
-        if _is_real_table(cur, tmp_data) and (sql.same_columns or sql.diff_columns or sql.enhance_nn):
-            t = tuple({*(sql.same_columns or set()), *(sql.diff_columns or set())}) + (
-                'accuracy',) if sql.enhance_nn else ()
-            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_tmp_join ON {tmp_data}{t}')
+    if _is_real_table(cur, tmp_data):
+        cols = set()
+        if sql.same_columns:
+            cols.update(sql.same_columns)
+        if sql.diff_columns:
+            cols.update(sql.diff_columns)
+        if sql.enhance_nn:
+            cols.add("accuracy")
+
+        if cols:
+            t = ", ".join(sorted(cols))
+            cur.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_tmp_join ON {tmp_data}({t})"
+            )
 
     q_list = []
     for c in (sql.same_columns or ()):
