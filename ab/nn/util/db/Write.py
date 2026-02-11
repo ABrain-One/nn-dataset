@@ -268,6 +268,10 @@ def save_results(config_ext: tuple[str, str, str, str, int], prm: dict):
     :param prm: Dictionary of all saved parameters.
     """
     conn, cursor = sql_conn()
+    _, _, metric, nn = config_ext[:4]
+    populate_code_table('nn', cursor, name=nn)
+    for single_metric in metric.split(','):
+        populate_code_table('metric', cursor, name=single_metric.strip())
     save_stat(config_ext, prm, cursor)
     close_conn(conn)
 
