@@ -201,7 +201,7 @@ def data(only_best_accuracy: bool = False,
                         {limit_clause}''',
                     params)
         if sql:
-            results = join_nn_query(sql, cur)
+            results = join_nn_query(sql,limit_clause, cur)
         else:
             results = fill_hyper_prm(cur, include_nn_stats=include_nn_stats)
         return tuple(results)
