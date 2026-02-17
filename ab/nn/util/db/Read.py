@@ -38,8 +38,10 @@ def query_cols_rows(q) -> tuple[list, list]:
 def code(table: str, nm: str) -> str:
     return query_rows(f'SELECT code FROM {table} where name = ?', [nm])[0][0]
 
+
 def nn_code(nm: str) -> str:
     return code('nn', nm)
+
 
 def data(only_best_accuracy: bool = False,
          task: Optional[str] = None,
@@ -201,7 +203,7 @@ def data(only_best_accuracy: bool = False,
                         {limit_clause}''',
                     params)
         if sql:
-            results = join_nn_query(sql, cur)
+            results = join_nn_query(sql, limit_clause, cur)
         else:
             results = fill_hyper_prm(cur, include_nn_stats=include_nn_stats)
         return tuple(results)
@@ -282,16 +284,16 @@ def sql_where(value_list):
 def remaining_trials(config_ext, n_optuna_trials) -> tuple[int, int]:
     """
     Calculate the number of remaining Optuna trials for a given model configuration by querying the database.
-    
+
     Instead of reading trial counts from a file, we query the database to count all trial records
     for the specified model (identified by model_name). The trial_file parameter is retained for
     interface compatibility but is not used.
-    
+
     If n_optuna_trials is negative, its absolute value is taken as the required number of additional trials.
     Otherwise, the function computes:
-    
+
         remaining_trials = max(0, n_optuna_trials - n_passed_trials)
-    
+
     :param config_ext: Tuple of names (Task, Dataset, Metric, Model, Epoch).
     :param n_optuna_trials: Target number of trials. If negative, its absolute value specifies the additional trials required.
     :return: A tuple (n_remaining_trials, n_passed_trials) where:
@@ -391,7 +393,7 @@ def nn_stat_data(
 def supported_transformers() -> list[str]:
     """
     Returns a list of all transformer names available in the database.
-    
+
     The function queries the 'transform' table for all records and extracts the 'name'
     field from each row.
     """
@@ -401,10 +403,10 @@ def supported_transformers() -> list[str]:
 def unique_configs(patterns: list[tuple[str, ...]]) -> list[list[str]]:
     """
     Returns a list of unique configuration strings from the database that match at least one of the input patterns.
-    
+
     A configuration string is constructed by concatenating the 'task', 'dataset', 'metric', and 'nn'
     fields from the 'stat' table using the configuration splitter defined in your constants.
-    
+
     :param patterns: A tuple of configuration prefix patterns.
     :return: A list of unique configuration strings that start with any of the provided patterns.
     """

@@ -169,7 +169,7 @@ run_extra_columns = (
 # NN statistics table
 nn_stat_table = 'nn_stat'
 HF_NN = 'NN-Dataset'
-tmp_data = "tmp_data"
+tmp_data = "temp_data"
 STAT_TABLE = "stat"
 NN_SIM_TABLE = "nn_similarity"
 WORK_TABLE = "tmp_data"
