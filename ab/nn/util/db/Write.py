@@ -6,6 +6,7 @@ from ab.nn.util.Util import *
 from ab.nn.util.db.Init import init_db, sql_conn, close_conn
 from ab.nn.util.hf.DB_from_HF import db_from_hf
 from ab.nn.util.Const import nn_stat_table
+from ab.nn.util.db.build_nn_similarity import upsert_minhash, upsert_minhash_batch
 
 
 def init_population():
@@ -228,9 +229,12 @@ def json_nn_to_db():
         return
 
     print(f"Importing NN statistics from {len(json_files)} JSON files in {stat_nn_dir} into database...")
+    conn, cursor = sql_conn()
 
     success_count = 0
     error_count = 0
+
+    minhash_batch = []
 
     for json_file in tqdm(json_files, desc="Importing NN stats"):
         try:
@@ -253,10 +257,25 @@ def json_nn_to_db():
                 success_count += 1
             else:
                 error_count += 1
+            # Collect Minhash for batch write
+            cm = stats.get("code_minhash")
+            if isinstance(cm, dict) and cm.get("available") and isinstance(cm.get("hashvalues"), list):
+                minhash_batch.append({
+                    "nn": nn_name,
+                    "hashvalues": cm["hashvalues"],
+                    "num_perm": cm.get("num_perm", 128),
+                    "shingle_n": cm.get("shingle_n", 7),
+                })
 
         except Exception as e:
             error_count += 1
             print(f"Error processing {json_file.name}: {e}", file=sys.stderr)
+    # Single batch write — one transaction for all vectors
+    if minhash_batch:
+        inserted = upsert_minhash_batch(conn, minhash_batch)
+        print(f"MinHash vectors upserted: {inserted}")
+
+    close_conn(conn)
 
     print(f"NN statistics import complete: {success_count} succeeded, {error_count} failed.")
 
@@ -280,6 +299,7 @@ def save_nn(nn_code: str, task: str, dataset: str, metric: str, epoch: int, prm:
     conn, cursor = sql_conn()
     nn = code_to_db(cursor, 'nn', code=nn_code, force_name=force_name)
     save_stat((task, dataset, metric, nn, epoch), prm, cursor)
+
     close_conn(conn)
     return nn
 

@@ -3,11 +3,13 @@ from os import makedirs
 from pathlib import Path
 
 from ab.nn.util.Const import param_tables, db_file, db_dir, main_tables, code_tables, dependent_tables, all_tables, index_colum, run_table, nn_stat_table
+from ab.nn.util.db.build_nn_similarity import jaccard_blobs
 
 
 def sql_conn():
     conn = sqlite3.connect(db_file)
     conn.row_factory = sqlite3.Row  # Enable row access
+    conn.create_function("jaccard_blobs", 2, jaccard_blobs) #Register Scalar UDF onto connection
     return conn, conn.cursor()
 
 
@@ -167,19 +169,16 @@ def init_db():
 
     # Create NN code MinHash signatures table (DB-first diversity)
     cursor.execute(f"""
-    CREATE TABLE IF NOT EXISTS nn_code_minhash (
-        nn_name TEXT PRIMARY KEY,
+    CREATE TABLE IF NOT EXISTS nn_minhash (
+        nn TEXT PRIMARY KEY,
         num_perm INTEGER NOT NULL,
         shingle_n INTEGER NOT NULL,
-        hashvalues_json TEXT NOT NULL,
-        signature_version INTEGER NOT NULL DEFAULT 1,
-        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (nn_name) REFERENCES nn (name) ON DELETE CASCADE
+        hashvalues BLOB NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+
     )
     """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nnmh_perm ON nn_code_minhash(num_perm);")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nnmh_name ON nn_code_minhash(nn_name);")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nnmh_shingle ON nn_code_minhash(shingle_n);")
+
 
 # NN Similarity Table
     cursor.execute(f"""
@@ -187,16 +186,15 @@ def init_db():
       nn_a TEXT NOT NULL,
       nn_b TEXT NOT NULL,
       jaccard REAL NOT NULL,
-      num_perm INTEGER NOT NULL,
-      shingle_n INTEGER NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (nn_a, nn_b),
-      FOREIGN KEY (nn_a) REFERENCES nn (name) ON DELETE CASCADE,
-      FOREIGN KEY (nn_b) REFERENCES nn (name) ON DELETE CASCADE
+      method TEXT NOT NULL DEFAULT 'minhash',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (nn_a, nn_b)
     )
     """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nn_similarity_a_j ON nn_similarity(nn_a, jaccard);")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nn_similarity_b ON nn_similarity(nn_b);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nn_minhash_nn ON nn_minhash(nn);")
+
+    #cursor.execute("CREATE INDEX IF NOT EXISTS idx_nn_similarity_a_j ON nn_similarity(nn_a, jaccard);")
+    #cursor.execute("CREATE INDEX IF NOT EXISTS idx_nn_similarity_b ON nn_similarity(nn_b);")
 
     close_conn(conn)
     print(f"Database initialized at {db_file}")
