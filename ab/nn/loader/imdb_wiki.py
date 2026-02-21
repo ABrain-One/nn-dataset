@@ -1,42 +1,41 @@
+import os
 import torch
 from torch.utils.data import Dataset
 from datasets import load_dataset
 
-# IMDB-Wiki normalization values (ImageNet-like, since faces are natural images)
+from ab.nn.util.Const import data_dir
+
 __norm_mean = (0.485, 0.456, 0.406)
 __norm_dev = (0.229, 0.224, 0.225)
 
-# For age regression, minimum accuracy is based on MAE threshold
-# Using 0.01 as a baseline (any model should do better than random)
 MINIMUM_ACCURACY = 0.01
+
+# Cache lives under the repo's gitignored data/ directory
+_cache_dir = os.path.join(str(data_dir), 'imdb_wiki')
 
 
 def loader(transform_fn, task):
     """
-    Downloads/caches the dataset from Hugging Face and returns PyTorch datasets.
+    Downloads/caches the dataset from Hugging Face (systemk/imdb-wiki).
 
-    HF dataset: systemk/imdb-wiki
-    Configs  : default | face | imdb | wiki
-    Splits   : train | validation | test
-    
     :param transform_fn: Transform function that takes normalization params (mean, std)
     :param task: Task name (e.g., 'age-regression')
     :return: Tuple of (out_shape, minimum_accuracy, train_dataset, test_dataset)
     """
     dataset_name = "systemk/imdb-wiki"
-    config = "default"   # change to "face" if you prefer face-only config
+    config = "default"
     split_train = "train"
-    split_test = "validation"  # fallback to "test" if validation not available
+    split_test = "validation"
 
-    # Apply transform with normalization parameters (consistent with other loaders)
     transform = transform_fn((__norm_mean, __norm_dev))
+    os.makedirs(_cache_dir, exist_ok=True)
 
-    raw_train = load_dataset(dataset_name, config, split=split_train)
+    raw_train = load_dataset(dataset_name, config, split=split_train, cache_dir=_cache_dir)
 
     try:
-        raw_test = load_dataset(dataset_name, config, split=split_test)
+        raw_test = load_dataset(dataset_name, config, split=split_test, cache_dir=_cache_dir)
     except Exception:
-        raw_test = load_dataset(dataset_name, config, split="test")
+        raw_test = load_dataset(dataset_name, config, split="test", cache_dir=_cache_dir)
 
     train_ds = IMDBWIKI(raw_train, transform_fn=transform)
     test_ds = IMDBWIKI(raw_test, transform_fn=transform)

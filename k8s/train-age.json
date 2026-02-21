@@ -1,0 +1,39 @@
+{
+  "apiVersion": "batch/v1",
+  "kind": "Job",
+  "metadata": {
+    "name": "b-a-kumar-train-age",
+    "namespace": "b-a-kumar"
+  },
+  "spec": {
+    "template": {
+      "spec": {
+        "containers": [
+          {
+            "name": "train",
+            "image": "abrainone/ai-linux:latest",
+            "command": ["/bin/bash", "-c"],
+            "args": [
+              "set -e; cd /shared/ssd/home/b-a-kumar/nn-dataset; pip install -e . 2>&1 | tail -5; echo '--- GPU Check ---'; python -c \"import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"CPU\"}')\" ; echo '--- Starting Training ---'; python train_age_estimation.py 2>&1; echo '--- Training Finished ---'"
+            ],
+            "resources": {
+              "limits": {
+                "nvidia.com/gpu": "1"
+              }
+            },
+            "volumeMounts": [
+              { "name": "shared-ssd", "mountPath": "/shared/ssd" },
+              { "name": "shared-hdd", "mountPath": "/shared/hdd" }
+            ]
+          }
+        ],
+        "restartPolicy": "Never",
+        "volumes": [
+          { "name": "shared-ssd", "persistentVolumeClaim": { "claimName": "shared-ssd" } },
+          { "name": "shared-hdd", "persistentVolumeClaim": { "claimName": "shared-hdd" } }
+        ]
+      }
+    },
+    "backoffLimit": 1
+  }
+}

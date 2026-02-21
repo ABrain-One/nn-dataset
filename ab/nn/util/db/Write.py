@@ -30,7 +30,7 @@ def code_to_db(cursor, table_name, code=None, code_file=None, force_name = None)
     else:
         nm = force_name
     if not code:
-        with open(code_file, 'r') as file:
+        with open(code_file, 'r', encoding='utf-8') as file:
             code = file.read()
     id_val = uuid4(code)
     # Check if the model exists in the database

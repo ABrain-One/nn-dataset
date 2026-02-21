@@ -1,6 +1,7 @@
 import os
 import torch
 from torch.utils.data import Dataset, random_split
+
 from datasets import load_dataset
 
 from ab.nn.util.Const import data_dir
@@ -9,25 +10,28 @@ __norm_mean = (0.485, 0.456, 0.406)
 __norm_dev = (0.229, 0.224, 0.225)
 MINIMUM_ACCURACY = 0.01
 
+# Cache lives under the repo's gitignored data/ directory
+_cache_dir = os.path.join(str(data_dir), 'utkface')
+
 
 def loader(transform_fn, task):
     transform = transform_fn((__norm_mean, __norm_dev))
-    cache_dir = os.path.join(data_dir, ".cache")
-    dataset = load_dataset("nu-delta/utkface", split="train", cache_dir=cache_dir)
+    os.makedirs(_cache_dir, exist_ok=True)
+    dataset = load_dataset("nu-delta/utkface", split="train", cache_dir=_cache_dir)
     full_dataset = _UTKFace(dataset, transform)
     
     total = len(full_dataset)
     train_size = int(total * 0.70)
-    val_size = int(total * 0.15)
-    test_size = total - train_size - val_size
+    test_size = total - train_size
     
-    train_ds, val_ds, test_ds = random_split(
+    train_ds, test_ds = random_split(
         full_dataset,
-        [train_size, val_size, test_size],
+        [train_size, test_size],
         generator=torch.Generator().manual_seed(42)
     )
     
-    return (1,), MINIMUM_ACCURACY, train_ds, val_ds, test_ds
+    # Return 4 values to match framework expectation: (out_shape, min_accuracy, train, test)
+    return (1,), MINIMUM_ACCURACY, train_ds, test_ds
 
 
 class _UTKFace(Dataset):
