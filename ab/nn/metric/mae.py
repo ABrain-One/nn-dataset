@@ -84,22 +84,17 @@ class Net:
     def compute(self) -> float:
         """
         Compute the final normalized accuracy score.
-        
+
         Returns:
             A float between 0 and 1, where 1 indicates perfect prediction
             and 0 indicates MAE >= max_mae_threshold.
         """
         if self._total_samples == 0:
             return 0.0
-        
-        # Calculate Mean Absolute Error
-        mae = self._total_abs_error / self._total_samples
-        
-        # Normalize to 0-1 range (higher is better)
-        # If MAE is 0, accuracy is 1.0
-        # If MAE >= max_mae_threshold, accuracy is 0.0
-        accuracy = max(0.0, 1.0 - (mae / self.max_mae_threshold))
-        
+
+        mae_years = self._total_abs_error / self._total_samples
+        accuracy = max(0.0, 1.0 - (mae_years / self.max_mae_threshold))
+
         return accuracy
     
     def get_mae(self) -> float:
