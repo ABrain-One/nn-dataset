@@ -2,9 +2,14 @@ import importlib
 import sys
 import time as time
 from dataclasses import dataclass, asdict
-from typing import List, Optional
-from typing import Union
+from typing import List, Optional, Union
 
+import os
+import math
+from pathlib import Path
+from uuid import uuid4
+
+import torch
 from torch.cuda import OutOfMemoryError
 
 import ab.nn.util.CodeEval as codeEvaluator
@@ -27,7 +32,7 @@ class EpochMetrics:
     # Loss metrics
     train_loss: float = 0.0
     test_loss: float = 0.0
-    # Accuracy metrics  
+    # Accuracy metrics
     train_accuracy: float = 0.0
     test_accuracy: float = 0.0
     # Training dynamics
@@ -62,6 +67,26 @@ def get_gpu_memory_kb() -> Optional[float]:
     return None
 
 
+def _ensure_dir(p: Union[str, Path]) -> str:
+    p = str(p)
+    os.makedirs(p, exist_ok=True)
+    return p
+
+
+def _make_tb_run_dir(config: tuple[str, str, str, str], trial_number: Optional[int] = None) -> str:
+    """
+    Create a unique TensorBoard run directory so trials don't overwrite each other.
+    runs/<dataset>/<model>/trial_<N>_<timestamp>
+    """
+    task, dataset_name, metric, nn = config
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    if trial_number is None:
+        run_name = f"{dataset_name}/{nn}/{ts}"
+    else:
+        run_name = f"{dataset_name}/{nn}/trial_{trial_number}_{ts}"
+    return _ensure_dir(os.path.join("runs", run_name))
+
+
 def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout,
                      max_dropout, min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, epoch_max,
                      pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights):
@@ -85,17 +110,39 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
                     case _:
                         prms[prm] = trial.suggest_float(prm, 0.0, 1.0)
         prms['epoch_max'] = epoch_max
-        batch = add_categorical_if_absent(trial, prms, 'batch', lambda: [max_batch(x) for x in range(min_batch_binary_power, max_batch_binary_power_local + 1)])
+        batch = add_categorical_if_absent(
+            trial, prms, 'batch',
+            lambda: [max_batch(x) for x in range(min_batch_binary_power, max_batch_binary_power_local + 1)]
+        )
         transform_name = add_categorical_if_absent(trial, prms, 'transform', supported_transformers, default=transform)
 
         prm_str = ''
         for k, v in prms.items():
             prm_str += f", {k}: {v}"
         print(f"Initialize training with {prm_str[2:]}")
+
         # Load dataset
         out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset_name, transform_name)
-        return Train(config, out_shape, minimum_accuracy, batch, nn_mod('nn', nn), task, train_set, test_set, metric,
-                     num_workers, prms).train_n_eval(epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set)
+
+        # ✅ Unique TensorBoard logdir per trial
+        tb_log_dir = _make_tb_run_dir(config, trial_number=trial.number)
+
+        trainer = Train(
+            config=config,
+            out_shape=out_shape,
+            minimum_accuracy=minimum_accuracy,
+            batch=batch,
+            nn_module=nn_mod('nn', nn),
+            task=task,
+            train_dataset=train_set,
+            test_dataset=test_set,
+            metric=metric,
+            num_workers=num_workers,
+            prm=prms,
+            tb_log_dir=tb_log_dir
+        )
+
+        return trainer.train_n_eval(epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set)
 
     except Exception as e:
         accuracy_duration = 0.0, 0.0, 1
@@ -120,21 +167,10 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
 
 class Train:
     def __init__(self, config: tuple[str, str, str, str], out_shape: tuple, minimum_accuracy: float, batch: int, nn_module, task,
-                 train_dataset, test_dataset, metric, num_workers, prm: dict, save_to_db=True, is_code=False):
+                 train_dataset, test_dataset, metric, num_workers, prm: dict, save_to_db=True, is_code=False,
+                 tb_log_dir: str = "runs/experiment_1"):
         """
         Universal class for training CV, Text Generation and other models.
-        :param config: Tuple of names (Task, Dataset, Metric, Model).
-        :param out_shape: Shape of output tensor of the model (e.g., number of classes for classification tasks).
-        :param batch: Batch size used for both training and evaluation.
-        :param minimum_accuracy: Expected average value for accuracy provided by the untrained NN model due to random output generation. This value is essential for excluding NN models without accuracy gains.
-        :param nn_module: Neural network model name (e.g., 'ab.nn.nn.ResNet', 'out.tmp.').
-        :param task: e.g., 'img-segmentation' to specify the task type.
-        :param train_dataset: Dataset used for training the model (e.g., torch.utils.data.Dataset).
-        :param test_dataset: Dataset used for evaluating/testing the model (e.g., torch.utils.data.Dataset).
-        ':param' metric: Name of the evaluation metric (e.g., 'acc', 'iou').
-        :param prm: Dictionary of hyperparameters and their values (e.g., {'lr': 0.11, 'momentum': 0.2})
-        :param is_code: Whether `config.model` is `nn_code` or `nn`
-        :param save_path: Path to save the statistics, set to `None` to use the default
         """
         self.config = config
         self.train_dataset = train_dataset
@@ -155,7 +191,7 @@ class Train:
         self.train_loader = train_loader_f(self.train_dataset, self.batch, num_workers)
         self.test_loader = test_loader_f(self.test_dataset, self.batch, num_workers)
 
-        self.in_shape = get_in_shape(train_dataset, num_workers) # Model input tensor shape (e.g., (8, 3, 32, 32) for a batch size 8, RGB image 32x32 px).
+        self.in_shape = get_in_shape(train_dataset, num_workers)
         self.device = torch_device()
 
         # Load model
@@ -172,6 +208,9 @@ class Train:
         self.best_accuracy = 0.0
         self.best_epoch = 0
 
+        # ✅ TensorBoard run directory for THIS training
+        self.tb_log_dir = _ensure_dir(tb_log_dir)
+
     def _get_loss_function(self):
         """Get loss function for metric tracking"""
         if hasattr(self.model, 'criterion'):
@@ -179,7 +218,6 @@ class Train:
         elif hasattr(self.model, 'loss_fn'):
             return self.model.loss_fn
         else:
-            # Default based on task
             if 'classification' in self.task or 'img-class' in self.task:
                 return torch.nn.CrossEntropyLoss()
             elif 'segmentation' in self.task:
@@ -220,21 +258,17 @@ class Train:
         return self.metric_function.result()
 
     def load_metric_function(self, metric_name):
-        """
-        Dynamically load the metric function or class based on the metric_name.
-        :param metric_name: Name of the metric (e.g., 'acc', 'iou').
-        :return: Loaded metric function or initialized class.
-        """
         try:
             module = importlib.import_module(nn_mod('metric', metric_name))
-
             return module.create_metric(self.out_shape)
-
         except (ModuleNotFoundError, AttributeError) as e:
-            raise ValueError(f"Metric '{metric_name}' not found. Ensure a corresponding file and function exist. Ensure the metric module has create_metric()") \
-                from e
+            raise ValueError(
+                f"Metric '{metric_name}' not found. Ensure a corresponding file and function exist. "
+                f"Ensure the metric module has create_metric()"
+            ) from e
 
-    def train_n_eval(self, epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set, save_path: Union[str, Path] = None):
+    def train_n_eval(self, epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set,
+                     save_path: Union[str, Path] = None):
         """ Training and evaluation with comprehensive metrics tracking """
 
         start_time = time.time_ns()
@@ -242,12 +276,13 @@ class Train:
         accuracy_to_time = 0.0
         duration = sys.maxsize
 
-        # Get optimizer reference for LR tracking
         optimizer = getattr(self.model, 'optimizer', None)
-        # TensorBoard logging setup
+
+        # ✅ TensorBoard logging setup
+        tb_writer = None
         try:
             from torch.utils.tensorboard import SummaryWriter
-            tb_writer = SummaryWriter(log_dir="runs/experiment_1")
+            tb_writer = SummaryWriter(log_dir=self.tb_log_dir)
         except ImportError:
             tb_writer = None
 
@@ -294,13 +329,13 @@ class Train:
                 test_loss=test_loss,
                 train_accuracy=train_accuracy,
                 test_accuracy=accuracy,
-                lr=lr_now,
+                lr=lr_now if lr_now is not None else 0.0,
                 gradient_norm=grad_norm,
                 samples_per_second=samples_per_second
             )
             self.epoch_history.append(epoch_metrics)
 
-            # TensorBoard logging
+            # ✅ TensorBoard logging (scalars always)
             if tb_writer:
                 tb_writer.add_scalar('Loss/train', train_loss, epoch)
                 tb_writer.add_scalar('Loss/val', test_loss, epoch)
@@ -310,6 +345,88 @@ class Train:
                     tb_writer.add_scalar('Learning_Rate', lr_now, epoch)
                 tb_writer.add_scalar('Gradient_Norm', grad_norm, epoch)
                 tb_writer.add_scalar('Throughput', samples_per_second, epoch)
+
+                # ✅ LIVE age-estimation visualizations (ALWAYS, not only save_to_db/is_code/save_path)
+                try:
+                    pred_list = []
+                    true_list = []
+                    img_list = []
+                    self.model.eval()
+                    with torch.no_grad():
+                        for batch in self.test_loader:
+                            inputs, labels = batch
+                            inputs, labels = inputs.to(self.device), labels.to(self.device)
+                            outputs = self.model(inputs)
+                            # If outputs are logits, convert to age class
+                            if outputs.ndim > 1 and outputs.shape[1] > 1:
+                                preds = outputs.argmax(dim=1).detach().cpu().numpy()
+                            else:
+                                preds = outputs.squeeze().detach().cpu().numpy()
+
+                            true = labels.squeeze().detach().cpu().numpy()
+                            pred_list.extend(preds.tolist() if hasattr(preds, 'tolist') else preds)
+                            true_list.extend(true.tolist() if hasattr(true, 'tolist') else true)
+
+                            if len(img_list) < 8:
+                                take = min(8 - len(img_list), inputs.shape[0])
+                                img_list.extend(inputs[:take].detach().cpu())
+
+                            if len(img_list) >= 8 and len(pred_list) >= 64:
+                                break
+
+                    import numpy as np
+                    import matplotlib.pyplot as plt
+                    pred_arr = np.array(pred_list)
+                    true_arr = np.array(true_list)
+
+                    # Scatter plot
+                    if len(pred_arr) > 0 and len(true_arr) > 0:
+                        fig = plt.figure(figsize=(5, 5))
+                        plt.scatter(true_arr, pred_arr, alpha=0.5)
+                        plt.xlabel('True Age')
+                        plt.ylabel('Predicted Age')
+                        plt.title('Predicted vs. True Age')
+                        tb_writer.add_figure('Scatter/Pred_vs_True_Age', fig, epoch)
+                        plt.close(fig)
+
+                    # Histogram
+                    if len(pred_arr) > 0:
+                        fig_hist = plt.figure(figsize=(6, 3))
+                        plt.hist(pred_arr, bins=20, alpha=0.7, label='Predicted')
+                        plt.hist(true_arr, bins=20, alpha=0.5, label='True')
+                        plt.legend()
+                        plt.title('Age Distribution')
+                        tb_writer.add_figure('Histogram/Age_Distribution', fig_hist, epoch)
+                        plt.close(fig_hist)
+
+                    # Images + labels
+                    if len(img_list) > 0:
+                        import torchvision
+                        grid = torchvision.utils.make_grid(img_list, nrow=4, normalize=True)
+                        tb_writer.add_image('Samples/Images', grid, epoch)
+
+                        labels_text = [
+                            f"P:{int(p)} T:{int(t)}"
+                            for p, t in zip(pred_arr[:len(img_list)], true_arr[:len(img_list)])
+                        ]
+
+                        fig_img = plt.figure(figsize=(10, 3))
+                        plt.imshow(np.transpose(grid.numpy(), (1, 2, 0)))
+                        plt.axis('off')
+                        for idx, label in enumerate(labels_text):
+                            x = 10 + (idx % 4) * 120
+                            y = 20 + (idx // 4) * 120
+                            plt.text(x, y, label, color='white', fontsize=8,
+                                     bbox=dict(facecolor='black', alpha=0.5))
+                        tb_writer.add_figure('Samples/Images_with_Labels', fig_img, epoch)
+                        plt.close(fig_img)
+
+                except Exception as viz_e:
+                    print(f"[WARN] TensorBoard viz failed (epoch {epoch}): {viz_e}")
+
+                # ✅ flush so Windows sees updates live
+                tb_writer.flush()
+
             # Print detailed metrics
             print(f"  Train Loss: {train_loss:.4f} | Val Loss: {test_loss:.4f}")
             print(f"  Train Acc:  {train_accuracy:.4f} | Val Acc:  {accuracy:.4f}  [Best: {self.best_accuracy:.4f} @ epoch {self.best_epoch}]")
@@ -317,123 +434,59 @@ class Train:
                 print(f"  LR: {lr_now:.6f} | Grad Norm: {grad_norm:.4f} | Throughput: {samples_per_second:.1f} samples/s")
             print(f"  Epoch time: {epoch_duration:.1f}s | Trial elapsed: {(time.time_ns() - start_time) / 1e9:.1f}s", flush=True)
 
-            # The accuracy-to-time metric is not stored in the database as it can change over time and can be quickly calculated from saved values.
             accuracy_to_time = accuracy_to_time_metric(accuracy, self.minimum_accuracy, duration)
             if not good(accuracy, self.minimum_accuracy, duration):
-                raise AccuracyException(accuracy, duration,
-                                        f"Accuracy is too low: {accuracy}."
-                                        f" The minimum accepted accuracy for the '{self.config[1]}"
-                                        f"' dataset is {self.minimum_accuracy}.")
-            if save_pth_weights or save_onnx_weights:
-                save_if_best(self.model, self.model_name, accuracy, save_pth_weights, save_onnx_weights, train_set, self.num_workers, save_path=save_path)
+                raise AccuracyException(
+                    accuracy, duration,
+                    f"Accuracy is too low: {accuracy}."
+                    f" The minimum accepted accuracy for the '{self.config[1]}' dataset is {self.minimum_accuracy}."
+                )
 
-            # Build extended parameters with new metrics
+            if save_pth_weights or save_onnx_weights:
+                save_if_best(self.model, self.model_name, accuracy, save_pth_weights, save_onnx_weights,
+                             train_set, self.num_workers, save_path=save_path)
+
             only_prm = {k: v for k, v in self.prm.items() if k not in {'uid', 'duration', 'accuracy', 'epoch'}}
-            # Use 'lr' as the canonical learning-rate key to avoid duplication with 'learning_rate'
             prm = merge_prm(self.prm, {
-                                          'uid': uuid4(only_prm),
-                                          'duration': duration,
-                                          'accuracy': accuracy,
-                                          # NEW: Loss metrics
-                                          'train_loss': train_loss,
-                                          'test_loss': test_loss,
-                                          # NEW: Accuracy metrics
-                                          'train_accuracy': train_accuracy,
-                                          # NEW: Training dynamics - store under 'lr' to match common hyperparameter naming
-                                          'gradient_norm': grad_norm,
-                                          # NEW: Timing metrics
-                                          'samples_per_second': samples_per_second,
-                                          # NEW: Best tracking
-                                          'best_accuracy': self.best_accuracy,
-                                          'best_epoch': self.best_epoch,
-                                      } | ({'lr_now': lr_now} if lr_now else {})
-                                      # NEW: GPU memory (if available)
-                                      | ({'gpu_memory_kb': get_gpu_memory_kb()} if get_gpu_memory_kb else {}))
+                'uid': uuid4(only_prm),
+                'duration': duration,
+                'accuracy': accuracy,
+                'train_loss': train_loss,
+                'test_loss': test_loss,
+                'train_accuracy': train_accuracy,
+                'gradient_norm': grad_norm,
+                'samples_per_second': samples_per_second,
+                'best_accuracy': self.best_accuracy,
+                'best_epoch': self.best_epoch,
+            } | ({'lr_now': lr_now} if lr_now else {})
+              | ({'gpu_memory_kb': get_gpu_memory_kb()} if get_gpu_memory_kb else {}))
 
             if self.save_to_db:
-                if self.is_code:  # We don't want the filename to contain full codes
+                # Keep your DB save logic as-is
+                if self.is_code:
                     if save_path:
-                        # Advanced visualizations for age estimation
-                        # 1. Predicted vs. True Age Scatter Plot (Validation)
-                        pred_list = []
-                        true_list = []
-                        img_list = []
-                        self.model.eval()
-                        with torch.no_grad():
-                            for batch in self.test_loader:
-                                inputs, labels = batch
-                                inputs, labels = inputs.to(self.device), labels.to(self.device)
-                                outputs = self.model(inputs)
-                                # If outputs are logits, convert to age
-                                if outputs.ndim > 1 and outputs.shape[1] > 1:
-                                    preds = outputs.argmax(dim=1).cpu().numpy()
-                                else:
-                                    preds = outputs.squeeze().cpu().numpy()
-                                true = labels.squeeze().cpu().numpy()
-                                pred_list.extend(preds.tolist() if hasattr(preds, 'tolist') else preds)
-                                true_list.extend(true.tolist() if hasattr(true, 'tolist') else true)
-                                # Collect images for visualization (first 8 per epoch)
-                                if len(img_list) < 8:
-                                    img_list.extend(inputs[:8].cpu())
-
-                        import numpy as np
-                        pred_arr = np.array(pred_list)
-                        true_arr = np.array(true_list)
-                        # Scatter plot as TensorBoard figure
-                        if len(pred_arr) > 0 and len(true_arr) > 0:
-                            import matplotlib.pyplot as plt
-                            fig = plt.figure(figsize=(5, 5))
-                            plt.scatter(true_arr, pred_arr, alpha=0.5)
-                            plt.xlabel('True Age')
-                            plt.ylabel('Predicted Age')
-                            plt.title('Predicted vs. True Age')
-                            tb_writer.add_figure('Scatter/Pred_vs_True_Age', fig, epoch)
-                            plt.close(fig)
-
-                        # 2. Histogram of predictions
-                        if len(pred_arr) > 0:
-                            fig_hist = plt.figure(figsize=(5, 3))
-                            plt.hist(pred_arr, bins=20, alpha=0.7, label='Predicted')
-                            plt.hist(true_arr, bins=20, alpha=0.5, label='True')
-                            plt.legend()
-                            plt.title('Age Distribution')
-                            tb_writer.add_figure('Histogram/Age_Distribution', fig_hist, epoch)
-                            plt.close(fig_hist)
-
-                        # 3. Sample images with predicted and true ages
-                        if len(img_list) > 0:
-                            import torchvision
-                            # Prepare text labels
-                            labels_text = [f"P:{int(p)} T:{int(t)}" for p, t in zip(pred_arr[:len(img_list)], true_arr[:len(img_list)])]
-                            grid = torchvision.utils.make_grid(img_list, nrow=4, normalize=True)
-                            tb_writer.add_image('Samples/Images', grid, epoch)
-                            # Optionally, add text as image annotation (not supported natively, but can be done with matplotlib)
-                            fig_img = plt.figure(figsize=(8, 2))
-                            plt.imshow(np.transpose(grid.numpy(), (1, 2, 0)))
-                            plt.axis('off')
-                            for idx, label in enumerate(labels_text):
-                                plt.text(10 + (idx % 4) * 60, 20 + (idx // 4) * 60, label, color='white', fontsize=8, bbox=dict(facecolor='black', alpha=0.5))
-                            tb_writer.add_figure('Samples/Images_with_Labels', fig_img, epoch)
-                            plt.close(fig_img)
                         save_results(self.config + (epoch,), join(save_path, f"{epoch}.json"), prm)
                     else:
                         print(f"[WARN]parameter `save_Path` set to null, the statics will not be saved into a file.")
-                else:  # Legacy save result codes in file
+                else:
                     if save_path is None:
                         save_path = model_stat_dir(self.config)
                     save_results(self.config + (epoch,), join(save_path, f"{epoch}.json"), prm)
-                    DB_Write.save_results(self.config + (epoch,), prm)  # Separated from Calc.save_results()
+                    DB_Write.save_results(self.config + (epoch,), prm)
+
+        # ✅ close TensorBoard cleanly
+        if tb_writer:
+            tb_writer.close()
 
         # Save training summary at the end
         if save_path and self.epoch_history:
             self._save_training_summary()
 
-        # Final held-out test evaluation (20% never seen during HPO)
         if hasattr(self.test_dataset, 'held_out_test'):
             test_loader = test_loader_f(self.test_dataset.held_out_test, self.batch, self.num_workers)
             self.model.eval()
             held_out_loss = self._compute_loss(test_loader)
-            held_out_acc  = self.eval(test_loader)
+            held_out_acc = self.eval(test_loader)
             print(f"\n{'='*60}")
             print(f"  HELD-OUT TEST SET (20%) — final result, never used during training")
             print(f"  Test Loss: {held_out_loss:.4f} | Test Acc: {held_out_acc:.4f} (MAE ~{(1.0 - held_out_acc) * 20.0:.2f} yrs)")
@@ -502,41 +555,26 @@ class Train:
                     print(f"[EVAL DEBUG] labels sample: {labels[:2]}")
         self.model.eval()
 
-        # Reset the metric at the start of evaluation
         self.metric_function.reset()
 
         with torch.no_grad():
             for inputs, labels in test_loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 outputs = self.model(inputs)
-
-                # Call the metric - all metrics now use the same interface
                 self.metric_function(outputs, labels)
 
-        # Get the final result from the metric
         return self.metric_function.result()
 
 
-def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Union[str, None] = None, save_path: Union[str, None] = None, export_onnx=False,
+def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Union[str, None] = None,
+              save_path: Union[str, None] = None, export_onnx=False,
               epoch_limit_minutes=default_epoch_limit_minutes, transform_dir=None):
     """
     train the model with the given code and hyperparameters and evaluate it.
-
-    parameter:
-        nn_code (str): Code of the model
-        task (str): Task type
-        dataset (str): Name of the dataset
-        metric (str): Evaluation metric
-        prm (dict): Hyperparameters, e.g., 'lr', 'momentum', 'batch', 'epoch', 'dropout'
-        prefix (str|None): Prefix of the model, set to None if is unknown.
-        save_path (str|None): Path to save the statistics, or None to not save.
-        export_onnx (bool): Export model and its weights into ONNX file.
-    return:
-        (str, float): Name of the model and the accuracy
     """
     model_name = uuid4(nn_code)
     if prefix:
-        model_name = prefix + "-" + model_name  # Create temporal name for processing
+        model_name = prefix + "-" + model_name
 
     tmp_modul = ".".join((out, 'nn', 'tmp'))
     tmp_modul_name = ".".join((tmp_modul, model_name))
@@ -546,12 +584,16 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
     trainer = None
     try:
         with open(temp_file_path, 'w') as f:
-            f.write(nn_code)  # write the code to the temp file
+            f.write(nn_code)
+
         res = codeEvaluator.evaluate_single_file(temp_file_path)
-        # load dataset
+
         out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset, prm['transform'], transform_dir)
         num_workers = prm.get('num_workers', 1)
-        # initialize model and trainer
+
+        # ✅ unique TB dir for code-based run too
+        tb_log_dir = _make_tb_run_dir((task, dataset, metric, model_name), trial_number=None)
+
         trainer = Train(
             config=(task, dataset, metric, model_name),
             out_shape=out_shape,
@@ -565,16 +607,22 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             num_workers=num_workers,
             prm=prm,
             save_to_db=save_to_db,
-            is_code=True)
+            is_code=True,
+            tb_log_dir=tb_log_dir
+        )
+
         epoch = prm['epoch']
-        accuracy, accuracy_to_time, duration = trainer.train_n_eval(epoch, epoch_limit_minutes, False, export_onnx, train_set, save_path=save_path)
+        accuracy, accuracy_to_time, duration = trainer.train_n_eval(
+            epoch, epoch_limit_minutes, False, export_onnx, train_set, save_path=save_path
+        )
+
         if save_to_db:
-            # If the result meets the requirements, save the model to the database.
             if good(accuracy, minimum_accuracy, duration):
                 model_name = DB_Write.save_nn(nn_code, task, dataset, metric, epoch, prm, force_name=model_name)
                 print(f"Model saved to database with accuracy: {accuracy}")
             else:
                 print(f"Model accuracy {accuracy} is below the minimum threshold {minimum_accuracy}. Not saved.")
+
     except Exception as e:
         print(f"Error during training: {e}")
         raise
@@ -592,7 +640,8 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             pass
 
         try:
-            if trainer: del trainer.model
+            if trainer:
+                del trainer.model
         except NameError:
             pass
         release_memory()
