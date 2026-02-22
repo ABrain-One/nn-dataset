@@ -1,4 +1,4 @@
-# UTKFace dataset loader: HuggingFace-based, 70/30 split, age regression labels
+# UTKFace dataset loader: HuggingFace-based, 70/10/20 split (train/val/test), age regression labels
 import os
 import torch
 from torch.utils.data import Dataset, random_split
@@ -16,13 +16,17 @@ def loader(transform_fn, task):
     os.makedirs(_cache_dir, exist_ok=True)
     dataset = load_dataset("nu-delta/utkface", split="train", cache_dir=_cache_dir)
     full_dataset = _UTKFace(dataset, transform)
-    train_size = int(len(full_dataset) * 0.70)
-    test_size = len(full_dataset) - train_size
-    train_ds, test_ds = random_split(
-        full_dataset, [train_size, test_size],
+    n = len(full_dataset)
+    train_size = int(n * 0.70)
+    val_size   = int(n * 0.10)
+    test_size  = n - train_size - val_size  # remaining ~20%
+    train_ds, val_ds, test_ds = random_split(
+        full_dataset, [train_size, val_size, test_size],
         generator=torch.Generator().manual_seed(42)
     )
-    return (1,), MINIMUM_ACCURACY, train_ds, test_ds
+    # Attach held-out test set as attribute so Train.py can run a final clean evaluation
+    val_ds.held_out_test = test_ds
+    return (1,), MINIMUM_ACCURACY, train_ds, val_ds
 
 
 class _UTKFace(Dataset):

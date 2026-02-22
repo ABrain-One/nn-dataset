@@ -102,7 +102,7 @@ class Net(nn.Module):
             loss = self.criteria[0](outputs, labels)
             loss.backward()
             # Reduced clip norm: prevents unstable updates without hitting ceiling every epoch
-            nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+            nn.utils.clip_grad_norm_(self.parameters(), max_norm=5.0)
             self.optimizer.step()
         # Step scheduler after each epoch
         self.scheduler.step()
@@ -155,6 +155,8 @@ class Net(nn.Module):
             nn.Linear(128, out_shape[0])
         )
         self._initialize_weights()
+        # Bias the final layer towards mean UTKFace age (~33): prevents accuracy=0 in epoch 1
+        self.head[-1].bias.data.fill_(33.0)
 
     # Kaiming init for convs, normal init for linear layers
     def _initialize_weights(self):

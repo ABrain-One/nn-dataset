@@ -295,10 +295,11 @@ class Train:
             self.epoch_history.append(epoch_metrics)
 
             # Print detailed metrics
-            print(f"  Train Loss: {train_loss:.4f}, Test Loss: {test_loss:.4f}")
-            print(f"  Train Acc: {train_accuracy:.4f}, Test Acc: {accuracy:.4f}")
+            print(f"  Train Loss: {train_loss:.4f} | Val Loss: {test_loss:.4f}")
+            print(f"  Train Acc:  {train_accuracy:.4f} | Val Acc:  {accuracy:.4f}  [Best: {self.best_accuracy:.4f} @ epoch {self.best_epoch}]")
             if lr_now and grad_norm and samples_per_second:
-                print(f"  LR: {lr_now:.6f}, Grad Norm: {grad_norm:.4f}, Throughput: {samples_per_second:.1f} samples/s")
+                print(f"  LR: {lr_now:.6f} | Grad Norm: {grad_norm:.4f} | Throughput: {samples_per_second:.1f} samples/s")
+            print(f"  Epoch time: {epoch_duration:.1f}s | Trial elapsed: {(time.time_ns() - start_time) / 1e9:.1f}s", flush=True)
 
             # The accuracy-to-time metric is not stored in the database as it can change over time and can be quickly calculated from saved values.
             accuracy_to_time = accuracy_to_time_metric(accuracy, self.minimum_accuracy, duration)
@@ -348,6 +349,23 @@ class Train:
         # Save training summary at the end
         if save_path and self.epoch_history:
             self._save_training_summary()
+
+        # Final held-out test evaluation (20% never seen during HPO)
+        if hasattr(self.test_dataset, 'held_out_test'):
+            test_loader = test_loader_f(self.test_dataset.held_out_test, self.batch, self.num_workers)
+            self.model.eval()
+            held_out_loss = self._compute_loss(test_loader)
+            held_out_acc  = self.eval(test_loader)
+            print(f"\n{'='*60}")
+            print(f"  HELD-OUT TEST SET (20%) — final result, never used during training")
+            print(f"  Test Loss: {held_out_loss:.4f} | Test Acc: {held_out_acc:.4f} (MAE ~{(1.0 - held_out_acc) * 20.0:.2f} yrs)")
+            print(f"{'='*60}", flush=True)
+
+        total_trial_seconds = (time.time_ns() - start_time) / 1e9
+        print(f"\n{'='*60}")
+        print(f"  Trial complete | {epoch_max} epochs | Total time: {total_trial_seconds/60:.1f} min ({total_trial_seconds:.0f}s)")
+        print(f"  Best Val Acc: {self.best_accuracy:.4f} @ epoch {self.best_epoch}")
+        print(f"{'='*60}\n", flush=True)
 
         return accuracy, accuracy_to_time, duration
 

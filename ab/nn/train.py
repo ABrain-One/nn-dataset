@@ -62,6 +62,8 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
     print(f"Training configurations ({epoch_max} epochs):")
     for idx, sub_config in enumerate(sub_configs, start=1):
         print(f"{idx}. {sub_config}")
+    all_trials_start = time.time()
+    completed_trials = 0
     for sub_config in sub_configs:
         sub_config_ext = sub_config + (epoch_max,)
         n_optuna_trials_left, n_passed_trials = remaining_trials(sub_config_ext, n_optuna_trials)
@@ -108,6 +110,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
                             return 0.0
 
                     study.optimize(objective, n_trials=n_optuna_trials_left)
+                    completed_trials += n_optuna_trials_left
                     return last_accuracy
                 except CudaOutOfMemory as e:
                     max_batch_binary_power_local = e.batch_size_power() - 1
@@ -117,6 +120,10 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
                 finally:
                     del study
                     release_memory()
+    total_elapsed = time.time() - all_trials_start
+    print(f"\n{'='*60}")
+    print(f"  All trials complete | {completed_trials} trials | Total time: {total_elapsed/60:.1f} min ({total_elapsed:.0f}s)")
+    print(f"{'='*60}\n")
 
 
 if __name__ == "__main__":
