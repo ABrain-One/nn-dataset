@@ -244,6 +244,12 @@ class Train:
 
         # Get optimizer reference for LR tracking
         optimizer = getattr(self.model, 'optimizer', None)
+        # TensorBoard logging setup
+        try:
+            from torch.utils.tensorboard import SummaryWriter
+            tb_writer = SummaryWriter(log_dir="runs/experiment_1")
+        except ImportError:
+            tb_writer = None
 
         for epoch in range(1, epoch_max + 1):
             epoch_start_time = time.time_ns()
@@ -294,6 +300,16 @@ class Train:
             )
             self.epoch_history.append(epoch_metrics)
 
+            # TensorBoard logging
+            if tb_writer:
+                tb_writer.add_scalar('Loss/train', train_loss, epoch)
+                tb_writer.add_scalar('Loss/val', test_loss, epoch)
+                tb_writer.add_scalar('Accuracy/train', train_accuracy, epoch)
+                tb_writer.add_scalar('Accuracy/val', accuracy, epoch)
+                if lr_now is not None:
+                    tb_writer.add_scalar('Learning_Rate', lr_now, epoch)
+                tb_writer.add_scalar('Gradient_Norm', grad_norm, epoch)
+                tb_writer.add_scalar('Throughput', samples_per_second, epoch)
             # Print detailed metrics
             print(f"  Train Loss: {train_loss:.4f} | Val Loss: {test_loss:.4f}")
             print(f"  Train Acc:  {train_accuracy:.4f} | Val Acc:  {accuracy:.4f}  [Best: {self.best_accuracy:.4f} @ epoch {self.best_epoch}]")
@@ -337,6 +353,68 @@ class Train:
             if self.save_to_db:
                 if self.is_code:  # We don't want the filename to contain full codes
                     if save_path:
+                        # Advanced visualizations for age estimation
+                        # 1. Predicted vs. True Age Scatter Plot (Validation)
+                        pred_list = []
+                        true_list = []
+                        img_list = []
+                        self.model.eval()
+                        with torch.no_grad():
+                            for batch in self.test_loader:
+                                inputs, labels = batch
+                                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                                outputs = self.model(inputs)
+                                # If outputs are logits, convert to age
+                                if outputs.ndim > 1 and outputs.shape[1] > 1:
+                                    preds = outputs.argmax(dim=1).cpu().numpy()
+                                else:
+                                    preds = outputs.squeeze().cpu().numpy()
+                                true = labels.squeeze().cpu().numpy()
+                                pred_list.extend(preds.tolist() if hasattr(preds, 'tolist') else preds)
+                                true_list.extend(true.tolist() if hasattr(true, 'tolist') else true)
+                                # Collect images for visualization (first 8 per epoch)
+                                if len(img_list) < 8:
+                                    img_list.extend(inputs[:8].cpu())
+
+                        import numpy as np
+                        pred_arr = np.array(pred_list)
+                        true_arr = np.array(true_list)
+                        # Scatter plot as TensorBoard figure
+                        if len(pred_arr) > 0 and len(true_arr) > 0:
+                            import matplotlib.pyplot as plt
+                            fig = plt.figure(figsize=(5, 5))
+                            plt.scatter(true_arr, pred_arr, alpha=0.5)
+                            plt.xlabel('True Age')
+                            plt.ylabel('Predicted Age')
+                            plt.title('Predicted vs. True Age')
+                            tb_writer.add_figure('Scatter/Pred_vs_True_Age', fig, epoch)
+                            plt.close(fig)
+
+                        # 2. Histogram of predictions
+                        if len(pred_arr) > 0:
+                            fig_hist = plt.figure(figsize=(5, 3))
+                            plt.hist(pred_arr, bins=20, alpha=0.7, label='Predicted')
+                            plt.hist(true_arr, bins=20, alpha=0.5, label='True')
+                            plt.legend()
+                            plt.title('Age Distribution')
+                            tb_writer.add_figure('Histogram/Age_Distribution', fig_hist, epoch)
+                            plt.close(fig_hist)
+
+                        # 3. Sample images with predicted and true ages
+                        if len(img_list) > 0:
+                            import torchvision
+                            # Prepare text labels
+                            labels_text = [f"P:{int(p)} T:{int(t)}" for p, t in zip(pred_arr[:len(img_list)], true_arr[:len(img_list)])]
+                            grid = torchvision.utils.make_grid(img_list, nrow=4, normalize=True)
+                            tb_writer.add_image('Samples/Images', grid, epoch)
+                            # Optionally, add text as image annotation (not supported natively, but can be done with matplotlib)
+                            fig_img = plt.figure(figsize=(8, 2))
+                            plt.imshow(np.transpose(grid.numpy(), (1, 2, 0)))
+                            plt.axis('off')
+                            for idx, label in enumerate(labels_text):
+                                plt.text(10 + (idx % 4) * 60, 20 + (idx // 4) * 60, label, color='white', fontsize=8, bbox=dict(facecolor='black', alpha=0.5))
+                            tb_writer.add_figure('Samples/Images_with_Labels', fig_img, epoch)
+                            plt.close(fig_img)
                         save_results(self.config + (epoch,), join(save_path, f"{epoch}.json"), prm)
                     else:
                         print(f"[WARN]parameter `save_Path` set to null, the statics will not be saved into a file.")
