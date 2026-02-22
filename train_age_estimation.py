@@ -13,6 +13,10 @@ import multiprocessing
 if __name__ == '__main__':
     multiprocessing.freeze_support()
 
+# Force framework to use local writable path instead of read-only site-packages
+import ab.nn.util.db.Util as _db_util
+_db_util.get_package_location = lambda x: None
+
 from ab.nn.train import main
 from ab.nn.util.Const import data_dir, db_file, code_tables
 from ab.nn.util.db.Init import init_db, sql_conn, close_conn
