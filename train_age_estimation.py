@@ -55,7 +55,7 @@ if __name__ == '__main__':
         save_pth_weights=True,
         save_onnx_weights=1,
         num_workers=8,
-        epoch_limit_minutes=240,
+        epoch_limit_minutes=840,
     )
 
     print("\n" + "=" * 60)
