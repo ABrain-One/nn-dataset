@@ -15,8 +15,14 @@ if __name__ == '__main__':
 
 from ab.nn.train import main
 from ab.nn.util.Const import data_dir
+from ab.nn.util.db.Write import init_population
 
 if __name__ == '__main__':
+    # Populate database with model code and statistics
+    print("Initializing database with model code...")
+    init_population()
+    print("Database initialized successfully!\n")
+    
     # Training configuration: task_dataset_metric_model
     config = 'age-regression_utkface_mae_MobileAgeNet'
 
