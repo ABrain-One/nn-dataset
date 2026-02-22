@@ -78,22 +78,35 @@ class InvertedResidual(nn.Module):
 class Net(nn.Module):
     def train_setup(self, prm: Dict[str, Any]) -> None:
         self.to(self.device)
-        self.criteria = (nn.L1Loss().to(self.device),)
+        self.epoch_max = prm.get('epoch_max', 50)
+        self._current_epoch = 0
+        # SmoothL1 (Huber) loss: robust to outliers, smoother gradients than pure L1
+        self.criteria = (nn.SmoothL1Loss(beta=1.0).to(self.device),)
+        # SGD with Nesterov momentum and stronger weight decay to combat overfitting
         self.optimizer = torch.optim.SGD(
-            self.parameters(), lr=prm['lr'], momentum=prm['momentum'], weight_decay=1e-4
+            self.parameters(), lr=prm['lr'], momentum=prm['momentum'],
+            weight_decay=4e-4, nesterov=True
         )
-    
+        # Cosine annealing: smoothly decays LR from peak to near-zero over all epochs
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=self.epoch_max, eta_min=1e-6
+        )
+
     def learn(self, train_data: Any) -> None:
         self.train()
         for inputs, labels in train_data:
             inputs = inputs.to(self.device)
             labels = labels.to(self.device).float()
-            self.optimizer.zero_grad()
+            self.optimizer.zero_grad(set_to_none=True)
             outputs = self(inputs)
             loss = self.criteria[0](outputs, labels)
             loss.backward()
-            nn.utils.clip_grad_norm_(self.parameters(), max_norm=5.0)
+            # Reduced clip norm: prevents unstable updates without hitting ceiling every epoch
+            nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
             self.optimizer.step()
+        # Step scheduler after each epoch
+        self.scheduler.step()
+        self._current_epoch += 1
     
     def __init__(self, in_shape: Tuple[int, ...], out_shape: Tuple[int, ...],
                  prm: Dict[str, Any], device: torch.device) -> None:
@@ -132,11 +145,14 @@ class Net(nn.Module):
             HardSwish()
         )
         
-        # Regression head: pool -> FC(256) -> dropout -> FC(1)
+        # Regression head: pool -> BN -> FC(256) -> dropout -> FC(128) -> dropout -> FC(1)
         self.head = nn.Sequential(
             nn.AdaptiveAvgPool2d(1), nn.Flatten(),
-            nn.Linear(960, 256), HardSwish(), nn.Dropout(p=dropout),
-            nn.Linear(256, out_shape[0])
+            nn.Linear(960, 256), nn.BatchNorm1d(256), HardSwish(),
+            nn.Dropout(p=dropout),
+            nn.Linear(256, 128), HardSwish(),
+            nn.Dropout(p=dropout * 0.5),
+            nn.Linear(128, out_shape[0])
         )
         self._initialize_weights()
 
@@ -147,7 +163,7 @@ class Net(nn.Module):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.BatchNorm2d):
+            elif isinstance(m, (nn.BatchNorm2d, nn.BatchNorm1d)):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
             elif isinstance(m, nn.Linear):
