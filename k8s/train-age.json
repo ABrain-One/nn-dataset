@@ -21,7 +21,7 @@
             "imagePullPolicy": "Always",
             "command": ["/bin/bash", "-c"],
             "args": [
-              "set -e; pip uninstall -y nn-dataset 2>&1 | tail -3; cd /shared/ssd/home/b-a-kumar/nn-dataset; export PYTHONPATH=/shared/ssd/home/b-a-kumar/nn-dataset:$PYTHONPATH; echo '--- GPU Check ---'; python -c \"import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else CPU}')\" ; echo '--- Starting Training ---'; python train_age_estimation.py 2>&1; echo '--- Training Finished ---'"
+              "set -e; export HOME=/shared/ssd/home/b-a-kumar; export HF_HOME=/shared/ssd/home/b-a-kumar/.cache/huggingface; export HF_TOKEN=''; cd /shared/ssd/home/b-a-kumar/nn-dataset; export PYTHONPATH=/shared/ssd/home/b-a-kumar/nn-dataset:$PYTHONPATH; echo '--- GPU Check ---'; python -c \"import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else CPU}')\" ; echo '--- Starting Training ---'; python train_age_estimation.py 2>&1; echo '--- Training Finished ---'"
             ],
             "resources": {
               "requests": {
