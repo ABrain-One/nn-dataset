@@ -14,14 +14,24 @@ if __name__ == '__main__':
     multiprocessing.freeze_support()
 
 from ab.nn.train import main
-from ab.nn.util.Const import data_dir
-from ab.nn.util.db.Write import init_population
+from ab.nn.util.Const import data_dir, db_file
+from ab.nn.util.db.Init import init_db
+from ab.nn.util.db.Write import populate_code_table
 
 if __name__ == '__main__':
-    # Populate database with model code and statistics
-    print("Initializing database with model code...")
-    init_population()
-    print("Database initialized successfully!\n")
+    # Ensure fresh database with model code
+    print("Initializing database...")
+    if db_file.exists():
+        db_file.unlink()  # Delete old database
+    init_db()  # Create tables
+    
+    # Populate model code into database
+    from ab.nn.util.db.Init import sql_conn, close_conn
+    conn, cursor = sql_conn()
+    for table in ['nn', 'loader', 'metric', 'transform']:
+        populate_code_table(table, cursor)
+    close_conn(conn)
+    print("Database initialized with model code!\n")
     
     # Training configuration: task_dataset_metric_model
     config = 'age-regression_utkface_mae_MobileAgeNet'
