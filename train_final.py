@@ -53,7 +53,7 @@ if __name__ == '__main__':
         max_dropout=BEST_DROPOUT,
         save_pth_weights=True,
         save_onnx_weights=1,
-        num_workers=4,
+        num_workers=8,
         epoch_limit_minutes=480,         # 8 hours max
     )
 
