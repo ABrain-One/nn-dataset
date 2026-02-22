@@ -69,7 +69,7 @@ if __name__ == '__main__':
         transform=valid_transforms,      # Use only valid transforms (exclude broken five_crop)
         save_pth_weights=True,
         save_onnx_weights=1,
-        num_workers=4,                   # Parallel data loading on Linux cluster
+        num_workers=8,                   # Parallel data loading on Linux cluster
         epoch_limit_minutes=240,         # More time budget on cluster
     )
 
