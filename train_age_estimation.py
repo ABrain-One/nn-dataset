@@ -14,8 +14,8 @@ if __name__ == '__main__':
     multiprocessing.freeze_support()
 
 from ab.nn.train import main
-from ab.nn.util.Const import data_dir, db_file
-from ab.nn.util.db.Init import init_db
+from ab.nn.util.Const import data_dir, db_file, code_tables
+from ab.nn.util.db.Init import init_db, sql_conn, close_conn
 from ab.nn.util.db.Write import populate_code_table
 
 if __name__ == '__main__':
@@ -26,9 +26,8 @@ if __name__ == '__main__':
     init_db()  # Create tables
     
     # Populate model code into database
-    from ab.nn.util.db.Init import sql_conn, close_conn
     conn, cursor = sql_conn()
-    for table in ['nn', 'loader', 'metric', 'transform']:
+    for table in code_tables:
         populate_code_table(table, cursor)
     close_conn(conn)
     print("Database initialized with model code!\n")
