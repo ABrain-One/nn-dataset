@@ -156,7 +156,7 @@ dependent_tables = code_tables + param_tables
 all_tables = main_tables + dependent_tables
 index_colum = ('task', 'dataset') + dependent_tables
 extra_main_columns = ('duration', 'accuracy')
-nn_code_minhash_table = "nn_code_minhash"
+nn_code_minhash_table = "nn_minhash" #New
 
 # Mobile analytics (runtime) table
 run_table = 'run'
