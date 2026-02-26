@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from numpy import source
+
 import sys
 import os
 import json
@@ -21,7 +21,7 @@ import multiprocessing
 # --- CONFIGURATION ---
 SOURCE_REPO = "NN-Dataset/checkpoints-epoch-50"
 TARGET_REPO = "NN-Dataset/pt"  # Base repo, will create subfolder structure
-DEFAULT_HF_TOKEN = ""# Hf_token paste here
+DEFAULT_HF_TOKEN = "" # Hf_token paste here
 # --------------------- 
 
 # --- 1. SETUP PATHS ---
@@ -36,8 +36,8 @@ work_dir = dataset_root / "_work"
 out_dir = script_path.parent
 data_root = work_dir / "prune_data"
 temp_dl_dir = work_dir / "temp_prune"
-models_dir = dataset_root / "nn" / "nn"
-transforms_dir = dataset_root / "nn" / "transform"
+models_dir = dataset_root / "ab" / "nn" / "nn"
+transforms_dir = dataset_root / "ab" / "nn" / "transform"
 
 # Target path structure (mirroring quantization)
 TARGET_PATH = "structured_l1_layrewise/img-classification_cifar-10_acc"
@@ -356,19 +356,15 @@ def log_skip(name: str, reason: str):
 def process_single_model(model_name: str, args) -> Dict[str, Any]:
     """Process a single model: download, prune, evaluate, save - matches quantization structure."""
     result = {
-        "model": model_name,
-        "dataset": "cifar-10",
-        "task": "img-classification",
-        "status": "processing",
-        "accuracy_after_pruning": None,
-        "inference_time_sec": None,
-        "pruning_method": "structured_l1_layerwise",
+        "status": "success",
+        "accuracy": 0.0,
+        "duration": 0,
         "pruning_ratio": PRUNING_RATIO,
-        "params_before": None,
-        "params_after": None,
-        "params_removed": None,
-        "model_size_before_kb": None,
-        "model_size_after_kb": None
+        "params_before": 0,
+        "params_after": 0,
+        "params_removed": 0,
+        "model_size_before_kb": 0.0,
+        "model_size_after_kb": 0.0
     }
     
     # Create model-specific temp directory (like quantization pipeline)
@@ -445,9 +441,8 @@ def process_single_model(model_name: str, args) -> Dict[str, Any]:
         # Prepare result - matches structure in quantization pipeline's JSON
         result.update({
             "status": "success",
-            "accuracy_after_pruning": round(accuracy, 4),
-            "inference_time_sec": round(inf_time, 6),
-            "pruning_method": "structured_l1_layerwise",
+            "accuracy": round(accuracy, 4),
+            "duration": int(inf_time * 1e9),
             "pruning_ratio": PRUNING_RATIO,
             "params_before": params_before,
             "params_after": params_after,
@@ -526,19 +521,15 @@ def _process_worker(model_name, args, q):
         q.put(("SUCCESS", result))
     except Exception as e:
         q.put(("ERROR", {
-            "model": model_name,
-            "dataset": "cifar-10",
-            "task": "img-classification",
             "status": "failed",
-            "accuracy_after_pruning": None,
-            "inference_time_sec": None,
-            "pruning_method": "structured_l1_layerwise",
+            "accuracy": 0.0,
+            "duration": 0,
             "pruning_ratio": PRUNING_RATIO,
-            "params_before": None,
-            "params_after": None,
-            "params_removed": None,
-            "model_size_before_kb": None,
-            "model_size_after_kb": None
+            "params_before": 0,
+            "params_after": 0,
+            "params_removed": 0,
+            "model_size_before_kb": 0.0,
+            "model_size_after_kb": 0.0
         }))
 
 def main():
@@ -640,19 +631,15 @@ def main():
                 result = res # could be SUCCESS or ERROR dict
             else:
                 result = {
-                    "model": model_name,
-                    "dataset": "cifar-10",
-                    "task": "img-classification",
                     "status": "failed",
-                    "accuracy_after_pruning": None,
-                    "inference_time_sec": None,
-                    "pruning_method": "structured_l1_layerwise",
+                    "accuracy": 0.0,
+                    "duration": 0,
                     "pruning_ratio": PRUNING_RATIO,
-                    "params_before": None,
-                    "params_after": None,
-                    "params_removed": None,
-                    "model_size_before_kb": None,
-                    "model_size_after_kb": None
+                    "params_before": 0,
+                    "params_after": 0,
+                    "params_removed": 0,
+                    "model_size_before_kb": 0.0,
+                    "model_size_after_kb": 0.0
                 }
         
         results[model_name] = result
