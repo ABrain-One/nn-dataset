@@ -56,11 +56,49 @@ def conf_to_names(c: str) -> tuple[str, ...]:
 
 def add_categorical_if_absent(trial, prms, nm, fn, default=None):
     if not (nm in prms and prms[nm]):
-        prms[nm] = trial.suggest_categorical(nm, default or fn())
+        choices = default or fn()
+        if isinstance(choices, str):
+            choices = [choices]
+        if not choices:
+             raise ValueError(f"No choices available for categorical parameter: {nm}")
+        prms[nm] = trial.suggest_categorical(nm, choices)
     return prms[nm]
 
 
-def is_full_config(l: list[str] | tuple[str, ...]):
+def get_attr(module_name: str, attr_name: str):
+    """
+    Import a module and get an attribute from it.
+    
+    Args:
+        module_name: Full module path (e.g., 'ab.nn.nn.RLFN')
+        attr_name: Attribute name to retrieve (e.g., 'Net')
+    
+    Returns:
+        The requested attribute from the module
+    """
+    import importlib
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError:
+        # Fallback 1: Lowercase
+        try:
+            parts = module_name.split('.')
+            parts[-1] = parts[-1].lower()
+            module = importlib.import_module('.'.join(parts))
+        except ModuleNotFoundError:
+            # Fallback 2: Uppercase
+            try:
+                parts = module_name.split('.')
+                parts[-1] = parts[-1].upper()
+                module = importlib.import_module('.'.join(parts))
+            except ModuleNotFoundError:
+                raise
+    return getattr(module, attr_name)
+
+
+from typing import Union
+
+def is_full_config(l: Union[list, tuple]):
     return 4 == len(l) and (nn_dir / (l[-1] + '.py')).exists()
 
 

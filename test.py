@@ -3,6 +3,7 @@ import shutil
 import time
 import unittest
 import uuid
+from typing import Optional
 from unittest.mock import patch
 
 import pandas as pd
@@ -17,8 +18,8 @@ from ab.nn.util.Const import *
 
 
 class Testing(unittest.TestCase):
-    inserted_uid: str | None = None  # set in setUpClass
-    dummy_cfg_ext: tuple | None = None  # (task, dataset, metric, nn, epoch)
+    inserted_uid: Optional[str] = None  # set in setUpClass
+    dummy_cfg_ext: Optional[tuple] = None  # (task, dataset, metric, nn, epoch)
 
     @classmethod
     def setUpClass(cls):

@@ -64,7 +64,7 @@ def get_gpu_memory_kb() -> Optional[float]:
 
 def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout,
                      max_dropout, min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, epoch_max,
-                     pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights):
+                     pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights, save_to_db=True):
     task, dataset_name, metric, nn = config
     try:
         # Load model
@@ -73,17 +73,16 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
         prms = dict(nn_prm)
         for prm in s_prm:
             if not (prm in prms and prms[prm]):
-                match prm:
-                    case 'lr':
-                        prms[prm] = trial.suggest_float(prm, min_lr, max_lr, log=True)
-                    case 'momentum':
-                        prms[prm] = trial.suggest_float(prm, min_momentum, max_momentum)
-                    case 'dropout':
-                        prms[prm] = trial.suggest_float(prm, min_dropout, max_dropout)
-                    case 'pretrained':
-                        prms[prm] = float(pretrained if pretrained else trial.suggest_categorical(prm, [0, 1]))
-                    case _:
-                        prms[prm] = trial.suggest_float(prm, 0.0, 1.0)
+                if prm == 'lr':
+                    prms[prm] = trial.suggest_float(prm, min_lr, max_lr, log=True)
+                elif prm == 'momentum':
+                    prms[prm] = trial.suggest_float(prm, min_momentum, max_momentum)
+                elif prm == 'dropout':
+                    prms[prm] = trial.suggest_float(prm, min_dropout, max_dropout)
+                elif prm == 'pretrained':
+                    prms[prm] = float(pretrained if pretrained else trial.suggest_categorical(prm, [0, 1]))
+                else:
+                    prms[prm] = trial.suggest_float(prm, 0.0, 1.0)
         prms['epoch_max'] = epoch_max
         batch = add_categorical_if_absent(trial, prms, 'batch', lambda: [max_batch(x) for x in range(min_batch_binary_power, max_batch_binary_power_local + 1)])
         transform_name = add_categorical_if_absent(trial, prms, 'transform', supported_transformers, default=transform)
@@ -95,7 +94,7 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
         # Load dataset
         out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset_name, transform_name)
         return Train(config, out_shape, minimum_accuracy, batch, nn_mod('nn', nn), task, train_set, test_set, metric,
-                     num_workers, prms).train_n_eval(epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set)
+                     num_workers, prms, save_to_db=save_to_db).train_n_eval(epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set)
 
     except Exception as e:
         accuracy_duration = 0.0, 0.0, 1
@@ -171,6 +170,51 @@ class Train:
         self.epoch_history: List[EpochMetrics] = []
         self.best_accuracy = 0.0
         self.best_epoch = 0
+        
+        # Benchmark metrics (MAI 2025 requirements)
+        self.benchmark_metrics = self._collect_benchmark_metrics()
+        
+        # Ensure model is back on the correct device (Benchmarking might move it to CPU)
+        self.model.to(self.device)
+
+    def _collect_benchmark_metrics(self) -> dict:
+        """Collect benchmark metrics for MAI 2025 thesis"""
+        try:
+            from ab.nn.util.Benchmark import count_parameters, count_flops, measure_latency
+            
+            # Count parameters
+            params = count_parameters(self.model)
+            
+            # Count FLOPs
+            try:
+                flops = count_flops(self.model, self.in_shape)
+            except Exception as e:
+                print(f"[WARN] Could not compute FLOPs: {e}")
+                flops = {'total_flops': 0, 'gflops': 0, 'mflops': 0}
+            
+            # Measure latency (quick measurement with fewer runs)
+            try:
+                latency = measure_latency(self.model, self.in_shape, num_runs=10, warmup_runs=2, device='cpu')
+            except Exception as e:
+                print(f"[WARN] Could not measure latency: {e}")
+                latency = {'mean_ms': 0, 'fps': 0}
+            
+            benchmark = {
+                'parameters': params['total'],
+                'parameters_mb': params['total_mb'],
+                'gflops': flops['gflops'],
+                'latency_ms': latency['mean_ms'],
+                'fps': latency.get('fps', 0),
+            }
+            
+            print(f"[Benchmark] Params: {params['total']:,} ({params['total_mb']:.2f}MB), "
+                  f"FLOPs: {flops['gflops']:.2f}G, Latency: {latency['mean_ms']:.2f}ms")
+            
+            return benchmark
+            
+        except Exception as e:
+            print(f"[WARN] Benchmark collection failed: {e}")
+            return {}
 
     def _get_loss_function(self):
         """Get loss function for metric tracking"""
@@ -251,21 +295,23 @@ class Train:
 
             # Training phase
             self.model.train()
-            self.model.learn(DataRoll(self.train_loader, epoch_limit_minutes))
+            train_loss = self.model.learn(DataRoll(self.train_loader, epoch_limit_minutes))
+            if train_loss is None:
+                train_loss = 0.0
 
             # Compute gradient norm after training
             grad_norm = compute_gradient_norm(self.model)
 
             # Get current learning rate
             lr_now = get_current_lr(optimizer)
-
-            # Compute losses
-            train_loss = self._compute_loss(self.train_loader)
+            
+            # Transition to evaluation
+            self.model.eval()
             test_loss = self._compute_loss(self.test_loader)
 
             # Compute accuracies
-            train_accuracy = self._compute_accuracy(self.train_loader)
             test_accuracy = self.eval(self.test_loader)
+            train_accuracy = 0.0  # Skip for speed, test_accuracy is the key metric
 
             accuracy = test_accuracy
             accuracy = 0.0 if math.isnan(accuracy) or math.isinf(accuracy) else accuracy
@@ -331,7 +377,9 @@ class Train:
                                           'best_epoch': self.best_epoch,
                                       } | ({'lr_now': lr_now} if lr_now else {})
                                       # NEW: GPU memory (if available)
-                                      | ({'gpu_memory_kb': get_gpu_memory_kb()} if get_gpu_memory_kb else {}))
+                                      | ({'gpu_memory_kb': get_gpu_memory_kb()} if get_gpu_memory_kb else {})
+                                      # NEW: MAI 2025 Benchmark metrics
+                                      | self.benchmark_metrics)
 
             if self.save_to_db:
                 if self.is_code:  # We don't want the filename to contain full codes
@@ -501,4 +549,5 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             pass
         release_memory()
 
-    return model_name, accuracy, accuracy_to_time, res['score']
+    score = res['score'] if (res and 'score' in res) else 0.0
+    return model_name, accuracy, accuracy_to_time, score

@@ -1,4 +1,6 @@
+from __future__ import annotations
 import optuna
+from typing import Union, Any, Optional
 from ab.nn.util.Exception import *
 from ab.nn.util.Train import optuna_objective
 from ab.nn.util.db.Util import *
@@ -9,12 +11,12 @@ from ab.nn.util.db.Read import remaining_trials
 from types import MappingProxyType
 
 
-def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_hyperparameters, epoch_max: int = default_epochs, n_optuna_trials: int | str = default_trials,
+def main(config: Union[str, tuple, list] = default_config, nn_prm: dict = default_nn_hyperparameters, epoch_max: int = default_epochs, n_optuna_trials: Union[int, str] = default_trials,
          min_batch_binary_power: int = default_min_batch_power, max_batch_binary_power: int = default_max_batch_power,
          min_learning_rate: float = default_min_lr, max_learning_rate: float = default_max_lr,
          min_momentum: float = default_min_momentum, max_momentum: float = default_max_momentum,
          min_dropout: float = default_min_dropout, max_dropout: float = default_max_dropout,
-         transform: str | tuple = None, nn_fail_attempts: int = default_nn_fail_attempts, random_config_order: bool = default_random_config_order,
+         transform: Union[str, tuple] = None, nn_fail_attempts: int = default_nn_fail_attempts, random_config_order: bool = default_random_config_order,
          num_workers: int = default_num_workers, pretrained: int = default_pretrained, epoch_limit_minutes: int = default_epoch_limit_minutes,
          train_missing_pipelines: bool = default_train_missing_pipelines, save_pth_weights: bool = default_save_pth_weights, save_onnx_weights: int = default_save_onnx_weights):
     """
@@ -91,7 +93,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
                             accuracy, accuracy_to_time, duration = optuna_objective(trial, sub_config, nn_prm, num_workers, min_learning_rate, max_learning_rate,
                                                                                     min_momentum, max_momentum, min_dropout, max_dropout,
                                                                                     min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, epoch_max,
-                                                                                    pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights)
+                                                                                    pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights, save_to_db=True)
                             log_nn_stat(nn)
                             if good(accuracy, min_accuracy(dataset), duration):
                                 fail_iterations = nn_fail_attempts

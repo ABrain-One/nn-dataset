@@ -1,4 +1,6 @@
+from __future__ import annotations
 import json
+from typing import Optional, Union, Any
 
 from ab.nn.util.Const import *
 from ab.nn.util.Util import is_full_config, str_not_none
@@ -45,16 +47,14 @@ def data(only_best_accuracy: bool = False,
          task: Optional[str] = None,
          dataset: Optional[str] = None,
          metric: Optional[str] = None,
-         nn: Optional[str | tuple[str]] = None,
+         nn: Optional[Union[str, tuple[str]]] = None,
          epoch: Optional[int] = None,
          max_rows: Optional[int] = None,
          nn_prefixes: Optional[tuple] = None,
          sql: Optional[JoinConf] = None,
          unique_nn: bool = False,
-         include_nn_stats: bool = False,
-         ) -> tuple[
-    dict[str, int | float | str | dict[str, int | float | str]], ...
-]:
+          include_nn_stats: bool = False,
+          ) -> tuple[dict[str, Any], ...]:
     """
     Get the NN model code and all related statistics from the database.
 
@@ -210,9 +210,9 @@ def data(only_best_accuracy: bool = False,
 
 
 def run_data(
-        model_name: str | None = None,
-        device_type: str | None = None,
-        max_rows: int | None = None,
+        model_name: Optional[str] = None,
+        device_type: Optional[str] = None,
+        max_rows: Optional[int] = None,
 ):
     """
     Query mobile runtime analytics from the `mobile` table with optional filters.
@@ -324,9 +324,9 @@ def remaining_trials(config_ext, n_optuna_trials) -> tuple[int, int]:
 
 
 def nn_stat_data(
-        nn_name: str | None = None,
-        prm_id: str | None = None,
-        max_rows: int | None = None,
+        nn_name: Optional[str] = None,
+        prm_id: Optional[str] = None,
+        max_rows: Optional[int] = None,
 ):
     """
     Query NN statistics from the `nn_stat` table with optional filters.

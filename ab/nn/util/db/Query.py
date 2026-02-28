@@ -1,6 +1,7 @@
+from __future__ import annotations
 from dataclasses import dataclass, field
 from sqlite3 import Cursor
-from typing import Optional
+from typing import Optional, Union, Any
 
 from ab.nn.util.Const import main_columns_ext, tmp_data
 
@@ -84,14 +85,14 @@ LEFT JOIN {tmp_data} d2 ON d2.id = m.matched_id {limit_clause}''')
     return fill_hyper_prm(cur, sql.num_joint_nns)
 
 
-def fill_hyper_prm(cur: Cursor, num_joint_nns=1, include_nn_stats=False) -> list[dict]:
+def fill_hyper_prm(cur: Cursor, num_joint_nns=1, include_nn_stats=False) -> list[dict[str, Any]]:
     rows = cur.fetchall()
     if not rows: return []  # short-circuit for an empty result
     columns = [c[0] for c in cur.description]
 
     # Bulk-load *all* hyperparameters for the retrieved stat_ids
     from collections import defaultdict
-    prm_by_uid: dict[str, dict[str, int | float | str]] = defaultdict(dict)
+    prm_by_uid: dict[str, dict[str, Any]] = defaultdict(dict)
 
     cur.execute(f"SELECT uid, name, value FROM prm")
     for uid, name, value in cur.fetchall():

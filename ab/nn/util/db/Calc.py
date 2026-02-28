@@ -1,4 +1,6 @@
+from __future__ import annotations
 import json
+from typing import Union, Optional
 from os.path import exists
 from pathlib import Path
 
@@ -6,7 +8,7 @@ import ab.nn.util.db.Read as DB_Read
 from ab.nn.util.Util import conf_to_names, order_configs
 
 
-def patterns_to_configs(config_pattern: str | tuple, random_config_order: bool, train_missing_pipelines: bool) -> tuple[tuple[str, ...], ...]:
+def patterns_to_configs(config_pattern: Union[str, tuple], random_config_order: bool, train_missing_pipelines: bool) -> tuple[tuple[str, ...], ...]:
     """
     Generate unique configurations based on the input pattern(s).
     :param config_pattern: A string or tuple of configuration patterns.
