@@ -21,7 +21,7 @@ import multiprocessing
 # --- CONFIGURATION ---
 SOURCE_REPO = "NN-Dataset/checkpoints-epoch-50"
 TARGET_REPO = "NN-Dataset/pt"  # Base repo, will create subfolder structure
-DEFAULT_HF_TOKEN = "" # Hf_token paste here
+DEFAULT_HF_TOKEN = "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" # Hf_token paste here
 # --------------------- 
 
 # --- 1. SETUP PATHS ---
@@ -642,11 +642,14 @@ def main():
                     "model_size_after_kb": 0.0
                 }
         
-        results[model_name] = result
-        
         if result.get("status") == "success":
+            results[model_name] = result
             successful += 1
         else:
+            # Only store minimal failure info
+            results[model_name] = {
+                "status": "failed"
+            }
             failed += 1
             
         # Update comprehensive all_models.json incrementally ensuring all metadata is captured
