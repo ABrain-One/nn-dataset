@@ -21,7 +21,7 @@ import multiprocessing
 # --- CONFIGURATION ---
 SOURCE_REPO = "NN-Dataset/checkpoints-epoch-50"
 TARGET_REPO = "NN-Dataset/pt"  # Base repo, will create subfolder structure
-DEFAULT_HF_TOKEN = "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" # Hf_token paste here
+DEFAULT_HF_TOKEN = "" # Hf_token paste here
 # --------------------- 
 
 # --- 1. SETUP PATHS ---
