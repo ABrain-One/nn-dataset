@@ -18,6 +18,7 @@ import importlib.util
 import traceback
 import multiprocessing
 
+
 # --- CONFIGURATION ---
 SOURCE_REPO = "NN-Dataset/checkpoints-epoch-50"
 TARGET_REPO = "NN-Dataset/pt"  # Base repo, will create subfolder structure
@@ -642,11 +643,14 @@ def main():
                     "model_size_after_kb": 0.0
                 }
         
-        results[model_name] = result
-        
         if result.get("status") == "success":
+            results[model_name] = result
             successful += 1
         else:
+            # Only store minimal failure info
+            results[model_name] = {
+                "status": "failed"
+            }
             failed += 1
             
         # Update comprehensive all_models.json incrementally ensuring all metadata is captured
