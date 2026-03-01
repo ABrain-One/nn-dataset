@@ -10,6 +10,8 @@ from PIL import Image
 import torch
 
 try:
+    import os
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
     from transformers import Blip2Processor
     _processor = Blip2Processor.from_pretrained("Salesforce/blip2-opt-2.7b")
 except Exception:

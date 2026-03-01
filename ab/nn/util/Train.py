@@ -1,6 +1,7 @@
 import importlib
 import platform
 import psutil
+from tqdm import tqdm
 import sys
 import time as time
 from dataclasses import dataclass, asdict
@@ -158,7 +159,9 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
             print(f"Estimated training time, minutes: {format_time(e.estimated_training_time)}, but limit {format_time(e.epoch_limit_minutes)}.")
             return (e.epoch_limit_minutes / e.estimated_training_time) / 1e5, 0, e.duration
         else:
-            print(f"error '{nn}': failed to train. Error: {e}")
+            import traceback
+            print(f"error '{nn}': failed to train. Error: {e}", flush=True)
+            traceback.print_exc()
             if fail_iterations < 0:
                 return accuracy_duration
             else:
@@ -240,6 +243,9 @@ class Train:
                 return torch.nn.CrossEntropyLoss()
             elif 'segmentation' in self.task:
                 return torch.nn.CrossEntropyLoss()
+            elif 'captioning' in self.task:
+                # Use ignore_index=0 for padding
+                return torch.nn.CrossEntropyLoss(ignore_index=0)
             else:
                 return torch.nn.MSELoss()
 
@@ -253,11 +259,35 @@ class Train:
             for inputs, labels in data_loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 try:
-                    outputs = self.model(inputs)
+                    try:
+                        outputs = self.model(inputs)
+                    except Exception as e:
+                        import traceback
+                        print("\n[INNER _compute_loss ERROR] traceback:", flush=True)
+                        traceback.print_exc()
+                        raise e
+                    
+                    # Handle shapes for captioning
+                    if 'captioning' in self.task:
+                        # labels are [B, C, T], take first caption [B, T]
+                        if labels.dim() == 3:
+                            labels = labels[:, 0, :]
+                        
+                        # CrossEntropyLoss expects [B, V, T]
+                        if outputs.dim() == 3:
+                            outputs = outputs.transpose(1, 2)
+                            
+                        # Align length
+                        min_len = min(outputs.shape[2], labels.shape[1])
+                        outputs = outputs[:, :, :min_len]
+                        labels = labels[:, :min_len]
+
                     loss = self.loss_fn(outputs, labels)
                     total_loss += loss.item()
                     num_batches += 1
-                except Exception:
+                except Exception as e:
+                    if debug:
+                        print(f"[COMPUTE_LOSS DEBUG] Exception: {e}")
                     pass
 
         return total_loss / max(num_batches, 1)
@@ -312,7 +342,12 @@ class Train:
 
             # Training phase
             self.model.train()
-            self.model.learn(DataRoll(self.train_loader, epoch_limit_minutes))
+            # Capture learning results (Accuracy, Loss)
+            learn_res = self.model.learn(DataRoll(self.train_loader, epoch_limit_minutes))
+            if isinstance(learn_res, (tuple, list)) and len(learn_res) >= 2:
+                train_accuracy, train_loss = learn_res[0], learn_res[1]
+            else:
+                train_accuracy, train_loss = 0.0, learn_res
 
             # Compute gradient norm after training
             grad_norm = compute_gradient_norm(self.model)
@@ -320,16 +355,22 @@ class Train:
             # Get current learning rate
             lr_now = get_current_lr(optimizer)
 
-            # Compute losses
-            train_loss = self._compute_loss(self.train_loader)
-            test_loss = self._compute_loss(self.test_loader)
+            # Compute losses and accuracies
+            if 'captioning' in self.task:
+                # Optimized path for slow SOTA models: Skip redundant inference on large training set
+                test_loss = train_loss
+                accuracy, all_metric_results = self.eval(self.test_loader)
+            else:
+                # Standard path
+                train_loss = self._compute_loss(self.train_loader)
+                test_loss = self._compute_loss(self.test_loader)
+                train_accuracy = self._compute_accuracy(self.train_loader)
+                accuracy, all_metric_results = self.eval(self.test_loader)
 
-            # Compute accuracies
-            train_accuracy = self._compute_accuracy(self.train_loader)
-            test_accuracy = self.eval(self.test_loader)
-
-            accuracy = test_accuracy[0]
             accuracy = 0.0 if math.isnan(accuracy) or math.isinf(accuracy) else accuracy
+            # Sanitize individual metric results
+            all_metric_results = {k: (0.0 if math.isnan(v) or math.isinf(v) else v)
+                                  for k, v in all_metric_results.items()}
             duration = time.time_ns() - start_time
             epoch_duration = (time.time_ns() - epoch_start_time) / 1e9  # seconds
 
@@ -394,7 +435,9 @@ class Train:
                                           # Best tracking
                                           'best_accuracy': self.best_accuracy,
                                           'best_epoch': self.best_epoch,
-                                      } 
+                                      }
+                                      # Per-metric results (bleu, meteor, cider saved individually)
+                                      | all_metric_results
                                       # System information
                                       | self.system_info
                                       # Current resource usage
@@ -421,6 +464,7 @@ class Train:
     def _save_training_summary(self):
         """Save comprehensive training summary"""
         import json
+        from ab.nn.util.db.Calc import sanitize_for_json
         
         # Get final resource usage
         final_resource_usage = get_current_resource_usage()
@@ -463,7 +507,7 @@ class Train:
         summary_path = out_dir / 'training_summary.json'
         try:
             with open(summary_path, 'w') as f:
-                json.dump(summary, f, indent=2)
+                json.dump(sanitize_for_json(summary), f, indent=2)
             print(f"Training summary saved to {summary_path}")
         except Exception as e:
             print(f"[WARN] Failed to save training summary: {e}")
@@ -484,10 +528,12 @@ class Train:
             metric_fn.reset()
 
         with torch.no_grad():
-            for inputs, labels in test_loader:
+            for inputs, labels in tqdm(test_loader, desc=f"Evaluating {self.config[3]}"):
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 outputs = self.model(inputs)
 
+                # For captioning: labels may be [B, num_caps, T] (multi-reference)
+                # Metrics (BLEU/METEOR/CIDEr) handle multi-ref labels natively
                 # Call ALL metrics - they all use the same interface
                 for metric_fn in self.metric_fns.values():
                     metric_fn(outputs, labels)
@@ -580,4 +626,4 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             pass
         release_memory()
 
-    return model_name, accuracy, accuracy_to_time, res['score']
+    return model_name, accuracy, accuracy_to_time, res['score'] if res else 0.0
