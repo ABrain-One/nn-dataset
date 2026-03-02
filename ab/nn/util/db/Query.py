@@ -82,6 +82,65 @@ def build_stat_filters_sql(sql: JoinConf, alias: str = "b") -> tuple[str, list]:
         return "", []
 
     return "WHERE " + " AND ".join(clauses), params
+
+
+def _anchor_candidates_table() -> str:
+    return f"{tmp_data}_anchor_candidates"
+
+
+def _ensure_temp_work_indexes(cur: Cursor, work_table: str) -> None:
+    if work_table != tmp_data or not _is_real_table(cur, work_table):
+        return
+    cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{work_table}_id ON {work_table}(id)")
+    cur.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{work_table}_nn_acc_epoch "
+        f"ON {work_table}(nn, accuracy DESC, epoch ASC, id)"
+    )
+    cur.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{work_table}_acc_nn_epoch "
+        f"ON {work_table}(accuracy DESC, nn, epoch ASC, id)"
+    )
+
+
+def _prepare_anchor_candidates(cur: Cursor, sql: "JoinConf", work_table: str) -> str:
+    cand_table = _anchor_candidates_table()
+    where_sql, params = build_stat_filters_sql(sql, alias="s")
+
+    _ensure_temp_work_indexes(cur, work_table)
+    cur.execute(f"DROP TABLE IF EXISTS {cand_table}")
+    cur.execute(
+        f"""
+        CREATE TEMP TABLE {cand_table} AS
+        WITH base AS (
+          SELECT s.id, s.nn, s.accuracy, s.epoch
+          FROM {work_table} s
+          {where_sql}
+        ),
+        best_per_nn AS (
+          SELECT b.id,
+                 b.nn,
+                 b.accuracy,
+                 b.epoch,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY b.nn
+                   ORDER BY b.accuracy DESC, b.epoch ASC, b.nn ASC
+                 ) AS rn
+          FROM base b
+        )
+        SELECT p.id, p.nn, p.accuracy, p.epoch, m.hashvalues AS hv
+        FROM best_per_nn p
+        JOIN nn_minhash m ON m.nn = p.nn
+        WHERE p.rn = 1
+        """,
+        params,
+    )
+    cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{cand_table}_nn ON {cand_table}(nn)")
+    cur.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{cand_table}_acc_epoch "
+        f"ON {cand_table}(accuracy DESC, epoch ASC, nn)"
+    )
+    cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{cand_table}_id ON {cand_table}(id)")
+    return cand_table
 #---------DB MinHash + SQLite UDF----------
 def _anchor_band_db(
     *,
@@ -110,42 +169,28 @@ def _anchor_band_db(
     if not cur.fetchone():
         raise ValueError(f"anchor_nn='{anchor_nn}' missing in nn_minhash")
 
-    where_sql, where_params = build_stat_filters_sql(sql, alias="d")
+    cand_table = _anchor_candidates_table()
+    anchor_hv_row = cur.execute(
+        f"SELECT hv FROM {cand_table} WHERE nn = ? LIMIT 1",
+        (anchor_nn,),
+    ).fetchone()
+    anchor_hv = anchor_hv_row[0] if anchor_hv_row else cur.execute(
+        "SELECT hashvalues FROM nn_minhash WHERE nn = ?",
+        (anchor_nn,),
+    ).fetchone()[0]
 
     cur.execute(
         f"""
-        WITH base AS (
-          SELECT d.*
-          FROM {work_table} d
-          {where_sql}
-        ),
-        best_per_nn AS (
-          SELECT b.*,
-                 ROW_NUMBER() OVER (
-                   PARTITION BY b.nn
-                   ORDER BY b.accuracy DESC, b.epoch ASC, b.nn ASC
-                 ) AS rn
-          FROM base b
-        ),
-        anchor AS (
-          SELECT hashvalues AS a_hv
-          FROM nn_minhash
-          WHERE nn = ?
-        ),
-        cand AS (
-          SELECT p.id, p.nn, p.accuracy, p.epoch, m.hashvalues AS hv
-          FROM best_per_nn p
-          JOIN nn_minhash m ON m.nn = p.nn
-          WHERE p.rn = 1 AND p.nn <> ?
-        ),
+        WITH
         scored AS (
           SELECT
             c.id,
             c.nn,
             c.accuracy,
             c.epoch,
-            jaccard_blobs((SELECT a_hv FROM anchor), c.hv) AS j
-          FROM cand c
+            jaccard_blobs(?, c.hv) AS j
+          FROM {cand_table} c
+          WHERE c.nn <> ?
         )
         SELECT d.*, s.j AS anchor_jaccard
         FROM scored s
@@ -155,7 +200,7 @@ def _anchor_band_db(
         ORDER BY s.accuracy DESC, s.j DESC, s.nn ASC, s.epoch ASC
         LIMIT ?
         """,
-        [*where_params, anchor_nn, anchor_nn, float(min_j), float(max_j), int(limit_k)],
+        [anchor_hv, anchor_nn, float(min_j), float(max_j), int(limit_k)],
     )
 #---------Band Aware Anchor Selection---------
 def _resolve_anchor(
@@ -178,6 +223,7 @@ def _resolve_anchor(
         raise RuntimeError("nn_minhash table missing in this db_file")
 
     where_sql, params = build_stat_filters_sql(sql, alias="s")
+    cand_table = _anchor_candidates_table()
 
     # Candidate anchors: top accuracy models that also have minhash
     anchors = cur.execute(
@@ -200,41 +246,26 @@ def _resolve_anchor(
 
     # For each candidate anchor, check if the requested band has enough neighbors.
     for (a_nn,) in anchors:
+        anchor_hv_row = cur.execute(
+            f"SELECT hv FROM {cand_table} WHERE nn = ? LIMIT 1",
+            (a_nn,),
+        ).fetchone()
+        if not anchor_hv_row:
+            continue
+        anchor_hv = anchor_hv_row[0]
         cnt = cur.execute(
             f"""
-            WITH base AS (
-              SELECT s.*
-              FROM {work_table} s
-              {where_sql}
-            ),
-            best_per_nn AS (
-              SELECT b.*,
-                     ROW_NUMBER() OVER (
-                       PARTITION BY b.nn
-                       ORDER BY b.accuracy DESC, b.epoch ASC, b.nn ASC
-                     ) AS rn
-              FROM base b
-            ),
-            anchor AS (
-              SELECT hashvalues AS a_hv
-              FROM nn_minhash
-              WHERE nn = ?
-            ),
-            cand AS (
-              SELECT p.nn, m.hashvalues AS hv
-              FROM best_per_nn p
-              JOIN nn_minhash m ON m.nn = p.nn
-              WHERE p.rn = 1 AND p.nn <> ?
-            ),
+            WITH
             scored AS (
-              SELECT jaccard_blobs((SELECT a_hv FROM anchor), c.hv) AS j
-              FROM cand c
+              SELECT jaccard_blobs(?, c.hv) AS j
+              FROM {cand_table} c
+              WHERE c.nn <> ?
             )
             SELECT COUNT(*)
             FROM scored
             WHERE j IS NOT NULL AND j >= ? AND j < ?
             """,
-            [*params, a_nn, a_nn, float(min_j), float(max_j)],
+            [anchor_hv, a_nn, float(min_j), float(max_j)],
         ).fetchone()[0]
 
         if cnt >= int(limit_k):
@@ -355,6 +386,7 @@ def join_nn_query_anchor_otf(sql: JoinConf, limit_clause: Optional[str], cur: Cu
     work = resolve_work_table(cur, preferred=tmp_data, fallback="stat")
 
     min_j, max_j = band_to_range(sql.similarity_band, sql.min_arch_jaccard, sql.max_arch_jaccard)
+    _prepare_anchor_candidates(cur, sql, work)
 
     # Band-aware auto-anchor selection
     anchor = _resolve_anchor(cur, sql, work, min_j=min_j, max_j=max_j, limit_k=n)
@@ -490,10 +522,24 @@ def fill_hyper_prm(cur: Cursor, num_joint_nns=1, include_nn_stats=False) -> list
     # Bulk-load *all* hyperparameters for the retrieved stat_ids
     from collections import defaultdict
     prm_by_uid: dict[str, dict[str, int | float | str]] = defaultdict(dict)
+    prm_ids: list[str] = []
+    seen_prm_ids: set[str] = set()
+    for r in rows:
+        rec = dict(zip(columns, r))
+        for i in range(1, num_joint_nns + 1):
+            key = 'prm_id' if i == 1 else f'prm_id_{i}'
+            prm_id = rec.get(key)
+            if prm_id and prm_id not in seen_prm_ids:
+                seen_prm_ids.add(prm_id)
+                prm_ids.append(prm_id)
 
-    cur.execute(f"SELECT uid, name, value FROM prm")
-    for uid, name, value in cur.fetchall():
-        prm_by_uid[uid][name] = value
+    chunk_size = 500
+    for start in range(0, len(prm_ids), chunk_size):
+        chunk = prm_ids[start:start + chunk_size]
+        placeholders = ', '.join(['?'] * len(chunk))
+        cur.execute(f"SELECT uid, name, value FROM prm WHERE uid IN ({placeholders})", chunk)
+        for uid, name, value in cur.fetchall():
+            prm_by_uid[uid][name] = value
 
     # Assemble the final result
     results: list[dict] = []
