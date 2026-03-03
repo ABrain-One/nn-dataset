@@ -222,20 +222,17 @@ def _resolve_anchor(
     if not cur.fetchone():
         raise RuntimeError("nn_minhash table missing in this db_file")
 
-    where_sql, params = build_stat_filters_sql(sql, alias="s")
     cand_table = _anchor_candidates_table()
 
-    # Candidate anchors: top accuracy models that also have minhash
+    # Candidate anchors: top unique NNs from the prepared candidate table.
     anchors = cur.execute(
         f"""
-        SELECT s.nn
-        FROM {work_table} s
-        JOIN nn_minhash m ON m.nn = s.nn
-        {where_sql}
-        ORDER BY s.accuracy DESC
+        SELECT c.nn
+        FROM {cand_table} c
+        ORDER BY c.accuracy DESC, c.epoch ASC, c.nn ASC
         LIMIT ?
         """,
-        params + [int(max_trials)],
+        [int(max_trials)],
     ).fetchall()
 
     if not anchors:
@@ -244,37 +241,60 @@ def _resolve_anchor(
             f"found for task={sql.task}, dataset={sql.dataset}, metric={sql.metric}"
         )
 
-    # For each candidate anchor, check if the requested band has enough neighbors.
-    for (a_nn,) in anchors:
-        anchor_hv_row = cur.execute(
-            f"SELECT hv FROM {cand_table} WHERE nn = ? LIMIT 1",
-            (a_nn,),
-        ).fetchone()
-        if not anchor_hv_row:
-            continue
-        anchor_hv = anchor_hv_row[0]
-        cnt = cur.execute(
-            f"""
-            WITH
-            scored AS (
-              SELECT jaccard_blobs(?, c.hv) AS j
-              FROM {cand_table} c
-              WHERE c.nn <> ?
+    attempted_bands: list[tuple[str, float, float]] = []
+    if sql.similarity_band in SIM_BANDS:
+        ordered_band_names = [
+            band_name
+            for band_name, _ in sorted(
+                SIM_BANDS.items(),
+                key=lambda item: (float(item[1][0]), float(item[1][1])),
+                reverse=True,
             )
-            SELECT COUNT(*)
-            FROM scored
-            WHERE j IS NOT NULL AND j >= ? AND j < ?
-            """,
-            [anchor_hv, a_nn, float(min_j), float(max_j)],
-        ).fetchone()[0]
+        ]
+        start_idx = ordered_band_names.index(str(sql.similarity_band))
+        for band_name in ordered_band_names[start_idx:]:
+            band_min, band_max = SIM_BANDS[band_name]
+            attempted_bands.append((band_name, float(band_min), float(band_max)))
+    else:
+        attempted_bands.append(("custom", float(min_j), float(max_j)))
 
-        if cnt >= int(limit_k):
-            return a_nn
+    # For each candidate anchor, check the requested band first, then lower bands if needed.
+    for band_name, band_min, band_max in attempted_bands:
+        for (a_nn,) in anchors:
+            anchor_hv_row = cur.execute(
+                f"SELECT hv FROM {cand_table} WHERE nn = ? LIMIT 1",
+                (a_nn,),
+            ).fetchone()
+            if not anchor_hv_row:
+                continue
+            anchor_hv = anchor_hv_row[0]
+            cnt = cur.execute(
+                f"""
+                WITH
+                scored AS (
+                  SELECT jaccard_blobs(?, c.hv) AS j
+                  FROM {cand_table} c
+                  WHERE c.nn <> ?
+                )
+                SELECT COUNT(*)
+                FROM scored
+                WHERE j IS NOT NULL AND j >= ? AND j < ?
+                """,
+                [anchor_hv, a_nn, band_min, band_max],
+            ).fetchone()[0]
 
-    # Raise error if no anchor had enough neighbors in that band.
+            if cnt >= int(limit_k):
+                return a_nn
+
+    attempted_desc = ", ".join(
+        f"{band_name}=[{band_min}, {band_max})"
+        for band_name, band_min, band_max in attempted_bands
+    )
+
     raise ValueError(
         f"Auto-anchor failed: no anchor among top {len(anchors)} models has >= {limit_k} "
-        f"neighbors in band [{min_j}, {max_j}) for task={sql.task}, dataset={sql.dataset}, metric={sql.metric}."
+        f"neighbors in attempted bands {attempted_desc} for task={sql.task}, "
+        f"dataset={sql.dataset}, metric={sql.metric}."
     )
 #-----JoinConf-----
 
