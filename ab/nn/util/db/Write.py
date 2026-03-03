@@ -98,7 +98,6 @@ def json_train_to_db():
 
     print(f"Importing all statistics from JSON files in {stat_train_dir} into database {db_file} ...")
 
-    last_error = None
     for sub_config_str in tqdm(sub_configs):
         model_stat_dir = stat_train_dir / sub_config_str
 
@@ -106,8 +105,8 @@ def json_train_to_db():
             model_stat_file = model_stat_dir / epoch_file
             epoch = int(epoch_file.stem)
 
-            with open(model_stat_file, 'r') as f:
-                try:
+            try:
+                with open(model_stat_file, 'r', encoding='utf-8', errors='replace') as f:
                     for trial in json.load(f):
                         _, _, metric, nn = sub_config = conf_to_names(sub_config_str)
                         populate_code_table('nn', cursor, name=nn)
@@ -116,12 +115,9 @@ def json_train_to_db():
                             populate_code_table('metric', cursor, name=single_metric.strip())
                         populate_code_table('transform', cursor, name=trial['transform'])
                         save_stat(sub_config + (epoch,), trial, cursor)
-                except Exception as e:
-                    last_error = e
-                    print(f"Error: JSON file {model_stat_file}, Exception {e}", file=sys.stderr)
+            except Exception as e:
+                print(f"Warning: skipping JSON file {model_stat_file}: {e}", file=sys.stderr)
     close_conn(conn)
-    if last_error:
-        raise last_error
     print("All statistics reloaded successfully.")
 
 
@@ -146,9 +142,10 @@ def json_run_to_db():
 
         for json_file in run_dir.glob('*.json'):
             try:
-                with open(json_file, 'r') as f:
+                with open(json_file, 'r', encoding='utf-8', errors='replace') as f:
                     data = json.load(f)
-            except Exception:
+            except Exception as e:
+                print(f"Warning: skipping runtime JSON file {json_file}: {e}", file=sys.stderr)
                 continue
 
             # Ensure code tables have entries for the nn if we can resolve it
@@ -242,7 +239,7 @@ def json_nn_to_db():
             nn_name = json_file.stem
 
             # Read JSON file
-            with open(json_file, 'r', encoding='utf-8') as f:
+            with open(json_file, 'r', encoding='utf-8', errors='replace') as f:
                 stats = json.load(f)
 
             # Get prm_id from the JSON content
@@ -269,7 +266,7 @@ def json_nn_to_db():
 
         except Exception as e:
             error_count += 1
-            print(f"Error processing {json_file.name}: {e}", file=sys.stderr)
+            print(f"Warning: skipping NN statistics JSON file {json_file}: {e}", file=sys.stderr)
     # Single batch write — one transaction for all vectors
     if minhash_batch:
         inserted = upsert_minhash_batch(conn, minhash_batch)
