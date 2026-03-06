@@ -84,6 +84,8 @@ def init_db():
         emulator BOOLEAN,
         error_message TEXT,
         duration INTEGER,
+        accuracy REAL,
+        transform TEXT,
         
         iterations INTEGER,
         unit TEXT,
@@ -117,6 +119,7 @@ def init_db():
         in_dim_3 INTEGER,
         
         device_analytics_json TEXT,
+        precision_type TEXT,
         FOREIGN KEY (model_name) REFERENCES nn (name) ON DELETE CASCADE
     )
     """)
