@@ -15,10 +15,6 @@ def init_population():
             init_db()
             json_train_to_db()
             try:
-                json_run_to_db()
-            except Exception as e:
-                print(f"Runtime analytics import failed: {e}")
-            try:
                 json_run_tflite_to_db()
             except Exception as e:
                 print(f"TFLite runtime analytics import failed: {e}")
@@ -123,97 +119,6 @@ def json_train_to_db():
                 print(f"Warning: skipping JSON file {model_stat_file}: {e}", file=sys.stderr)
     close_conn(conn)
     print("All statistics reloaded successfully.")
-
-
-def json_run_to_db():
-    """
-    Import runtime analytics from JSON files in stat/run into the `mobile` table.
-    The run directory layout encodes task/dataset/metric/nn in the parent folder name as
-    "task_dataset_nn". We parse those names using the existing config splitter, and store
-    device info and analytics payload as JSON text.
-    """
-    conn, cursor = sql_conn()
-    run_base_path = Path(stat_run_dir)
-    if not run_base_path.exists():
-        close_conn(conn)
-        return
-
-    run_dirs = [d for d in run_base_path.iterdir() if d.is_dir()]
-    for run_dir in tqdm(run_dirs):
-        # Extract model name from directory suffix if possible: e.g., '..._<model>'
-        parts = run_dir.name.split(config_splitter)
-        nn_name = parts[-1] if len(parts) > 1 else None
-
-        for json_file in run_dir.glob('*.json'):
-            try:
-                with open(json_file, 'r', encoding='utf-8', errors='replace') as f:
-                    data = json.load(f)
-            except Exception as e:
-                print(f"Warning: skipping runtime JSON file {json_file}: {e}", file=sys.stderr)
-                continue
-
-            # Ensure code tables have entries for the nn if we can resolve it
-            model_name = data.get('model_name') or nn_name
-            if model_name:
-                try:
-                    populate_code_table('nn', cursor, name=model_name)
-                except Exception:
-                    pass
-
-            device_type = data.get('device_type')
-            os_version = data.get('os_version')
-            valid = bool(data.get('valid')) if 'valid' in data else None
-            emulator = bool(data.get('emulator')) if 'emulator' in data else None
-            error_message = data.get('error_message')
-            duration = data.get('duration')
-            device_analytics = data.get('device_analytics')
-            analytics_json = json.dumps(device_analytics) if device_analytics is not None else None
-            
-            # New fields
-            extra_vals = {f: data.get(f) for f in [
-                'iterations', 'unit',
-                'cpu_duration', 'cpu_min_duration', 'cpu_max_duration', 'cpu_std_dev', 'cpu_error',
-                'gpu_duration', 'gpu_min_duration', 'gpu_max_duration', 'gpu_std_dev', 'gpu_error',
-                'npu_duration', 'npu_min_duration', 'npu_max_duration', 'npu_std_dev', 'npu_error',
-                'total_ram_kb', 'free_ram_kb', 'available_ram_kb', 'cached_kb',
-                'in_dim_0', 'in_dim_1', 'in_dim_2', 'in_dim_3'
-            ]}
-
-            id_val = uuid4([run_dir.name, json_file.name, model_name, device_type, os_version, duration])
-            
-            columns = [
-                'id', 'model_name', 'device_type', 'os_version', 'valid', 'emulator', 'error_message', 'duration',
-                'iterations', 'unit', 'cpu_duration', 'cpu_min_duration', 'cpu_max_duration', 'cpu_std_dev', 'cpu_error',
-                'gpu_duration', 'gpu_min_duration', 'gpu_max_duration', 'gpu_std_dev', 'gpu_error',
-                'npu_duration', 'npu_min_duration', 'npu_max_duration', 'npu_std_dev', 'npu_error',
-                'total_ram_kb', 'free_ram_kb', 'available_ram_kb', 'cached_kb',
-                'in_dim_0', 'in_dim_1', 'in_dim_2', 'in_dim_3',
-                'device_analytics_json'
-            ]
-            
-            placeholders = ', '.join(['?'] * len(columns))
-            col_names = ', '.join(columns)
-            
-            values = [
-                id_val, model_name, device_type, os_version, valid, emulator, error_message, duration,
-                extra_vals['iterations'], extra_vals['unit'], 
-                extra_vals['cpu_duration'], extra_vals['cpu_min_duration'], extra_vals['cpu_max_duration'], extra_vals['cpu_std_dev'], extra_vals['cpu_error'],
-                extra_vals['gpu_duration'], extra_vals['gpu_min_duration'], extra_vals['gpu_max_duration'], extra_vals['gpu_std_dev'], extra_vals['gpu_error'],
-                extra_vals['npu_duration'], extra_vals['npu_min_duration'], extra_vals['npu_max_duration'], extra_vals['npu_std_dev'], extra_vals['npu_error'],
-                extra_vals['total_ram_kb'], extra_vals['free_ram_kb'], extra_vals['available_ram_kb'], extra_vals['cached_kb'],
-                extra_vals['in_dim_0'], extra_vals['in_dim_1'], extra_vals['in_dim_2'], extra_vals['in_dim_3'],
-                analytics_json
-            ]
-
-            cursor.execute(
-                f"""
-                INSERT OR REPLACE INTO {run_table}
-                ({col_names})
-                VALUES ({placeholders})
-                """,
-                values,
-            )
-    close_conn(conn)
 
 
 def json_nn_to_db():
