@@ -5,7 +5,7 @@ from tqdm import tqdm
 from ab.nn.util.Util import *
 from ab.nn.util.db.Init import init_db, sql_conn, close_conn
 from ab.nn.util.hf.DB_from_HF import db_from_hf
-from ab.nn.util.Const import nn_stat_table, stat_run_tflite_fp32_dir, stat_run_tflite_int8_dir, run_table, tflite_table
+from ab.nn.util.Const import nn_stat_table, stat_run_tflite_fp32_dir, stat_run_tflite_int8_dir, run_table, tflite_table, prun_table, stat_run_pt_dir
 from ab.nn.util.db.build_nn_similarity import upsert_minhash, upsert_minhash_batch
 
 
@@ -18,6 +18,10 @@ def init_population():
                 json_run_tflite_to_db()
             except Exception as e:
                 print(f"TFLite runtime analytics import failed: {e}")
+            try:
+                json_prun_to_db()
+            except Exception as e:
+                print(f"Pruning analytics import failed: {e}")
             try:
                 json_nn_to_db()
             except Exception as e:
@@ -518,6 +522,97 @@ def json_run_tflite_to_db():
                         )
                     except Exception as e:
                         print(f"Warning: failed to insert tflite metadata for {model_name}: {e}", file=sys.stderr)
+                
+                pbar.update(1)
+                processed += 1
+    
+    close_conn(conn)
+
+
+def json_prun_to_db():
+    """
+    Load pruning analytics from all_models.json files in stat_run_pt_dir.
+    Traverses pruning_method/task_dataset directory structure.
+    """
+    if not stat_run_pt_dir.exists():
+        return
+    
+    conn, cursor = sql_conn()
+    
+    # Count total files
+    total_files = 0
+    for pruning_dir in stat_run_pt_dir.iterdir():
+        if pruning_dir.is_dir():
+            for config_dir in pruning_dir.iterdir():
+                if config_dir.is_dir():
+                    all_models_path = config_dir / 'all_models.json'
+                    if all_models_path.exists():
+                        total_files += 1
+    
+    if total_files == 0:
+        close_conn(conn)
+        return
+    
+    print(f"Importing pruning analytics from {total_files} configuration(s)...")
+    processed = 0
+    with tqdm(total=total_files, desc="Importing pruning data") as pbar:
+        for pruning_method_dir in stat_run_pt_dir.iterdir():
+            if not pruning_method_dir.is_dir():
+                continue
+            
+            pruning_method = pruning_method_dir.name
+            
+            for config_dir in pruning_method_dir.iterdir():
+                if not config_dir.is_dir():
+                    continue
+                
+                task_dataset = config_dir.name
+                all_models_path = config_dir / 'all_models.json'
+                
+                if not all_models_path.exists():
+                    pbar.update(1)
+                    processed += 1
+                    continue
+                
+                try:
+                    with open(all_models_path, 'r', encoding='utf-8') as f:
+                        models = json.load(f)
+                except Exception as e:
+                    print(f"Warning: failed to load {all_models_path}: {e}", file=sys.stderr)
+                    pbar.update(1)
+                    processed += 1
+                    continue
+                
+                # Insert each model's pruning data
+                for model_name, model_data in models.items():
+                    try:
+                        if not isinstance(model_data, dict):
+                            continue
+                        
+                        status = model_data.get('status')
+                        accuracy = model_data.get('accuracy')
+                        duration = model_data.get('duration')
+                        pruning_ratio = model_data.get('pruning_ratio')
+                        params_before = model_data.get('params_before')
+                        params_after = model_data.get('params_after')
+                        params_removed = model_data.get('params_removed')
+                        model_size_before_kb = model_data.get('model_size_before_kb')
+                        model_size_after_kb = model_data.get('model_size_after_kb')
+                        
+                        prun_id = uuid4([model_name, pruning_method, task_dataset])
+                        
+                        cursor.execute(
+                            f"""
+                            INSERT OR REPLACE INTO {prun_table}
+                            (id, model_name, pruning_method, task_dataset, status, accuracy, duration, pruning_ratio, 
+                             params_before, params_after, params_removed, model_size_before_kb, model_size_after_kb)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (prun_id, model_name, pruning_method, task_dataset, status, accuracy, duration, pruning_ratio,
+                             params_before, params_after, params_removed, model_size_before_kb, model_size_after_kb),
+                        )
+                    except Exception as e:
+                        print(f"Warning: failed to insert pruning data for {model_name}/{pruning_method}/{task_dataset}: {e}", file=sys.stderr)
                 
                 pbar.update(1)
                 processed += 1

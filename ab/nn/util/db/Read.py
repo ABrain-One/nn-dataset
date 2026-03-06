@@ -305,6 +305,52 @@ def tflite_data(
         close_conn(conn)
 
 
+def prun_data(
+        model_name: str | None = None,
+        pruning_method: str | None = None,
+        task_dataset: str | None = None,
+        max_rows: int | None = None,
+):
+    """
+    Query pruning analytics from the `prun` table with optional filters.
+    Returns a tuple of dicts with columns: id, model_name, pruning_method, task_dataset, status, accuracy, duration, etc.
+    """
+    params = []
+    filters = []
+    if model_name is not None:
+        filters.append('model_name = ?')
+        params.append(model_name)
+    if pruning_method is not None:
+        filters.append('pruning_method = ?')
+        params.append(pruning_method)
+    if task_dataset is not None:
+        filters.append('task_dataset = ?')
+        params.append(task_dataset)
+
+    where_clause = (' WHERE ' + ' AND '.join(filters)) if filters else ''
+    limit_clause = (' LIMIT ' + str(max_rows)) if max_rows else ''
+
+    conn, cur = sql_conn()
+    try:
+        cur.execute(
+            f"""
+                SELECT id, model_name, pruning_method, task_dataset, status, accuracy, duration, pruning_ratio,
+                       params_before, params_after, params_removed, model_size_before_kb, model_size_after_kb
+                FROM {prun_table}
+                {where_clause}
+                ORDER BY model_name
+                {limit_clause}
+            """,
+            params,
+        )
+        rows = cur.fetchall()
+        columns = [c[0] for c in cur.description]
+        results = [dict(zip(columns, r)) for r in rows]
+        return tuple(results)
+    finally:
+        close_conn(conn)
+
+
 def sql_where(value_list):
     filters = []
     params = []
