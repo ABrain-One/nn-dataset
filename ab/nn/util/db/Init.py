@@ -84,8 +84,6 @@ def init_db():
         emulator BOOLEAN,
         error_message TEXT,
         duration INTEGER,
-        accuracy REAL,
-        transform TEXT,
         
         iterations INTEGER,
         unit TEXT,
@@ -126,6 +124,21 @@ def init_db():
     # Indexes for mobile analytics
     cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{run_table}_model ON {run_table} (model_name);")
     cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{run_table}_device ON {run_table} (device_type);")
+
+    # Create TFLite model metadata table
+    cursor.execute(f"""
+    CREATE TABLE IF NOT EXISTS tflite (
+        id TEXT PRIMARY KEY,
+        model_name TEXT NOT NULL,
+        accuracy REAL,
+        transform TEXT,
+        precision_type TEXT,
+        FOREIGN KEY (model_name) REFERENCES nn (name) ON DELETE CASCADE
+    )
+    """)
+    # Indexes for tflite table
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_tflite_model ON tflite (model_name);")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_tflite_precision ON tflite (precision_type);")
 
     # Create NN statistics table
     cursor.execute(f"""

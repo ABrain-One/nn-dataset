@@ -235,7 +235,6 @@ def run_data(
         cur.execute(
             f"""
                  SELECT id, model_name, device_type, os_version, valid, emulator, error_message, duration,
-                     accuracy, transform,
                      iterations, unit, cpu_duration, cpu_min_duration, cpu_max_duration, cpu_std_dev, cpu_error,
                    gpu_duration, gpu_min_duration, gpu_max_duration, gpu_std_dev, gpu_error,
                    npu_duration, npu_min_duration, npu_max_duration, npu_std_dev, npu_error,
@@ -260,6 +259,47 @@ def run_data(
                 rec['device_analytics'] = None
             rec.pop('device_analytics_json', None)
             results.append(rec)
+        return tuple(results)
+    finally:
+        close_conn(conn)
+
+
+def tflite_data(
+        model_name: str | None = None,
+        precision_type: str | None = None,
+        max_rows: int | None = None,
+):
+    """
+    Query TFLite model analytics from the `tflite` table with optional filters.
+    Returns a tuple of dicts with columns: id, model_name, accuracy, transform, precision_type.
+    """
+    params = []
+    filters = []
+    if model_name is not None:
+        filters.append('model_name = ?')
+        params.append(model_name)
+    if precision_type is not None:
+        filters.append('precision_type = ?')
+        params.append(precision_type)
+
+    where_clause = (' WHERE ' + ' AND '.join(filters)) if filters else ''
+    limit_clause = (' LIMIT ' + str(max_rows)) if max_rows else ''
+
+    conn, cur = sql_conn()
+    try:
+        cur.execute(
+            f"""
+                SELECT id, model_name, accuracy, transform, precision_type
+                FROM {tflite_table}
+                {where_clause}
+                ORDER BY model_name
+                {limit_clause}
+            """,
+            params,
+        )
+        rows = cur.fetchall()
+        columns = [c[0] for c in cur.description]
+        results = [dict(zip(columns, r)) for r in rows]
         return tuple(results)
     finally:
         close_conn(conn)
