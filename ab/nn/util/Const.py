@@ -163,6 +163,7 @@ nn_code_minhash_table = "nn_minhash" #New
 
 # Mobile analytics (runtime) table
 run_table = 'run'
+tflite_table = 'tflite'
 # optional columns follow similar naming style; allow NULLs where data is not available
 run_main_index = ('task', 'dataset', 'metric', 'nn')
 run_extra_columns = (

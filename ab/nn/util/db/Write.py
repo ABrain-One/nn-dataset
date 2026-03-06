@@ -5,7 +5,7 @@ from tqdm import tqdm
 from ab.nn.util.Util import *
 from ab.nn.util.db.Init import init_db, sql_conn, close_conn
 from ab.nn.util.hf.DB_from_HF import db_from_hf
-from ab.nn.util.Const import nn_stat_table, stat_run_tflite_fp32_dir, stat_run_tflite_int8_dir
+from ab.nn.util.Const import nn_stat_table, stat_run_tflite_fp32_dir, stat_run_tflite_int8_dir, run_table, tflite_table
 from ab.nn.util.db.build_nn_similarity import upsert_minhash, upsert_minhash_batch
 
 
@@ -424,6 +424,12 @@ def json_run_tflite_to_db():
             
             # Recursively find all JSON files
             for json_file in tflite_dir.rglob('*.json'):
+                # Skip all_models.json - it's a mapping, not a runtime record
+                if json_file.name == 'all_models.json':
+                    pbar.update(1)
+                    processed += 1
+                    continue
+                
                 try:
                     with open(json_file, 'r', encoding='utf-8', errors='replace') as f:
                         data = json.load(f)
@@ -461,10 +467,9 @@ def json_run_tflite_to_db():
                 # Generate unique ID
                 id_val = uuid4([json_file.name, model_name, device_type, os_version, duration, precision_type])
                 
-                # Prepare columns and values with precision_type, accuracy, transform
+                # Prepare columns and values (no accuracy/transform in run table)
                 columns = [
                     'id', 'model_name', 'device_type', 'os_version', 'valid', 'emulator', 'error_message', 'duration',
-                    'accuracy', 'transform',
                     'iterations', 'unit', 'cpu_duration', 'cpu_min_duration', 'cpu_max_duration', 'cpu_std_dev', 'cpu_error',
                     'gpu_duration', 'gpu_min_duration', 'gpu_max_duration', 'gpu_std_dev', 'gpu_error',
                     'npu_duration', 'npu_min_duration', 'npu_max_duration', 'npu_std_dev', 'npu_error',
@@ -478,7 +483,6 @@ def json_run_tflite_to_db():
                 
                 values = [
                     id_val, model_name, device_type, os_version, valid, emulator, error_message, duration,
-                    accuracy, transform_code,
                     extra_vals['iterations'], extra_vals['unit'], 
                     extra_vals['cpu_duration'], extra_vals['cpu_min_duration'], extra_vals['cpu_max_duration'], extra_vals['cpu_std_dev'], extra_vals['cpu_error'],
                     extra_vals['gpu_duration'], extra_vals['gpu_min_duration'], extra_vals['gpu_max_duration'], extra_vals['gpu_std_dev'], extra_vals['gpu_error'],
@@ -499,6 +503,21 @@ def json_run_tflite_to_db():
                     )
                 except Exception as e:
                     print(f"Warning: failed to insert tflite data from {json_file}: {e}", file=sys.stderr)
+                
+                # Insert into tflite table if accuracy/transform data exists
+                if accuracy is not None or transform_code is not None:
+                    try:
+                        tflite_id = uuid4([json_file.name, model_name, accuracy, transform_code, precision_type])
+                        cursor.execute(
+                            f"""
+                            INSERT OR REPLACE INTO {tflite_table}
+                            (id, model_name, accuracy, transform, precision_type)
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (tflite_id, model_name, accuracy, transform_code, precision_type),
+                        )
+                    except Exception as e:
+                        print(f"Warning: failed to insert tflite metadata for {model_name}: {e}", file=sys.stderr)
                 
                 pbar.update(1)
                 processed += 1
