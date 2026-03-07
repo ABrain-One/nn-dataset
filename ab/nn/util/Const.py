@@ -170,6 +170,10 @@ run_extra_columns = (
     'device_type', 'os_version', 'valid', 'emulator', 'error_message',
     'duration', 'device_analytics_json')
 
+# Pruning analytics table
+prun_table = 'prun'
+stat_run_pt_dir = stat_dir / 'run' / 'pt'
+
 # NN statistics table
 nn_stat_table = 'nn_stat'
 HF_NN = 'NN-Dataset'
