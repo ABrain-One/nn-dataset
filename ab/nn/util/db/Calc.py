@@ -1,9 +1,34 @@
 import json
+import math
+import re
 from os.path import exists
 from pathlib import Path
 
 import ab.nn.util.db.Read as DB_Read
 from ab.nn.util.Util import conf_to_names, order_configs
+
+
+def sanitize_for_json(obj):
+    """Recursively replace nan/inf float values with None so json.dump produces valid JSON."""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [sanitize_for_json(v) for v in obj]
+    return obj
+
+
+_NAN_INF_RE = re.compile(r'\b(NaN|Infinity|-Infinity)\b')
+
+
+def _safe_json_load(f):
+    """Load JSON that may contain bare NaN/Infinity tokens (from earlier pipeline runs)."""
+    raw = f.read()
+    raw = _NAN_INF_RE.sub('null', raw)
+    return json.loads(raw)
 
 
 def patterns_to_configs(config_pattern: str | tuple, random_config_order: bool, train_missing_pipelines: bool) -> tuple[tuple[str, ...], ...]:
@@ -41,13 +66,13 @@ def save_results(config_ext: tuple[str, str, str, str, int], model_stat_file: st
 
     if exists(model_stat_file):
         with open(model_stat_file, 'r') as f:
-            previous_trials = json.load(f)
+            previous_trials = _safe_json_load(f)
             trials_dict_all = previous_trials + trials_dict_all
 
     trials_dict_all = sorted(trials_dict_all, key=lambda x: x['accuracy'], reverse=True)
     # Save trials.json
     Path(model_stat_file).parent.absolute().mkdir(parents=True, exist_ok=True)
     with open(model_stat_file, 'w') as f:
-        json.dump(trials_dict_all, f, indent=4)
+        json.dump(sanitize_for_json(trials_dict_all), f, indent=4)
 
     print(f"Trial (accuracy {prm['accuracy']}) for ({', '.join([str(o) for o in config_ext])}) saved at {model_stat_file}")
