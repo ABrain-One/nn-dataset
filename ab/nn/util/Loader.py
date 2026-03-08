@@ -36,37 +36,12 @@ def load_dataset(task, dataset_name, transform_name, transform_dir=None):
                 transform = transform_module.transform
             else:
                 # Fallback to dynamic loading if no transform function found
-                if not transform_name or transform_name == 'default':
-                    from torchvision import transforms
-                    transform = lambda norm: transforms.Compose([
-                        transforms.Resize((224, 224)),
-                        transforms.ToTensor(),
-                        transforms.Normalize(*norm)
-                    ])
-                else:
-                    # Avoid database query if 'default'
-                    transform = get_obj(transform_name, 'transform')
+                transform = get_obj(transform_name, 'transform')
         else:
             # Fallback to dynamic loading if file doesn't exist
-            if not transform_name or transform_name == 'default':
-                from torchvision import transforms
-                transform = lambda norm: transforms.Compose([
-                    transforms.Resize((224, 224)),
-                    transforms.ToTensor(),
-                    transforms.Normalize(*norm)
-                ])
-            else:
-                transform = get_obj(transform_name, 'transform')
+            transform = get_obj(transform_name, 'transform')
     else:
         # Use original behavior if no custom directory
-        if not transform_name or transform_name == 'default':
-            from torchvision import transforms
-            transform = lambda norm: transforms.Compose([
-                transforms.Resize((224, 224)),
-                transforms.ToTensor(),
-                transforms.Normalize(*norm)
-            ])
-        else:
-            transform = get_obj(transform_name, 'transform')
+        transform = get_obj(transform_name, 'transform')
 
     return loader(transform, task)

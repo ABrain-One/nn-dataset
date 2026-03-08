@@ -33,17 +33,19 @@ class Net(nn.Module):
             model_id, torch_dtype=torch.float16, low_cpu_mem_usage=True, device_map="auto"
         )
 
-        # 1. FREEZE BACKBONE (Mandatory Requirement)
+        # 1. FREEZE BACKBONE (Mandatory Requirement) but allow memory savings
         for param in self.model.vision_model.parameters():
             param.requires_grad = False
         for param in self.model.language_model.parameters():
             param.requires_grad = False
+            
+        # Enable gradient checkpointing for memory reduction
+        self.model.language_model.gradient_checkpointing_enable()
 
         # 2. MODIFICATION: Gated Attention Logic on Q-Former output
         self.gate = nn.Parameter(torch.zeros(1, device=device, dtype=torch.float16))
         self.modifier = nn.Linear(2560, 2560, dtype=torch.float16).to(device)  # OPT-2.7B hidden size
 
-        self.model.to(self.device)  # Fallback if device_map isn't fully placing it
         print("✅ BLIP-2 loaded successfully")
 
         self.idx2word = None
@@ -57,6 +59,10 @@ class Net(nn.Module):
         from ab.nn.loader.coco_.Caption import GLOBAL_CAPTION_VOCAB
         self.idx2word = GLOBAL_CAPTION_VOCAB.get('idx2word', {})
         self.word2idx = GLOBAL_CAPTION_VOCAB.get('word2idx', {})
+
+    def to(self, *args, **kwargs):
+        # Override to() to prevent Train.py from moving the device_map="auto" HF model
+        return self
 
     def _denormalize_images(self, images):
         """Denormalize images from COCO normalization to [0,1]."""
@@ -106,14 +112,14 @@ class Net(nn.Module):
             else:
                 pad = torch.zeros(B, logits.shape[1], self.vocab_size - hf_v, device=self.device, dtype=logits.dtype)
                 logits = torch.cat([logits, pad], dim=-1)
-            return logits.float()
+            return logits
 
         else:
-            # ─── INFERENCE (eval mode) ─────────────────────────────────────────────
             # Generate captions with pretrained BLIP-2, then map to custom COCO vocab
-            denorm = self._denormalize_images(images).to(dtype=torch.float16)
+            denorm = self._denormalize_images(images)
             if denorm.shape[-1] < 224:
-                denorm = nn.functional.interpolate(denorm.float(), size=(224, 224), mode='bicubic').to(torch.float16)
+                denorm = nn.functional.interpolate(denorm.float(), size=(224, 224), mode='bicubic')
+            denorm = torch.clamp(denorm, 0.0, 1.0).to(dtype=torch.float16)
 
             with torch.no_grad():
                 inputs = self.processor(images=denorm.float(), return_tensors="pt", do_rescale=False)
@@ -164,6 +170,7 @@ class Net(nn.Module):
         self.model.train()
         self._ensure_vocab()
         total_loss = 0.0
+        total_acc = 0.0
         num_batches = 0
 
         for images, captions in train_data:
@@ -189,7 +196,17 @@ class Net(nn.Module):
             )
             loss.backward()
             self.optimizer.step()
+            
+            # Cheap token-level accuracy (ignore padding=0)
+            with torch.no_grad():
+                preds = logits.argmax(dim=-1)
+                mask = (targets != 0)
+                correct = ((preds == targets) & mask).sum().float()
+                total = mask.sum().float()
+                batch_acc = (correct / total).item() if total > 0 else 0.0
+                total_acc += batch_acc
+
             total_loss += loss.item()
             num_batches += 1
 
-        return total_loss / max(num_batches, 1)
+        return total_acc / max(num_batches, 1), total_loss / max(num_batches, 1)
