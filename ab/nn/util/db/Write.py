@@ -5,7 +5,7 @@ from tqdm import tqdm
 from ab.nn.util.Util import *
 from ab.nn.util.db.Init import init_db, sql_conn, close_conn
 from ab.nn.util.hf.DB_from_HF import db_from_hf
-from ab.nn.util.Const import nn_stat_table
+from ab.nn.util.Const import nn_stat_table, stat_run_tflite_fp32_dir, stat_run_tflite_int8_dir, run_table, tflite_table, prun_table, stat_run_pt_dir
 from ab.nn.util.db.build_nn_similarity import upsert_minhash, upsert_minhash_batch
 
 
@@ -15,9 +15,13 @@ def init_population():
             init_db()
             json_train_to_db()
             try:
-                json_run_to_db()
+                json_run_tflite_to_db()
             except Exception as e:
-                print(f"Runtime analytics import failed: {e}")
+                print(f"TFLite runtime analytics import failed: {e}")
+            try:
+                json_prun_to_db()
+            except Exception as e:
+                print(f"Pruning analytics import failed: {e}")
             try:
                 json_nn_to_db()
             except Exception as e:
@@ -98,7 +102,6 @@ def json_train_to_db():
 
     print(f"Importing all statistics from JSON files in {stat_train_dir} into database {db_file} ...")
 
-    last_error = None
     for sub_config_str in tqdm(sub_configs):
         model_stat_dir = stat_train_dir / sub_config_str
 
@@ -106,8 +109,8 @@ def json_train_to_db():
             model_stat_file = model_stat_dir / epoch_file
             epoch = int(epoch_file.stem)
 
-            with open(model_stat_file, 'r') as f:
-                try:
+            try:
+                with open(model_stat_file, 'r', encoding='utf-8', errors='replace') as f:
                     for trial in json.load(f):
                         _, _, metric, nn = sub_config = conf_to_names(sub_config_str)
                         populate_code_table('nn', cursor, name=nn)
@@ -116,103 +119,10 @@ def json_train_to_db():
                             populate_code_table('metric', cursor, name=single_metric.strip())
                         populate_code_table('transform', cursor, name=trial['transform'])
                         save_stat(sub_config + (epoch,), trial, cursor)
-                except Exception as e:
-                    last_error = e
-                    print(f"Error: JSON file {model_stat_file}, Exception {e}", file=sys.stderr)
+            except Exception as e:
+                print(f"Warning: skipping JSON file {model_stat_file}: {e}", file=sys.stderr)
     close_conn(conn)
-    if last_error:
-        raise last_error
     print("All statistics reloaded successfully.")
-
-
-def json_run_to_db():
-    """
-    Import runtime analytics from JSON files in stat/run into the `mobile` table.
-    The run directory layout encodes task/dataset/metric/nn in the parent folder name as
-    "task_dataset_nn". We parse those names using the existing config splitter, and store
-    device info and analytics payload as JSON text.
-    """
-    conn, cursor = sql_conn()
-    run_base_path = Path(stat_run_dir)
-    if not run_base_path.exists():
-        close_conn(conn)
-        return
-
-    run_dirs = [d for d in run_base_path.iterdir() if d.is_dir()]
-    for run_dir in tqdm(run_dirs):
-        # Extract model name from directory suffix if possible: e.g., '..._<model>'
-        parts = run_dir.name.split(config_splitter)
-        nn_name = parts[-1] if len(parts) > 1 else None
-
-        for json_file in run_dir.glob('*.json'):
-            try:
-                with open(json_file, 'r') as f:
-                    data = json.load(f)
-            except Exception:
-                continue
-
-            # Ensure code tables have entries for the nn if we can resolve it
-            model_name = data.get('model_name') or nn_name
-            if model_name:
-                try:
-                    populate_code_table('nn', cursor, name=model_name)
-                except Exception:
-                    pass
-
-            device_type = data.get('device_type')
-            os_version = data.get('os_version')
-            valid = bool(data.get('valid')) if 'valid' in data else None
-            emulator = bool(data.get('emulator')) if 'emulator' in data else None
-            error_message = data.get('error_message')
-            duration = data.get('duration')
-            device_analytics = data.get('device_analytics')
-            analytics_json = json.dumps(device_analytics) if device_analytics is not None else None
-            
-            # New fields
-            extra_vals = {f: data.get(f) for f in [
-                'iterations', 'unit',
-                'cpu_duration', 'cpu_min_duration', 'cpu_max_duration', 'cpu_std_dev', 'cpu_error',
-                'gpu_duration', 'gpu_min_duration', 'gpu_max_duration', 'gpu_std_dev', 'gpu_error',
-                'npu_duration', 'npu_min_duration', 'npu_max_duration', 'npu_std_dev', 'npu_error',
-                'total_ram_kb', 'free_ram_kb', 'available_ram_kb', 'cached_kb',
-                'in_dim_0', 'in_dim_1', 'in_dim_2', 'in_dim_3'
-            ]}
-
-            id_val = uuid4([run_dir.name, json_file.name, model_name, device_type, os_version, duration])
-            
-            columns = [
-                'id', 'model_name', 'device_type', 'os_version', 'valid', 'emulator', 'error_message', 'duration',
-                'iterations', 'unit', 'cpu_duration', 'cpu_min_duration', 'cpu_max_duration', 'cpu_std_dev', 'cpu_error',
-                'gpu_duration', 'gpu_min_duration', 'gpu_max_duration', 'gpu_std_dev', 'gpu_error',
-                'npu_duration', 'npu_min_duration', 'npu_max_duration', 'npu_std_dev', 'npu_error',
-                'total_ram_kb', 'free_ram_kb', 'available_ram_kb', 'cached_kb',
-                'in_dim_0', 'in_dim_1', 'in_dim_2', 'in_dim_3',
-                'device_analytics_json'
-            ]
-            
-            placeholders = ', '.join(['?'] * len(columns))
-            col_names = ', '.join(columns)
-            
-            values = [
-                id_val, model_name, device_type, os_version, valid, emulator, error_message, duration,
-                extra_vals['iterations'], extra_vals['unit'], 
-                extra_vals['cpu_duration'], extra_vals['cpu_min_duration'], extra_vals['cpu_max_duration'], extra_vals['cpu_std_dev'], extra_vals['cpu_error'],
-                extra_vals['gpu_duration'], extra_vals['gpu_min_duration'], extra_vals['gpu_max_duration'], extra_vals['gpu_std_dev'], extra_vals['gpu_error'],
-                extra_vals['npu_duration'], extra_vals['npu_min_duration'], extra_vals['npu_max_duration'], extra_vals['npu_std_dev'], extra_vals['npu_error'],
-                extra_vals['total_ram_kb'], extra_vals['free_ram_kb'], extra_vals['available_ram_kb'], extra_vals['cached_kb'],
-                extra_vals['in_dim_0'], extra_vals['in_dim_1'], extra_vals['in_dim_2'], extra_vals['in_dim_3'],
-                analytics_json
-            ]
-
-            cursor.execute(
-                f"""
-                INSERT OR REPLACE INTO {run_table}
-                ({col_names})
-                VALUES ({placeholders})
-                """,
-                values,
-            )
-    close_conn(conn)
 
 
 def json_nn_to_db():
@@ -242,7 +152,7 @@ def json_nn_to_db():
             nn_name = json_file.stem
 
             # Read JSON file
-            with open(json_file, 'r', encoding='utf-8') as f:
+            with open(json_file, 'r', encoding='utf-8', errors='replace') as f:
                 stats = json.load(f)
 
             # Get prm_id from the JSON content
@@ -269,7 +179,7 @@ def json_nn_to_db():
 
         except Exception as e:
             error_count += 1
-            print(f"Error processing {json_file.name}: {e}", file=sys.stderr)
+            print(f"Warning: skipping NN statistics JSON file {json_file}: {e}", file=sys.stderr)
     # Single batch write — one transaction for all vectors
     if minhash_batch:
         inserted = upsert_minhash_batch(conn, minhash_batch)
@@ -467,6 +377,247 @@ def save_nn_stat(nn_name: str, prm_id: str, stats: dict):
         close_conn(conn)
         print(f"Error saving NN statistics to database: {e}")
         return False
+
+
+def json_run_tflite_to_db():
+    """
+    Import runtime analytics from tflite JSON files in stat/run/tflite/fp32 and stat/run/tflite/int8.
+    Adds precision_type column to indicate whether the data is from fp32 or int8.
+    """
+    conn, cursor = sql_conn()
+    
+    tflite_dirs = [
+        (stat_run_tflite_fp32_dir, 'fp32'),
+        (stat_run_tflite_int8_dir, 'int8')
+    ]
+    
+    total_files = 0
+    # load mapping from all_models.json for each precision
+    accuracy_maps: dict[str, dict] = {}
+    for tflite_dir, precision_type in tflite_dirs:
+        if not tflite_dir.exists():
+            continue
+
+        # attempt to read accuracy/transform mapping
+        map_path = tflite_dir / 'all_models.json'
+        if map_path.exists():
+            try:
+                with open(map_path, 'r', encoding='utf-8') as mf:
+                    accuracy_maps[precision_type] = json.load(mf)
+            except Exception as e:
+                print(f"Warning: failed to load mapping from {map_path}: {e}", file=sys.stderr)
+                accuracy_maps[precision_type] = {}
+        else:
+            accuracy_maps[precision_type] = {}
+
+        # Count total JSON files for progress bar
+        json_files = list(tflite_dir.rglob('*.json'))
+        total_files += len(json_files)
+    
+    if total_files == 0:
+        close_conn(conn)
+        return
+    
+    print(f"Importing runtime analytics from {total_files} tflite JSON files...")
+    
+    processed = 0
+    with tqdm(total=total_files, desc="Importing tflite runtime data") as pbar:
+        for tflite_dir, precision_type in tflite_dirs:
+            if not tflite_dir.exists():
+                continue
+            
+            # Recursively find all JSON files
+            for json_file in tflite_dir.rglob('*.json'):
+                # Skip all_models.json - it's a mapping, not a runtime record
+                if json_file.name == 'all_models.json':
+                    pbar.update(1)
+                    processed += 1
+                    continue
+                
+                try:
+                    with open(json_file, 'r', encoding='utf-8', errors='replace') as f:
+                        data = json.load(f)
+                except Exception as e:
+                    print(f"Warning: skipping tflite JSON file {json_file}: {e}", file=sys.stderr)
+                    pbar.update(1)
+                    processed += 1
+                    continue
+                
+                # Extract data
+                model_name = data.get('model_name')
+                # lookup accuracy/transform
+                acc_info = accuracy_maps.get(precision_type, {}).get(model_name, {})
+                accuracy = acc_info.get('accuracy')
+                transform_code = acc_info.get('transform')
+                device_type = data.get('device_type')
+                os_version = data.get('os_version')
+                valid = bool(data.get('valid')) if 'valid' in data else None
+                emulator = bool(data.get('emulator')) if 'emulator' in data else None
+                error_message = data.get('error_message')
+                duration = data.get('duration')
+                device_analytics = data.get('device_analytics')
+                analytics_json = json.dumps(device_analytics) if device_analytics is not None else None
+                
+                # Extract extra fields
+                extra_vals = {f: data.get(f) for f in [
+                    'iterations', 'unit',
+                    'cpu_duration', 'cpu_min_duration', 'cpu_max_duration', 'cpu_std_dev', 'cpu_error',
+                    'gpu_duration', 'gpu_min_duration', 'gpu_max_duration', 'gpu_std_dev', 'gpu_error',
+                    'npu_duration', 'npu_min_duration', 'npu_max_duration', 'npu_std_dev', 'npu_error',
+                    'total_ram_kb', 'free_ram_kb', 'available_ram_kb', 'cached_kb',
+                    'in_dim_0', 'in_dim_1', 'in_dim_2', 'in_dim_3'
+                ]}
+                
+                # Generate unique ID
+                id_val = uuid4([json_file.name, model_name, device_type, os_version, duration, precision_type])
+                
+                # Prepare columns and values (no accuracy/transform in run table)
+                columns = [
+                    'id', 'model_name', 'device_type', 'os_version', 'valid', 'emulator', 'error_message', 'duration',
+                    'iterations', 'unit', 'cpu_duration', 'cpu_min_duration', 'cpu_max_duration', 'cpu_std_dev', 'cpu_error',
+                    'gpu_duration', 'gpu_min_duration', 'gpu_max_duration', 'gpu_std_dev', 'gpu_error',
+                    'npu_duration', 'npu_min_duration', 'npu_max_duration', 'npu_std_dev', 'npu_error',
+                    'total_ram_kb', 'free_ram_kb', 'available_ram_kb', 'cached_kb',
+                    'in_dim_0', 'in_dim_1', 'in_dim_2', 'in_dim_3',
+                    'device_analytics_json', 'precision_type'
+                ]
+                
+                placeholders = ', '.join(['?'] * len(columns))
+                col_names = ', '.join(columns)
+                
+                values = [
+                    id_val, model_name, device_type, os_version, valid, emulator, error_message, duration,
+                    extra_vals['iterations'], extra_vals['unit'], 
+                    extra_vals['cpu_duration'], extra_vals['cpu_min_duration'], extra_vals['cpu_max_duration'], extra_vals['cpu_std_dev'], extra_vals['cpu_error'],
+                    extra_vals['gpu_duration'], extra_vals['gpu_min_duration'], extra_vals['gpu_max_duration'], extra_vals['gpu_std_dev'], extra_vals['gpu_error'],
+                    extra_vals['npu_duration'], extra_vals['npu_min_duration'], extra_vals['npu_max_duration'], extra_vals['npu_std_dev'], extra_vals['npu_error'],
+                    extra_vals['total_ram_kb'], extra_vals['free_ram_kb'], extra_vals['available_ram_kb'], extra_vals['cached_kb'],
+                    extra_vals['in_dim_0'], extra_vals['in_dim_1'], extra_vals['in_dim_2'], extra_vals['in_dim_3'],
+                    analytics_json, precision_type
+                ]
+                
+                try:
+                    cursor.execute(
+                        f"""
+                        INSERT OR REPLACE INTO {run_table}
+                        ({col_names})
+                        VALUES ({placeholders})
+                        """,
+                        values,
+                    )
+                except Exception as e:
+                    print(f"Warning: failed to insert tflite data from {json_file}: {e}", file=sys.stderr)
+                
+                # Insert into tflite table if accuracy/transform data exists
+                if accuracy is not None or transform_code is not None:
+                    try:
+                        tflite_id = uuid4([json_file.name, model_name, accuracy, transform_code, precision_type])
+                        cursor.execute(
+                            f"""
+                            INSERT OR REPLACE INTO {tflite_table}
+                            (id, model_name, accuracy, transform, precision_type)
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (tflite_id, model_name, accuracy, transform_code, precision_type),
+                        )
+                    except Exception as e:
+                        print(f"Warning: failed to insert tflite metadata for {model_name}: {e}", file=sys.stderr)
+                
+                pbar.update(1)
+                processed += 1
+    
+    close_conn(conn)
+
+
+def json_prun_to_db():
+    """
+    Load pruning analytics from all_models.json files in stat_run_pt_dir.
+    Traverses pruning_method/task_dataset directory structure.
+    """
+    if not stat_run_pt_dir.exists():
+        return
+    
+    conn, cursor = sql_conn()
+    
+    # Count total files
+    total_files = 0
+    for pruning_dir in stat_run_pt_dir.iterdir():
+        if pruning_dir.is_dir():
+            for config_dir in pruning_dir.iterdir():
+                if config_dir.is_dir():
+                    all_models_path = config_dir / 'all_models.json'
+                    if all_models_path.exists():
+                        total_files += 1
+    
+    if total_files == 0:
+        close_conn(conn)
+        return
+    
+    print(f"Importing pruning analytics from {total_files} configuration(s)...")
+    processed = 0
+    with tqdm(total=total_files, desc="Importing pruning data") as pbar:
+        for pruning_method_dir in stat_run_pt_dir.iterdir():
+            if not pruning_method_dir.is_dir():
+                continue
+            
+            pruning_method = pruning_method_dir.name
+            
+            for config_dir in pruning_method_dir.iterdir():
+                if not config_dir.is_dir():
+                    continue
+                
+                task_dataset = config_dir.name
+                all_models_path = config_dir / 'all_models.json'
+                
+                if not all_models_path.exists():
+                    pbar.update(1)
+                    processed += 1
+                    continue
+                
+                try:
+                    with open(all_models_path, 'r', encoding='utf-8') as f:
+                        models = json.load(f)
+                except Exception as e:
+                    print(f"Warning: failed to load {all_models_path}: {e}", file=sys.stderr)
+                    pbar.update(1)
+                    processed += 1
+                    continue
+                
+                # Insert each model's pruning data
+                for model_name, model_data in models.items():
+                    try:
+                        if not isinstance(model_data, dict):
+                            continue
+                        
+                        status = model_data.get('status')
+                        accuracy = model_data.get('accuracy')
+                        duration = model_data.get('duration')
+                        pruning_ratio = model_data.get('pruning_ratio')
+                        params_before = model_data.get('params_before')
+                        params_after = model_data.get('params_after')
+                        params_removed = model_data.get('params_removed')
+                        model_size_before_kb = model_data.get('model_size_before_kb')
+                        model_size_after_kb = model_data.get('model_size_after_kb')
+                        
+                        prun_id = uuid4([model_name, pruning_method, task_dataset])
+                        
+                        cursor.execute(
+                            f"""
+                            INSERT OR REPLACE INTO {prun_table}
+                            (id, model_name, pruning_method, task_dataset, status, accuracy, duration, pruning_ratio, 
+                             params_before, params_after, params_removed, model_size_before_kb, model_size_after_kb)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (prun_id, model_name, pruning_method, task_dataset, status, accuracy, duration, pruning_ratio,
+                             params_before, params_after, params_removed, model_size_before_kb, model_size_after_kb),
+                        )
+                    except Exception as e:
+                        print(f"Warning: failed to insert pruning data for {model_name}/{pruning_method}/{task_dataset}: {e}", file=sys.stderr)
+                
+                pbar.update(1)
+                processed += 1
+    
+    close_conn(conn)
 
 
 init_population()

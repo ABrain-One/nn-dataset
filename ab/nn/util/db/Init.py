@@ -2,7 +2,7 @@ import sqlite3
 from os import makedirs
 from pathlib import Path
 
-from ab.nn.util.Const import param_tables, db_file, db_dir, main_tables, code_tables, dependent_tables, all_tables, index_colum, run_table, nn_stat_table
+from ab.nn.util.Const import param_tables, db_file, db_dir, main_tables, code_tables, dependent_tables, all_tables, index_colum, run_table, nn_stat_table, tflite_table, prun_table
 from ab.nn.util.db.build_nn_similarity import jaccard_blobs
 
 
@@ -117,12 +117,52 @@ def init_db():
         in_dim_3 INTEGER,
         
         device_analytics_json TEXT,
+        precision_type TEXT,
         FOREIGN KEY (model_name) REFERENCES nn (name) ON DELETE CASCADE
     )
     """)
     # Indexes for mobile analytics
     cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{run_table}_model ON {run_table} (model_name);")
     cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{run_table}_device ON {run_table} (device_type);")
+
+    # Create TFLite model metadata table
+    cursor.execute(f"""
+    CREATE TABLE IF NOT EXISTS tflite (
+        id TEXT PRIMARY KEY,
+        model_name TEXT NOT NULL,
+        accuracy REAL,
+        transform TEXT,
+        precision_type TEXT,
+        FOREIGN KEY (model_name) REFERENCES nn (name) ON DELETE CASCADE
+    )
+    """)
+    # Indexes for tflite table
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_tflite_model ON tflite (model_name);")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_tflite_precision ON tflite (precision_type);")
+
+    # Create Pruning analytics table
+    cursor.execute(f"""
+    CREATE TABLE IF NOT EXISTS {prun_table} (
+        id TEXT PRIMARY KEY,
+        model_name TEXT NOT NULL,
+        pruning_method TEXT NOT NULL,
+        task_dataset TEXT NOT NULL,
+        status TEXT,
+        accuracy REAL,
+        duration INTEGER,
+        pruning_ratio REAL,
+        params_before INTEGER,
+        params_after INTEGER,
+        params_removed INTEGER,
+        model_size_before_kb REAL,
+        model_size_after_kb REAL,
+        FOREIGN KEY (model_name) REFERENCES nn (name) ON DELETE CASCADE
+    )
+    """)
+    # Indexes for prun table
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{prun_table}_model ON {prun_table} (model_name);")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{prun_table}_method ON {prun_table} (pruning_method);")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{prun_table}_config ON {prun_table} (pruning_method, task_dataset);")
 
     # Create NN statistics table
     cursor.execute(f"""

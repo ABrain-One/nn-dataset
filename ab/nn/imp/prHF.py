@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from numpy import source
+
 import sys
 import os
 import json
@@ -18,10 +18,11 @@ import importlib.util
 import traceback
 import multiprocessing
 
+
 # --- CONFIGURATION ---
 SOURCE_REPO = "NN-Dataset/checkpoints-epoch-50"
 TARGET_REPO = "NN-Dataset/pt"  # Base repo, will create subfolder structure
-DEFAULT_HF_TOKEN = ""# Hf_token paste here
+DEFAULT_HF_TOKEN = "" # Hf_token paste here
 # --------------------- 
 
 # --- 1. SETUP PATHS ---
@@ -36,10 +37,10 @@ work_dir = dataset_root / "_work"
 out_dir = script_path.parent
 data_root = work_dir / "prune_data"
 temp_dl_dir = work_dir / "temp_prune"
-models_dir = dataset_root / "nn" / "nn"
-transforms_dir = dataset_root / "nn" / "transform"
+models_dir = dataset_root / "ab" / "nn" / "nn"
+transforms_dir = dataset_root / "ab" / "nn" / "transform"
 
-# Target path structure (mirroring quantization)
+# Target path structure
 TARGET_PATH = "structured_l1_layrewise/img-classification_cifar-10_acc"
 local_prune_dir = work_dir / "work_prune"
 local_prune_dir.mkdir(parents=True, exist_ok=True)
@@ -314,11 +315,11 @@ def upload_with_retry(file_path, repo_path, repo_id, token=None):
                 raise e
 
 def slug(s: str) -> str:
-    """Create safe filename slug - matches quantization pipeline."""
+    """Create safe filename slug """
     return re.sub(r"[^a-zA-Z0-9._-]+", "_", s.strip())[:200]
 
 def load_json_safe(path: Path):
-    """Safely load JSON file - matches quantization pipeline."""
+    """Safely load JSON file"""
     if not path.exists() or path.stat().st_size == 0:
         return {} if path.suffix == '.json' else []
     try:
@@ -328,7 +329,7 @@ def load_json_safe(path: Path):
         return {} if path.suffix == '.json' else []
 
 def mark_as_done(name: str):
-    """Mark model as processed in history - matches quantization pipeline."""
+    """Mark model as processed in history """
     current = load_json_safe(HISTORY_FILE)
     if isinstance(current, list):
         if name not in current:
@@ -340,7 +341,7 @@ def mark_as_done(name: str):
         json.dump(current, f, indent=2)
 
 def log_skip(name: str, reason: str):
-    """Log skipped model - matches quantization pipeline."""
+    """Log skipped mode"""
     current = load_json_safe(SKIPPED_FILE)
     if not isinstance(current, list):
         current = []
@@ -354,21 +355,17 @@ def log_skip(name: str, reason: str):
 # ================= MAIN PROCESSING FUNCTION =================
 
 def process_single_model(model_name: str, args) -> Dict[str, Any]:
-    """Process a single model: download, prune, evaluate, save - matches quantization structure."""
+    """Process a single model: download, prune, evaluate, save"""
     result = {
-        "model": model_name,
-        "dataset": "cifar-10",
-        "task": "img-classification",
-        "status": "processing",
-        "accuracy_after_pruning": None,
-        "inference_time_sec": None,
-        "pruning_method": "structured_l1_layerwise",
+        "status": "success",
+        "accuracy": 0.0,
+        "duration": 0,
         "pruning_ratio": PRUNING_RATIO,
-        "params_before": None,
-        "params_after": None,
-        "params_removed": None,
-        "model_size_before_kb": None,
-        "model_size_after_kb": None
+        "params_before": 0,
+        "params_after": 0,
+        "params_removed": 0,
+        "model_size_before_kb": 0.0,
+        "model_size_after_kb": 0.0
     }
     
     # Create model-specific temp directory (like quantization pipeline)
@@ -445,9 +442,8 @@ def process_single_model(model_name: str, args) -> Dict[str, Any]:
         # Prepare result - matches structure in quantization pipeline's JSON
         result.update({
             "status": "success",
-            "accuracy_after_pruning": round(accuracy, 4),
-            "inference_time_sec": round(inf_time, 6),
-            "pruning_method": "structured_l1_layerwise",
+            "accuracy": round(accuracy, 4),
+            "duration": int(inf_time * 1e9),
             "pruning_ratio": PRUNING_RATIO,
             "params_before": params_before,
             "params_after": params_after,
@@ -473,18 +469,18 @@ def process_single_model(model_name: str, args) -> Dict[str, Any]:
         print(f"    Size: {size_before_kb:.2f}KB � {size_after_kb:.2f}KB")
         
         # --- STRUCTURED UPLOAD - Exactly matching quantization pattern ---
-        # 1. Save .pf locally for the user
-        final_pf_path = local_prune_dir / f"{slug(model_name)}.pf"
+        # 1. Save .pt locally for the user
+        final_pf_path = local_prune_dir / f"{slug(model_name)}.pt"
         shutil.copy2(pf_path, final_pf_path)
         
         if args.push_hf:
             print(f"   [UPLOAD] Syncing to Hugging Face...")
             
-            # 2. Upload .pf file to the structured path
-            # Path: structured_l1_layerwise/img-classification_cifar-10_acc/ModelName.pf
+            # 2. Upload .pt file to the structured path
+            # Path: structured_l1_layerwise/img-classification_cifar-10_acc/ModelName.pt
             upload_with_retry(
                 pf_path,
-                f"{TARGET_PATH}/{slug(model_name)}.pf",
+                f"{TARGET_PATH}/{slug(model_name)}.pt",
                 TARGET_REPO,
                 token=args.hf_token
             )
@@ -526,19 +522,15 @@ def _process_worker(model_name, args, q):
         q.put(("SUCCESS", result))
     except Exception as e:
         q.put(("ERROR", {
-            "model": model_name,
-            "dataset": "cifar-10",
-            "task": "img-classification",
             "status": "failed",
-            "accuracy_after_pruning": None,
-            "inference_time_sec": None,
-            "pruning_method": "structured_l1_layerwise",
+            "accuracy": 0.0,
+            "duration": 0,
             "pruning_ratio": PRUNING_RATIO,
-            "params_before": None,
-            "params_after": None,
-            "params_removed": None,
-            "model_size_before_kb": None,
-            "model_size_after_kb": None
+            "params_before": 0,
+            "params_after": 0,
+            "params_removed": 0,
+            "model_size_before_kb": 0.0,
+            "model_size_after_kb": 0.0
         }))
 
 def main():
@@ -640,26 +632,25 @@ def main():
                 result = res # could be SUCCESS or ERROR dict
             else:
                 result = {
-                    "model": model_name,
-                    "dataset": "cifar-10",
-                    "task": "img-classification",
                     "status": "failed",
-                    "accuracy_after_pruning": None,
-                    "inference_time_sec": None,
-                    "pruning_method": "structured_l1_layerwise",
+                    "accuracy": 0.0,
+                    "duration": 0,
                     "pruning_ratio": PRUNING_RATIO,
-                    "params_before": None,
-                    "params_after": None,
-                    "params_removed": None,
-                    "model_size_before_kb": None,
-                    "model_size_after_kb": None
+                    "params_before": 0,
+                    "params_after": 0,
+                    "params_removed": 0,
+                    "model_size_before_kb": 0.0,
+                    "model_size_after_kb": 0.0
                 }
         
-        results[model_name] = result
-        
         if result.get("status") == "success":
+            results[model_name] = result
             successful += 1
         else:
+            # Only store minimal failure info
+            results[model_name] = {
+                "status": "failed"
+            }
             failed += 1
             
         # Update comprehensive all_models.json incrementally ensuring all metadata is captured

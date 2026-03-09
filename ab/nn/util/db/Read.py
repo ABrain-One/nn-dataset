@@ -234,12 +234,12 @@ def run_data(
     try:
         cur.execute(
             f"""
-            SELECT id, model_name, device_type, os_version, valid, emulator, error_message, duration,
-                   iterations, unit, cpu_duration, cpu_min_duration, cpu_max_duration, cpu_std_dev, cpu_error,
+                 SELECT id, model_name, device_type, os_version, valid, emulator, error_message, duration,
+                     iterations, unit, cpu_duration, cpu_min_duration, cpu_max_duration, cpu_std_dev, cpu_error,
                    gpu_duration, gpu_min_duration, gpu_max_duration, gpu_std_dev, gpu_error,
                    npu_duration, npu_min_duration, npu_max_duration, npu_std_dev, npu_error,
                    total_ram_kb, free_ram_kb, available_ram_kb, cached_kb,
-                   in_dim_0, in_dim_1, in_dim_2, in_dim_3, device_analytics_json
+                   in_dim_0, in_dim_1, in_dim_2, in_dim_3, device_analytics_json, precision_type
             FROM {run_table}
             {where_clause}
             ORDER BY model_name
@@ -259,6 +259,93 @@ def run_data(
                 rec['device_analytics'] = None
             rec.pop('device_analytics_json', None)
             results.append(rec)
+        return tuple(results)
+    finally:
+        close_conn(conn)
+
+
+def tflite_data(
+        model_name: str | None = None,
+        precision_type: str | None = None,
+        max_rows: int | None = None,
+):
+    """
+    Query TFLite model analytics from the `tflite` table with optional filters.
+    Returns a tuple of dicts with columns: id, model_name, accuracy, transform, precision_type.
+    """
+    params = []
+    filters = []
+    if model_name is not None:
+        filters.append('model_name = ?')
+        params.append(model_name)
+    if precision_type is not None:
+        filters.append('precision_type = ?')
+        params.append(precision_type)
+
+    where_clause = (' WHERE ' + ' AND '.join(filters)) if filters else ''
+    limit_clause = (' LIMIT ' + str(max_rows)) if max_rows else ''
+
+    conn, cur = sql_conn()
+    try:
+        cur.execute(
+            f"""
+                SELECT id, model_name, accuracy, transform, precision_type
+                FROM {tflite_table}
+                {where_clause}
+                ORDER BY model_name
+                {limit_clause}
+            """,
+            params,
+        )
+        rows = cur.fetchall()
+        columns = [c[0] for c in cur.description]
+        results = [dict(zip(columns, r)) for r in rows]
+        return tuple(results)
+    finally:
+        close_conn(conn)
+
+
+def prun_data(
+        model_name: str | None = None,
+        pruning_method: str | None = None,
+        task_dataset: str | None = None,
+        max_rows: int | None = None,
+):
+    """
+    Query pruning analytics from the `prun` table with optional filters.
+    Returns a tuple of dicts with columns: id, model_name, pruning_method, task_dataset, status, accuracy, duration, etc.
+    """
+    params = []
+    filters = []
+    if model_name is not None:
+        filters.append('model_name = ?')
+        params.append(model_name)
+    if pruning_method is not None:
+        filters.append('pruning_method = ?')
+        params.append(pruning_method)
+    if task_dataset is not None:
+        filters.append('task_dataset = ?')
+        params.append(task_dataset)
+
+    where_clause = (' WHERE ' + ' AND '.join(filters)) if filters else ''
+    limit_clause = (' LIMIT ' + str(max_rows)) if max_rows else ''
+
+    conn, cur = sql_conn()
+    try:
+        cur.execute(
+            f"""
+                SELECT id, model_name, pruning_method, task_dataset, status, accuracy, duration, pruning_ratio,
+                       params_before, params_after, params_removed, model_size_before_kb, model_size_after_kb
+                FROM {prun_table}
+                {where_clause}
+                ORDER BY model_name
+                {limit_clause}
+            """,
+            params,
+        )
+        rows = cur.fetchall()
+        columns = [c[0] for c in cur.description]
+        results = [dict(zip(columns, r)) for r in rows]
         return tuple(results)
     finally:
         close_conn(conn)

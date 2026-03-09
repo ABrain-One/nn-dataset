@@ -111,6 +111,9 @@ transform_dir = nn_path('transform')
 stat_dir = nn_path('stat')
 stat_train_dir = stat_dir / 'train'
 stat_run_dir = stat_dir / 'run'
+stat_run_tflite_dir = stat_run_dir / 'tflite'
+stat_run_tflite_fp32_dir = stat_run_tflite_dir / 'fp32'
+stat_run_tflite_int8_dir = stat_run_tflite_dir / 'int8'
 stat_nn_dir = stat_dir / 'nn'
 
 code_folders = (nn_dir, metric_dir)  # transform_dir,
@@ -160,11 +163,16 @@ nn_code_minhash_table = "nn_minhash" #New
 
 # Mobile analytics (runtime) table
 run_table = 'run'
+tflite_table = 'tflite'
 # optional columns follow similar naming style; allow NULLs where data is not available
 run_main_index = ('task', 'dataset', 'metric', 'nn')
 run_extra_columns = (
     'device_type', 'os_version', 'valid', 'emulator', 'error_message',
     'duration', 'device_analytics_json')
+
+# Pruning analytics table
+prun_table = 'prun'
+stat_run_pt_dir = stat_dir / 'run' / 'pt'
 
 # NN statistics table
 nn_stat_table = 'nn_stat'
