@@ -17,7 +17,7 @@ def download(repo_id, filename, local_dir):
         repo_id=repo_id,
         filename=Path(filename).name,
         local_dir=local_dir)
-    shutil.rmtree(local_dir / '.cache')
+    shutil.rmtree(Path(local_dir) / '.cache')
     return local_path
 
 

@@ -73,6 +73,19 @@ default_epoch_limit_minutes = 30  # minutes
 base_module = 'ab'
 to_nn = (base_module, 'nn')
 
+def nn_mod(module_type: str, module_name: str) -> str:
+    """
+    Build a fully qualified module path for nn components.
+    
+    Args:
+        module_type: Type of module ('nn', 'metric', 'loader', 'transform')
+        module_name: Name of the specific module
+    
+    Returns:
+        Full module path string (e.g., 'ab.nn.nn.RLFN')
+    """
+    return f"{base_module}.nn.{module_type}.{module_name}"
+
 config_splitter = '_'
 
 
@@ -98,6 +111,9 @@ transform_dir = nn_path('transform')
 stat_dir = nn_path('stat')
 stat_train_dir = stat_dir / 'train'
 stat_run_dir = stat_dir / 'run'
+stat_run_tflite_dir = stat_run_dir / 'tflite'
+stat_run_tflite_fp32_dir = stat_run_tflite_dir / 'fp32'
+stat_run_tflite_int8_dir = stat_run_tflite_dir / 'int8'
 stat_nn_dir = stat_dir / 'nn'
 
 code_folders = (nn_dir, metric_dir)  # transform_dir,
@@ -143,21 +159,28 @@ dependent_tables = code_tables + param_tables
 all_tables = main_tables + dependent_tables
 index_colum = ('task', 'dataset') + dependent_tables
 extra_main_columns = ('duration', 'accuracy')
+nn_code_minhash_table = "nn_minhash" #New
 
 # Mobile analytics (runtime) table
 run_table = 'run'
+tflite_table = 'tflite'
 # optional columns follow similar naming style; allow NULLs where data is not available
 run_main_index = ('task', 'dataset', 'metric', 'nn')
 run_extra_columns = (
     'device_type', 'os_version', 'valid', 'emulator', 'error_message',
     'duration', 'device_analytics_json')
 
+# Pruning analytics table
+prun_table = 'prun'
+stat_run_pt_dir = stat_dir / 'run' / 'pt'
+
 # NN statistics table
 nn_stat_table = 'nn_stat'
-
-tmp_data = 'temp_data'
-
 HF_NN = 'NN-Dataset'
+tmp_data = "tmp_data"
+STAT_TABLE = "stat"
+NN_SIM_TABLE = "nn_similarity"
+WORK_TABLE = "tmp_data"
 
 core_nn_cls = (
     # img-classification
@@ -192,7 +215,9 @@ core_nn_cls = (
     'SwinTransformer',
     'UNet2D',
     'VGG',
-    'VisionTransformer')
+    'VisionTransformer',
+    'RLFN',
+    'SwinIR')
 
 core_nn = core_nn_cls + (
     # img-segmentation
