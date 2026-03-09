@@ -8,6 +8,14 @@ import random
 import re
 import json
 from typing import Any
+import os
+import platform
+import shutil
+import subprocess
+import importlib
+from datetime import datetime
+from typing import Optional
+import psutil
 
 import torch
 from os import makedirs, remove
@@ -285,3 +293,105 @@ def args():
     parser.add_argument('--save_onnx_weights', type=bool, default=default_save_onnx_weights,
                         help=f'Enable saving of the best model weights in ONNX format; default {default_save_onnx_weights}')
     return parser.parse_args()
+
+
+def import_by_path(path: str):
+    mod_path, _, cls_name = path.rpartition(".")
+    if not mod_path:
+        raise ImportError(f"Invalid import path: {path}")
+    mod = importlib.import_module(mod_path)
+    return getattr(mod, cls_name)
+
+def get_device_type() -> str:
+    try:
+        name = platform.node()
+        if name:
+            return name
+    except Exception:
+        pass
+    return "unknown_device"
+
+def sanitize_filename(s: str) -> str:
+    return "".join(c if (c.isalnum() or c in ("-", "_")) else "_" for c in s)
+
+def ensure_outdir(path: str) -> str:
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    return path
+
+def sanitize_name(name: str) -> str:
+    if not name:
+        return "run"
+    return "".join(c if (c.isalnum() or c in ("-", "_")) else "_" for c in name)
+
+def extract_arch_name(model_class_path: str) -> str:
+    parts = model_class_path.split(".")
+    if len(parts) >= 2:
+        return parts[-2]
+    return parts[-1]
+
+def default_outpath(model_name: str, config: Optional[str] = None) -> str:
+    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    this_dir = os.path.dirname(os.path.dirname(__file__))
+
+    if config:
+        folder_base = f"{config}_{model_name}"
+    else:
+        folder_base = model_name or "model"
+
+    folder_safe = sanitize_name(folder_base)
+    folder_name = f"{folder_safe}-{ts}"
+
+    run_dir = os.path.join(this_dir, "stat", "run", folder_name)
+    os.makedirs(run_dir, exist_ok=True)
+
+    device = sanitize_filename(get_device_type())
+    filename = f"windows_{device}.json"
+    return os.path.join(run_dir, filename)
+
+
+# ---------------- system sampling ----------------
+
+def sample_nvidia_smi():
+    if shutil.which("nvidia-smi") is None:
+        return None
+    q = "--query-gpu=index,name,driver_version,memory.total,memory.used,memory.free,utilization.gpu --format=csv,noheader,nounits"
+    try:
+        out = subprocess.check_output(["nvidia-smi"] + q.split(), stderr=subprocess.DEVNULL)
+        out = out.decode("utf-8").strip()
+        gpus = []
+        for line in out.splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 7:
+                idx, name, driver, total, used, free, util = parts[:7]
+                gpus.append({
+                    "index": int(idx),
+                    "name": name,
+                    "driver": driver,
+                    "memory_total_mb": int(total),
+                    "memory_used_mb": int(used),
+                    "memory_free_mb": int(free),
+                    "util_percent": (int(util) if util != "N/A" else None)
+                })
+        return gpus
+    except Exception:
+        return None
+
+def sample_system():
+    if psutil is None:
+        return None
+    vm = psutil.virtual_memory()
+    p = psutil.Process()
+    try:
+        mem = p.memory_info().rss
+    except Exception:
+        mem = None
+    return {
+        "total_ram_bytes": vm.total,
+        "available_ram_bytes": vm.available,
+        "used_ram_bytes": vm.used,
+        "ram_percent": vm.percent,
+        "cpu_percent": psutil.cpu_percent(interval=None),
+        "process_rss_bytes": mem
+    }
+
