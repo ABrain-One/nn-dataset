@@ -171,7 +171,7 @@ def data(only_best_accuracy: bool = False,
             LEFT JOIN nn       n ON s.nn = n.name
             LEFT JOIN metric   m ON s.metric = m.name
             LEFT JOIN transform t ON s.transform = t.name
-            LEFT JOIN nn_stat ns ON s.nn = ns.nn_name AND s.prm = ns.prm_id
+            LEFT JOIN nn_stat ns ON s.nn = ns.nn_name
         """
     else:
         select_clause = """
