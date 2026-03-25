@@ -3,16 +3,16 @@ from typing import Optional
 import ab.nn.util.db.Read as DB_Read
 import ab.nn.util.Train as Train
 from ab.nn.util.Const import default_epoch_limit_minutes
-from pandas import DataFrame
+from pandas import DataFrame, concat
 import functools
 
 from ab.nn.util.db.Query import JoinConf
 
 
+
 @functools.lru_cache(maxsize=10)
 def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None, epoch=None, max_rows=None, sql: Optional[JoinConf] = None, nn_prefixes=None,
-         unique_nn=False, nn_total_layers=False, nn_max_depth=False, nn_has_residual=False, nn_flops=False, nn_dropout_count=False, nn_total_params=False, nn_has_attention=False,
-         prm__dropout=False, prm__momentum=False, prm__lr=False, prm__weight_decay=False, prm__batch=False) -> DataFrame:
+         unique_nn=False, include_nn_stats=False) -> DataFrame:
     """
     Get the NN model code and all related statistics as a pandas DataFrame.
 
@@ -24,18 +24,7 @@ def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None
           If False, all matching rows are returned.
       - task, dataset, metric, nn, epoch: Optional filters to restrict the results.
       - max_rows (int): Specifies the maximum number of results.
-      - nn_total_layers (bool): If True, include 'nn_total_layers' column in results.
-      - nn_max_depth (bool): If True, include 'nn_max_depth' column in results.
-      - nn_has_residual (bool): If True, include 'nn_has_residual' column in results.
-      - nn_flops (bool): If True, include 'nn_flops' column in results.
-      - nn_dropout_count (bool): If True, include 'nn_dropout_count' column in results.
-      - nn_total_params (bool): If True, include 'nn_total_params' column in results.
-      - nn_has_attention (bool): If True, include 'nn_has_attention' column in results.
-      - prm__dropout (bool): If True, include 'prm_dropout' column extracted from prm dict.
-      - prm__momentum (bool): If True, include 'prm_momentum' column extracted from prm dict.
-      - prm__lr (bool): If True, include 'prm_lr' column extracted from prm dict.
-      - prm__weight_decay (bool): If True, include 'prm_weight_decay' column extracted from prm dict.
-      - prm__batch (bool): If True, include 'prm_batch' column extracted from prm dict.
+      - include_nn_stats (bool): If True, include NN architecture statistics in the results.
 
     Returns:
       - A pandas DataFrame where each row is a dictionary containing:
@@ -43,32 +32,78 @@ def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None
           'nn', 'nn_code', 'epoch', 'accuracy', 'duration',
           'prm', and 'transform_code'.
 
-        If any of the nn_* parameters are True, the corresponding columns are included:
-          'nn_total_layers', 'nn_max_depth', 'nn_has_residual',
-          'nn_flops', 'nn_dropout_count', 'nn_total_params', 'nn_has_attention'
-
-        If any of the prm__* parameters are True, the corresponding columns are included:
-          'prm_dropout', 'prm_momentum', 'prm_lr', 'prm_weight_decay', 'prm_batch'
+        If include_nn_stats=True, additional columns are included:
+          'nn_total_params', 'nn_trainable_params', 'nn_frozen_params',
+          'nn_total_layers', 'nn_leaf_layers', 'nn_max_depth',
+          'nn_flops', 'nn_model_size_mb', 'nn_buffer_size_mb', 'nn_total_memory_mb',
+          'nn_dropout_count', 'nn_has_attention', 'nn_has_residual',
+          'nn_is_resnet_like', 'nn_is_vgg_like', 'nn_is_inception_like',
+          'nn_is_densenet_like', 'nn_is_unet_like', 'nn_is_transformer_like',
+          'nn_is_mobilenet_like', 'nn_is_efficientnet_like',
+          'nn_code_length', 'nn_num_classes', 'nn_num_functions',
+          'nn_uses_sequential', 'nn_uses_modulelist', 'nn_uses_moduledict',
+          'nn_stats_meta' (dict with additional metadata), 'nn_stats_error'
     """
     dt: tuple[dict, ...] = DB_Read.data(only_best_accuracy, task=task, dataset=dataset, metric=metric, nn=nn, epoch=epoch, max_rows=max_rows,
-                                        sql=sql, nn_prefixes=nn_prefixes, unique_nn=unique_nn, nn_total_layers=nn_total_layers, nn_max_depth=nn_max_depth, 
-                                        nn_has_residual=nn_has_residual, nn_flops=nn_flops, nn_dropout_count=nn_dropout_count, nn_total_params=nn_total_params, 
-                                        nn_has_attention=nn_has_attention)
+                                        sql=sql, nn_prefixes=nn_prefixes, unique_nn=unique_nn, include_nn_stats=include_nn_stats)
+    return DataFrame.from_records(dt)
+
+def expand_prm_columns(df: DataFrame) -> DataFrame:
+    """Turn the ``prm`` dict column into one column per hyperparameter name (wider table)."""
+    if df.empty or "prm" not in df.columns:
+        return df
+    rows = [p if isinstance(p, dict) else {} for p in df["prm"]]
+    expanded = DataFrame(rows)
+    rest = df.drop(columns=["prm"])
+    rename = {c: f"prm_{c}" for c in expanded.columns if c in rest.columns}
+    if rename:
+        expanded = expanded.rename(columns=rename)
+    return concat([rest.reset_index(drop=True), expanded.reset_index(drop=True)], axis=1)
+
+
+
+@functools.lru_cache(maxsize=10)
+def data_withnonnullvalue(
+        only_best_accuracy=False,
+        task=None,
+        dataset=None,
+        metric=None,
+        nn=None,
+        epoch=None,
+        max_rows=None,
+        sql: Optional[JoinConf] = None,
+        nn_prefixes=None,
+        unique_nn=False,
+        include_nn_stats=False,
+        require_nn_stat_nonnull: tuple[str, ...] = (),
+        require_prm_nonnull: tuple[str, ...] = (),
+        prm_as_columns: bool = False,
+) -> DataFrame:
+    """
+    Same filters as data(), with optional non-NULL requirements on nn_stat columns and/or
+    prm hyperparameter names. See :ref:`ab.nn.util.db.Read.data_withnonnullvalue()`.
+
+    If prm_as_columns is True, the ``prm`` dict is expanded so each hyperparameter name
+    becomes its own column (names that clash with existing columns get a ``prm_`` prefix).
+    """
+    dt: tuple[dict, ...] = DB_Read.data_withnonnullvalue(
+        only_best_accuracy,
+        task=task,
+        dataset=dataset,
+        metric=metric,
+        nn=nn,
+        epoch=epoch,
+        max_rows=max_rows,
+        sql=sql,
+        nn_prefixes=nn_prefixes,
+        unique_nn=unique_nn,
+        include_nn_stats=include_nn_stats,
+        require_nn_stat_nonnull=require_nn_stat_nonnull,
+        require_prm_nonnull=require_prm_nonnull,
+    )
     df = DataFrame.from_records(dt)
-
-    # Extract requested prm fields into separate columns
-    prm_fields = {
-        'dropout': prm__dropout,
-        'momentum': prm__momentum,
-        'lr': prm__lr,
-        'weight_decay': prm__weight_decay,
-        'batch': prm__batch,
-    }
-    if 'prm' in df.columns:
-        for field, enabled in prm_fields.items():
-            if enabled:
-                df[f'prm_{field}'] = df['prm'].apply(lambda p, f=field: p.get(f) if isinstance(p, dict) else None)
-
+    if prm_as_columns:
+        df = expand_prm_columns(df)
     return df
 
 

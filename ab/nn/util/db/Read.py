@@ -52,13 +52,6 @@ def data(only_best_accuracy: bool = False,
          sql: Optional[JoinConf] = None,
          unique_nn: bool = False,
          include_nn_stats: bool = False,
-         nn_total_layers: bool = False,
-         nn_max_depth: bool = False,
-         nn_has_residual: bool = False,
-         nn_flops: bool = False,
-         nn_dropout_count: bool = False,
-         nn_total_params: bool = False,
-         nn_has_attention: bool = False,
          ) -> tuple[
     dict[str, int | float | str | dict[str, int | float | str]], ...
 ]:
@@ -114,13 +107,10 @@ def data(only_best_accuracy: bool = False,
       - 'nn_uses_moduledict': bool    (uses ModuleDict)
       - 'nn_stats_meta': dict         (additional metadata as JSON)
       - 'nn_stats_error': str         (error message if statistics failed)
-    """
 
-    # Check if any nn_* parameters are requested
-    include_nn_stats = include_nn_stats or any([
-        nn_total_layers, nn_max_depth, nn_has_residual,
-        nn_flops, nn_dropout_count, nn_total_params, nn_has_attention
-    ])
+    nn_stat is joined on nn name only. data_withnonnullvalue() matches nn_stat by
+    nn and prm_id (stat.prm).
+    """
 
     # Build filtering conditions based on provided parameters.
     params, where_clause = sql_where([task, dataset, metric, nn, epoch])
@@ -145,40 +135,46 @@ def data(only_best_accuracy: bool = False,
 
     # Build the SELECT clause based on whether nn_stats are requested
     if include_nn_stats:
-        # Build the columns list dynamically based on which parameters are True
-        nn_columns = []
-        
-        if nn_total_params:
-            nn_columns.append('ns.total_params AS nn_total_params')
-        if nn_total_layers:
-            nn_columns.append('ns.total_layers AS nn_total_layers')
-        if nn_max_depth:
-            nn_columns.append('ns.max_depth AS nn_max_depth')
-        if nn_has_residual:
-            nn_columns.append('ns.has_residual_connections AS nn_has_residual')
-        if nn_flops:
-            nn_columns.append('ns.flops AS nn_flops')
-        if nn_dropout_count:
-            nn_columns.append('ns.dropout_count AS nn_dropout_count')
-        if nn_has_attention:
-            nn_columns.append('ns.has_attention AS nn_has_attention')
-        
-        # Always include these columns, optionally add the requested nn_* columns
-        nn_cols_str = ',\n                   '.join(nn_columns) if nn_columns else ''
-        if nn_cols_str:
-            nn_cols_str = ',\n                   ' + nn_cols_str
-        
-        select_clause = f"""
+        select_clause = """
             SELECT s.id, s.task, s.dataset, s.metric, m.code AS metric_code, m.id AS metric_id,
                    s.nn, n.code AS nn_code, n.id AS nn_id, s.epoch, s.accuracy, s.duration,
-                   s.prm AS prm_id, t.code AS transform_code, t.id AS transform_id, s.transform{nn_cols_str}
+                   s.prm AS prm_id, t.code AS transform_code, t.id AS transform_id, s.transform,
+                   ns.total_params AS nn_total_params,
+                   ns.trainable_params AS nn_trainable_params,
+                   ns.frozen_params AS nn_frozen_params,
+                   ns.total_layers AS nn_total_layers,
+                   ns.leaf_layers AS nn_leaf_layers,
+                   ns.max_depth AS nn_max_depth,
+                   ns.flops AS nn_flops,
+                   ns.model_size_mb AS nn_model_size_mb,
+                   ns.buffer_size_mb AS nn_buffer_size_mb,
+                   ns.total_memory_mb AS nn_total_memory_mb,
+                   ns.dropout_count AS nn_dropout_count,
+                   ns.has_attention AS nn_has_attention,
+                   ns.has_residual_connections AS nn_has_residual,
+                   ns.is_resnet_like AS nn_is_resnet_like,
+                   ns.is_vgg_like AS nn_is_vgg_like,
+                   ns.is_inception_like AS nn_is_inception_like,
+                   ns.is_densenet_like AS nn_is_densenet_like,
+                   ns.is_unet_like AS nn_is_unet_like,
+                   ns.is_transformer_like AS nn_is_transformer_like,
+                   ns.is_mobilenet_like AS nn_is_mobilenet_like,
+                   ns.is_efficientnet_like AS nn_is_efficientnet_like,
+                   ns.code_length AS nn_code_length,
+                   ns.num_classes_defined AS nn_num_classes,
+                   ns.num_functions_defined AS nn_num_functions,
+                   ns.uses_sequential AS nn_uses_sequential,
+                   ns.uses_modulelist AS nn_uses_modulelist,
+                   ns.uses_moduledict AS nn_uses_moduledict,
+                   ns.meta_json AS nn_stats_meta,
+                   ns.error AS nn_stats_error
         """
         join_clause = """
             FROM {source} s
             LEFT JOIN nn       n ON s.nn = n.name
             LEFT JOIN metric   m ON s.metric = m.name
             LEFT JOIN transform t ON s.transform = t.name
-            LEFT JOIN nn_stat ns ON s.nn = ns.nn_name AND s.prm = ns.prm_id
+            LEFT JOIN nn_stat ns ON s.nn = ns.nn_name
         """
     else:
         select_clause = """
@@ -211,6 +207,229 @@ def data(only_best_accuracy: bool = False,
             results = join_nn_query(sql,limit_clause, cur)
         else:
             results = fill_hyper_prm(cur, include_nn_stats=include_nn_stats)
+        return tuple(results)
+    finally:
+        if conn: close_conn(conn)
+
+
+# Output column name -> nn_stat physical column (for IS NOT NULL filters in data_withnonnullvalue).
+_NN_STAT_PHYSICAL: dict[str, str] = {
+    "nn_total_params": "total_params",
+    "nn_trainable_params": "trainable_params",
+    "nn_frozen_params": "frozen_params",
+    "nn_total_layers": "total_layers",
+    "nn_leaf_layers": "leaf_layers",
+    "nn_max_depth": "max_depth",
+    "nn_flops": "flops",
+    "nn_model_size_mb": "model_size_mb",
+    "nn_buffer_size_mb": "buffer_size_mb",
+    "nn_total_memory_mb": "total_memory_mb",
+    "nn_dropout_count": "dropout_count",
+    "nn_has_attention": "has_attention",
+    "nn_has_residual": "has_residual_connections",
+    "nn_is_resnet_like": "is_resnet_like",
+    "nn_is_vgg_like": "is_vgg_like",
+    "nn_is_inception_like": "is_inception_like",
+    "nn_is_densenet_like": "is_densenet_like",
+    "nn_is_unet_like": "is_unet_like",
+    "nn_is_transformer_like": "is_transformer_like",
+    "nn_is_mobilenet_like": "is_mobilenet_like",
+    "nn_is_efficientnet_like": "is_efficientnet_like",
+    "nn_code_length": "code_length",
+    "nn_num_classes": "num_classes_defined",
+    "nn_num_functions": "num_functions_defined",
+    "nn_uses_sequential": "uses_sequential",
+    "nn_uses_modulelist": "uses_modulelist",
+    "nn_uses_moduledict": "uses_moduledict",
+    "nn_stats_meta": "meta_json",
+    "nn_stats_error": "error",
+}
+
+_NN_STAT_SELECT_PARTS: dict[str, str] = {
+    "nn_total_params": "ns.total_params AS nn_total_params",
+    "nn_trainable_params": "ns.trainable_params AS nn_trainable_params",
+    "nn_frozen_params": "ns.frozen_params AS nn_frozen_params",
+    "nn_total_layers": "ns.total_layers AS nn_total_layers",
+    "nn_leaf_layers": "ns.leaf_layers AS nn_leaf_layers",
+    "nn_max_depth": "ns.max_depth AS nn_max_depth",
+    "nn_flops": "ns.flops AS nn_flops",
+    "nn_model_size_mb": "ns.model_size_mb AS nn_model_size_mb",
+    "nn_buffer_size_mb": "ns.buffer_size_mb AS nn_buffer_size_mb",
+    "nn_total_memory_mb": "ns.total_memory_mb AS nn_total_memory_mb",
+    "nn_dropout_count": "ns.dropout_count AS nn_dropout_count",
+    "nn_has_attention": "ns.has_attention AS nn_has_attention",
+    "nn_has_residual": "ns.has_residual_connections AS nn_has_residual",
+    "nn_is_resnet_like": "ns.is_resnet_like AS nn_is_resnet_like",
+    "nn_is_vgg_like": "ns.is_vgg_like AS nn_is_vgg_like",
+    "nn_is_inception_like": "ns.is_inception_like AS nn_is_inception_like",
+    "nn_is_densenet_like": "ns.is_densenet_like AS nn_is_densenet_like",
+    "nn_is_unet_like": "ns.is_unet_like AS nn_is_unet_like",
+    "nn_is_transformer_like": "ns.is_transformer_like AS nn_is_transformer_like",
+    "nn_is_mobilenet_like": "ns.is_mobilenet_like AS nn_is_mobilenet_like",
+    "nn_is_efficientnet_like": "ns.is_efficientnet_like AS nn_is_efficientnet_like",
+    "nn_code_length": "ns.code_length AS nn_code_length",
+    "nn_num_classes": "ns.num_classes_defined AS nn_num_classes",
+    "nn_num_functions": "ns.num_functions_defined AS nn_num_functions",
+    "nn_uses_sequential": "ns.uses_sequential AS nn_uses_sequential",
+    "nn_uses_modulelist": "ns.uses_modulelist AS nn_uses_modulelist",
+    "nn_uses_moduledict": "ns.uses_moduledict AS nn_uses_moduledict",
+    "nn_stats_meta": "ns.meta_json AS nn_stats_meta",
+    "nn_stats_error": "ns.error AS nn_stats_error",
+}
+
+_NN_STAT_ORDERED_KEYS: tuple[str, ...] = tuple(_NN_STAT_SELECT_PARTS.keys())
+
+
+def _dedupe_nn_stat_keys(keys: tuple[str, ...]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for k in keys:
+        if k not in seen:
+            seen.add(k)
+            out.append(k)
+    return tuple(out)
+
+
+def _subset_prm_in_records(
+        results: list[dict],
+        keys: tuple[str, ...],
+) -> None:
+    """Keep only listed keys in each record's ``prm`` dict (mutates in place)."""
+    if not keys:
+        return
+    for rec in results:
+        full = rec.get('prm')
+        if not isinstance(full, dict):
+            continue
+        rec['prm'] = {k: full[k] for k in keys if k in full and full[k] is not None}
+
+
+def data_withnonnullvalue(
+        only_best_accuracy: bool = False,
+        task: Optional[str] = None,
+        dataset: Optional[str] = None,
+        metric: Optional[str] = None,
+        nn: Optional[str | tuple[str]] = None,
+        epoch: Optional[int] = None,
+        max_rows: Optional[int] = None,
+        nn_prefixes: Optional[tuple] = None,
+        sql: Optional[JoinConf] = None,
+        unique_nn: bool = False,
+        include_nn_stats: bool = False,
+        require_nn_stat_nonnull: tuple[str, ...] = (),
+        require_prm_nonnull: tuple[str, ...] = (),
+) -> tuple[dict[str, int | float | str | dict[str, int | float | str]], ...]:
+    """
+    Like data(), but optionally require nn_stat and/or prm fields to be non-NULL.
+
+    - require_nn_stat_nonnull: nn_stat output column names (e.g. 'nn_total_layers');
+      INNER JOIN nn_stat on ``nn`` and ``stat.prm = nn_stat.prm_id`` + IS NOT NULL on each listed column.
+    - require_prm_nonnull: prm ``name`` values (hyperparameter keys); each must exist with
+      non-NULL ``value`` for ``s.prm`` (implemented with EXISTS subqueries on `prm`).
+
+    At least one of require_nn_stat_nonnull or require_prm_nonnull must be non-empty.
+    If include_nn_stats is True, all nn_stat columns are selected (requires nn_stat names);
+    if False, only listed nn_stat columns are selected when those are required.
+
+    When require_prm_nonnull is non-empty, ``rec['prm']`` contains only those keys (after
+    bulk load); otherwise the full hyperparameter dict as in data().
+    """
+    req_nn = _dedupe_nn_stat_keys(require_nn_stat_nonnull)
+    req_prm = _dedupe_nn_stat_keys(require_prm_nonnull)
+    if not req_nn and not req_prm:
+        raise ValueError(
+            "At least one of require_nn_stat_nonnull or require_prm_nonnull must be non-empty. "
+            f"nn_stat keys: {sorted(_NN_STAT_PHYSICAL.keys())}"
+        )
+    if include_nn_stats and not req_nn:
+        raise ValueError("include_nn_stats=True requires at least one name in require_nn_stat_nonnull.")
+    for k in req_nn:
+        if k not in _NN_STAT_PHYSICAL:
+            raise ValueError(
+                f"Unknown nn_stat column name {k!r}. Allowed: {sorted(_NN_STAT_PHYSICAL.keys())}"
+            )
+
+    params, where_clause = sql_where([task, dataset, metric, nn, epoch])
+    if nn_prefixes:
+        where_clause += ' AND (' + ' OR '.join([f"nn LIKE '{prefix}%'" for prefix in nn_prefixes]) + ')'
+
+    source = f'(SELECT s.* FROM stat s {where_clause})'
+    if unique_nn:
+        source = f'(SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY nn ORDER BY accuracy DESC) rn FROM {source}) WHERE rn = 1)'
+    if only_best_accuracy:
+        source = """
+            (WITH filtered_stat AS {source}
+            SELECT f.* FROM filtered_stat f
+            JOIN (
+                SELECT task, dataset, metric, nn, epoch, MAX(accuracy) AS max_accuracy
+                FROM filtered_stat
+                GROUP BY task, dataset, metric, nn, epoch
+            ) b
+            ON f.task = b.task AND f.dataset = b.dataset AND f.metric = b.metric
+               AND f.nn = b.nn AND f.epoch = b.epoch AND f.accuracy = b.max_accuracy
+        )""".format(source=source)
+
+    base_select = """
+            SELECT s.id, s.task, s.dataset, s.metric, m.code AS metric_code, m.id AS metric_id,
+                   s.nn, n.code AS nn_code, n.id AS nn_id, s.epoch, s.accuracy, s.duration,
+                   s.prm AS prm_id, t.code AS transform_code, t.id AS transform_id, s.transform
+        """
+    join_parts: list[str] = [
+        f"""
+            FROM {{source}} s
+            LEFT JOIN nn       n ON s.nn = n.name
+            LEFT JOIN metric   m ON s.metric = m.name
+            LEFT JOIN transform t ON s.transform = t.name
+        """.strip(),
+    ]
+    if req_nn:
+        on_base = "s.nn = ns.nn_name AND s.prm = ns.prm_id"
+        nonnull_nn = " AND ".join(f"ns.{_NN_STAT_PHYSICAL[k]} IS NOT NULL" for k in req_nn)
+        on_nn = f"{on_base} AND {nonnull_nn}"
+        join_parts.append(f"INNER JOIN nn_stat ns ON {on_nn}")
+    join_clause = "\n            ".join(join_parts)
+    if req_prm:
+        exists_parts = [
+            f"EXISTS (SELECT 1 FROM prm pr_e{i} WHERE pr_e{i}.uid = s.prm AND pr_e{i}.name = ? AND pr_e{i}.value IS NOT NULL)"
+            for i in range(len(req_prm))
+        ]
+        join_clause += "\n            WHERE " + " AND ".join(exists_parts)
+
+    if req_nn:
+        if include_nn_stats:
+            nn_cols = ",\n                   ".join(_NN_STAT_SELECT_PARTS[k] for k in _NN_STAT_ORDERED_KEYS)
+        else:
+            nn_cols = ",\n                   ".join(_NN_STAT_SELECT_PARTS[k] for k in req_nn)
+        select_clause = f"""
+            {base_select},
+                   {nn_cols}
+        """
+    else:
+        select_clause = base_select
+
+    base_query = select_clause + join_clause.format(source=source)
+
+    limit_clause = str_not_none('LIMIT ', max_rows)
+
+    exec_params = list(params) + list(req_prm)
+
+    conn = None
+    try:
+        conn, cur = sql_conn()
+        if sql: cur.execute(f'DROP TABLE IF EXISTS {tmp_data}')
+        cur.execute(f'CREATE TEMP TABLE {tmp_data} AS {base_query} ORDER BY RANDOM()' if sql else
+                    f'''{base_query}
+                        ORDER BY s.task, s.dataset, s.metric, s.nn, s.epoch
+                        {limit_clause}''',
+                    exec_params)
+        if sql:
+            results = join_nn_query(sql, limit_clause, cur)
+        else:
+            results = fill_hyper_prm(
+                cur,
+                include_nn_stats=include_nn_stats or ("nn_stats_meta" in req_nn),
+            )
+        _subset_prm_in_records(results, req_prm)
         return tuple(results)
     finally:
         if conn: close_conn(conn)
