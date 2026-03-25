@@ -1,6 +1,7 @@
 from typing import Optional
 import os
 import site
+from pathlib import Path
 
 import pandas as pd
 
@@ -24,12 +25,14 @@ def get_attr(mod, f):
     return get_obj_attr(__import__(mod, fromlist=[f]), f)
 
 def get_package_location(package_name) -> Optional[Path]:
-    import pkg_resources
+    import importlib.metadata as metadata
     try:
-        distribution = pkg_resources.get_distribution(package_name)
-        return Path(distribution.location)
-    except pkg_resources.DistributionNotFound:
+        dist = metadata.distribution(package_name)
+        return Path(dist.locate_file('')).resolve() 
+    except Exception as e:
+        print(f"Error while fetching package '{package_name}' location: {e}")
         return None
+
       
 def check_if_script_is_pip_installed() -> bool:
     script_location = os.path.abspath(__file__)

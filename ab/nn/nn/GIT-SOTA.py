@@ -13,7 +13,7 @@ from transformers import GitProcessor, GitForCausalLM
 
 
 def supported_hyperparameters():
-    return {'lr', 'momentum', 'dropout'}
+    return {'lr'}
 
 
 class Net(nn.Module):
@@ -29,6 +29,7 @@ class Net(nn.Module):
         self.processor = GitProcessor.from_pretrained(model_id)
         self.model = GitForCausalLM.from_pretrained(model_id)
         self.model.to(self.device)
+        self.criterion = self._robust_criterion
         print("✅ GIT loaded successfully")
         
         # Freeze vision encoder (keep it pretrained)
@@ -39,10 +40,36 @@ class Net(nn.Module):
         self.word2idx = None
         self.criteria = None
         self.optimizer = None
-        self.scaler = None
+
+    def _robust_criterion(self, outputs, labels):
+        """Scientifically sound loss calculation for captioning."""
+        # labels: [B, 5, T] or [B, T]
+        if labels.dim() == 3:
+            labels = labels[:, 0, :]  # Take first reference for loss computation
         
-        # Get the model's vocab size for proper logit mapping
-        self.model_vocab_size = self.model.config.vocab_size
+        # outputs: [B, T_pred, V], labels: [B, T_gt]
+        V = self.vocab_size
+        
+        # Align sequences: skip <SOS> in labels and align lengths
+        min_len = min(outputs.shape[1], labels.shape[1] - 1)
+        if min_len <= 0:
+            return torch.tensor(0.0, device=self.device, requires_grad=True)
+            
+        # If outputs are generated text [B, T, V], we compare them to targets
+        # We need to ensure we don't exceed vocabulary boundaries
+        logits = outputs[:, :min_len, :]
+        if logits.shape[-1] > V:
+            logits = logits[:, :, :V]
+        elif logits.shape[-1] < V:
+            # Pad logits if necessary (shouldn't happen with correct vocab_size)
+            padded = torch.full((logits.shape[0], logits.shape[1], V), -100.0, device=self.device)
+            padded[:, :, :logits.shape[-1]] = logits
+            logits = padded
+            
+        logits = logits.reshape(-1, V)
+        targets = labels[:, 1:min_len+1].reshape(-1)
+        
+        return nn.functional.cross_entropy(logits, targets, ignore_index=0)
 
     def _ensure_vocab(self):
         if self.idx2word is not None:
@@ -51,12 +78,33 @@ class Net(nn.Module):
         self.idx2word = GLOBAL_CAPTION_VOCAB.get('idx2word', {})
         self.word2idx = GLOBAL_CAPTION_VOCAB.get('word2idx', {})
 
+    def _ids_to_text(self, caption_ids):
+        """Convert COCO dataset tensor IDs back to raw English text."""
+        self._ensure_vocab()
+        texts = []
+        for row in caption_ids:
+            words = []
+            for token in row:
+                tid = token.item()
+                if tid == 0:  # PAD
+                    continue
+                w = self.idx2word.get(tid, '')
+                if w == '<SOS>':
+                    continue
+                if w == '<EOS>':
+                    break
+                if w:
+                    words.append(w)
+            texts.append(" ".join(words))
+        return texts
+
     def _denormalize_images(self, images):
-        """Denormalize images from ImageNet normalization."""
-        mean = torch.tensor([0.485, 0.456, 0.406], device=images.device).view(1, 3, 1, 1)
-        std = torch.tensor([0.229, 0.224, 0.225], device=images.device).view(1, 3, 1, 1)
-        denorm = images * std + mean
-        return torch.clamp(denorm, 0, 1)
+        """Denormalize images from COCO constants to [0,1]."""
+        # Precise constants from ab/nn/loader/coco_/Caption.py
+        mean = torch.tensor([104.01362025, 114.03422265, 119.9165958], device=images.device).view(1, 3, 1, 1)
+        std = torch.tensor([73.6027665, 69.89082075, 70.9150767], device=images.device).view(1, 3, 1, 1)
+        reversed_images = (images * std) + mean
+        return torch.clamp(reversed_images / 255.0, 0.0, 1.0)
 
     def forward(self, images, captions=None):
         """
@@ -76,96 +124,91 @@ class Net(nn.Module):
         
         # Resize if needed
         if denorm_images.shape[-1] < 224:
-            denorm_images = nn.functional.interpolate(denorm_images, size=(224, 224), mode='bicubic')
+            denorm_images = nn.functional.interpolate(denorm_images.float(), size=(224, 224), mode='bicubic', align_corners=False)
         
-        # Process images through GIT processor
-        inputs = self.processor(images=denorm_images, return_tensors="pt")
+        # Safety clamp + float32 before HuggingFace processor (PIL is strict about [0,1])
+        denorm_images = torch.clamp(denorm_images.float(), 0.0, 1.0)
+        
+        # Process images through GIT processor (do_rescale=False prevents re-dividing by 255)
+        inputs = self.processor(
+            images=denorm_images, 
+            return_tensors="pt", 
+            do_rescale=False
+        )
         pixel_values = inputs.pixel_values.to(self.device)
         
+        self._ensure_vocab()
         B = images.shape[0]
         
         if captions is not None:
-            # Training mode - get real logits using generate with output_logits
-            T = captions.shape[1]
-            
-            with torch.no_grad():
-                # Generate with real logits output
-                outputs = self.model.generate(
-                    pixel_values=pixel_values,
-                    max_length=T,
-                    output_logits=True,
-                    return_dict_in_generate=True
-                )
+            # Training mode - Map COCO -> Text -> HuggingFace IDs
+            if captions.dim() == 3:
+                captions = captions[:, 0, :]
                 
-                # outputs.logits is a tuple of tensors, one per generated token
-                # Each tensor is [B, vocab_size]
-                if hasattr(outputs, 'logits') and outputs.logits is not None:
-                    # Stack logits: [num_tokens, B, model_vocab] -> [B, num_tokens, model_vocab]
-                    stacked_logits = torch.stack(outputs.logits, dim=1)
-                    
-                    # Map model vocab to our vocab if sizes differ
-                    if stacked_logits.shape[-1] != self.vocab_size:
-                        # Truncate or pad to match our vocab size
-                        if stacked_logits.shape[-1] > self.vocab_size:
-                            real_logits = stacked_logits[:, :, :self.vocab_size]
-                        else:
-                            real_logits = torch.zeros(B, stacked_logits.shape[1], self.vocab_size, device=self.device)
-                            real_logits[:, :, :stacked_logits.shape[-1]] = stacked_logits
-                    else:
-                        real_logits = stacked_logits
-                    
-                    # Ensure sequence length matches target
-                    if real_logits.shape[1] < T - 1:
-                        padded = torch.zeros(B, T - 1, self.vocab_size, device=self.device)
-                        padded[:, :real_logits.shape[1], :] = real_logits
-                        real_logits = padded
-                    elif real_logits.shape[1] > T - 1:
-                        real_logits = real_logits[:, :T-1, :]
-                    
-                    return real_logits
-                else:
-                    # Fallback: use generated token IDs to create one-hot logits
-                    generated_ids = outputs.sequences
-                    logits = torch.zeros(B, T-1, self.vocab_size, device=self.device)
-                    for b in range(B):
-                        for t in range(min(generated_ids.shape[1], T-1)):
-                            token_id = generated_ids[b, t].item()
-                            if token_id < self.vocab_size:
-                                logits[b, t, token_id] = 100.0
-                    return logits
+            raw_texts = self._ids_to_text(captions)
+            
+            # Use HuggingFace processor to generate correct token IDs
+            text_inputs = self.processor(
+                text=raw_texts, 
+                return_tensors="pt", 
+                padding=True, 
+                truncation=True, 
+                max_length=40
+            )
+            
+            input_ids = text_inputs.input_ids.to(self.device)
+            attention_mask = text_inputs.attention_mask.to(self.device)
+            labels = input_ids.clone()
+            labels[labels == self.processor.tokenizer.pad_token_id] = -100  # Default HuggingFace ignore index
+            
+            outputs = self.model(
+                pixel_values=pixel_values,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+                return_dict=True
+            )
+            return outputs.loss
         else:
             # Inference mode
+            # Inference mode - Generate HF Text -> Map to COCO IDs
             with torch.no_grad():
-                outputs = self.model.generate(
+                generated_ids = self.model.generate(
                     pixel_values=pixel_values,
-                    max_length=50,
-                    output_logits=True,
-                    return_dict_in_generate=True
+                    max_length=30
                 )
                 
-                if hasattr(outputs, 'logits') and outputs.logits is not None:
-                    stacked_logits = torch.stack(outputs.logits, dim=1)
+            # Decode HF tokens to strings
+            generated_texts = self.processor.batch_decode(generated_ids, skip_special_tokens=True)
+            
+            # Reconstruct COCO ID sequences
+            max_len = 0
+            batch_token_ids = []
+            
+            for text in generated_texts:
+                try:
+                    from nltk.tokenize import word_tokenize
+                    words = word_tokenize(text.lower())
+                except:
+                    words = text.lower().split()
                     
-                    if stacked_logits.shape[-1] != self.vocab_size:
-                        if stacked_logits.shape[-1] > self.vocab_size:
-                            real_logits = stacked_logits[:, :, :self.vocab_size]
-                        else:
-                            real_logits = torch.zeros(B, stacked_logits.shape[1], self.vocab_size, device=self.device)
-                            real_logits[:, :, :stacked_logits.shape[-1]] = stacked_logits
-                    else:
-                        real_logits = stacked_logits
-                    
-                    return real_logits
-                else:
-                    generated_ids = outputs.sequences
-                    max_len = generated_ids.shape[1]
-                    logits = torch.zeros(B, max_len, self.vocab_size, device=self.device)
-                    for b in range(B):
-                        for t in range(max_len):
-                            token_id = generated_ids[b, t].item()
-                            if token_id < self.vocab_size:
-                                logits[b, t, token_id] = 100.0
-                    return logits
+                token_ids = (
+                    [self.word2idx.get('<SOS>', 1)]
+                    + [self.word2idx.get(w, self.word2idx.get('<UNK>', 0)) for w in words]
+                    + [self.word2idx.get('<EOS>', 2)]
+                )
+                batch_token_ids.append(token_ids)
+                max_len = max(max_len, len(token_ids))
+                
+            if max_len == 0:
+                max_len = 1
+                
+            logits = torch.zeros(B, max_len, self.vocab_size, device=self.device)
+            for b, token_ids in enumerate(batch_token_ids):
+                for t, tid in enumerate(token_ids):
+                    if tid < self.vocab_size:
+                        logits[b, t, tid] = 100.0
+            return logits
 
     def train_setup(self, prm):
         """Setup training configuration."""
@@ -180,34 +223,34 @@ class Net(nn.Module):
         trainable_params = [p for p in self.parameters() if p.requires_grad]
         self.optimizer = torch.optim.AdamW(trainable_params, lr=lr)
         
-        # Mixed precision scaler
-        self.scaler = torch.amp.GradScaler('cuda', enabled=self.device.type == 'cuda')
+        # Mixed precision scaler removed for float32 stability
 
     def learn(self, train_data):
         """
         Training loop for one epoch.
-        
-        Args:
-            train_data: DataLoader with (images, captions) batches
         """
-        self.model.eval()  # Keep model in eval mode for zero-shot
+        self.model.train()  # Switch to train mode
         total_loss = 0.0
         num_batches = 0
+        
+        # Identify trainable params for clipping
+        trainable_params = [p for p in self.parameters() if p.requires_grad]
         
         for images, captions in train_data:
             images = images.to(self.device)
             captions = captions.to(self.device)
             
-            # Forward pass with real logits
-            logits = self.forward(images, captions)
+            # Forward pass explicitly computes loss inside the wrapper
+            loss = self.forward(images, captions)
             
-            # Compute loss
-            targets = captions[:, 1:captions.size(1)]
-            if logits.shape[1] >= targets.shape[1]:
-                logits = logits[:, :targets.shape[1], :]
-            loss = self.criteria[0](logits.reshape(-1, self.vocab_size), targets.reshape(-1))
+            # Backpropagation
+            self.optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
+            self.optimizer.step()
             
             total_loss += loss.item()
             num_batches += 1
         
-        return total_loss / max(num_batches, 1)
+        avg_loss = total_loss / max(num_batches, 1)
+        return 0.0, avg_loss

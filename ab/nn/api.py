@@ -48,64 +48,6 @@ def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None
                                         sql=sql, nn_prefixes=nn_prefixes, unique_nn=unique_nn, include_nn_stats=include_nn_stats)
     return DataFrame.from_records(dt)
 
-def expand_prm_columns(df: DataFrame) -> DataFrame:
-    """Turn the ``prm`` dict column into one column per hyperparameter name (wider table)."""
-    if df.empty or "prm" not in df.columns:
-        return df
-    rows = [p if isinstance(p, dict) else {} for p in df["prm"]]
-    expanded = DataFrame(rows)
-    rest = df.drop(columns=["prm"])
-    rename = {c: f"prm_{c}" for c in expanded.columns if c in rest.columns}
-    if rename:
-        expanded = expanded.rename(columns=rename)
-    return concat([rest.reset_index(drop=True), expanded.reset_index(drop=True)], axis=1)
-
-
-
-@functools.lru_cache(maxsize=10)
-def data_withnonnullvalue(
-        only_best_accuracy=False,
-        task=None,
-        dataset=None,
-        metric=None,
-        nn=None,
-        epoch=None,
-        max_rows=None,
-        sql: Optional[JoinConf] = None,
-        nn_prefixes=None,
-        unique_nn=False,
-        include_nn_stats=False,
-        require_nn_stat_nonnull: tuple[str, ...] = (),
-        require_prm_nonnull: tuple[str, ...] = (),
-        prm_as_columns: bool = False,
-) -> DataFrame:
-    """
-    Same filters as data(), with optional non-NULL requirements on nn_stat columns and/or
-    prm hyperparameter names. See :ref:`ab.nn.util.db.Read.data_withnonnullvalue()`.
-
-    If prm_as_columns is True, the ``prm`` dict is expanded so each hyperparameter name
-    becomes its own column (names that clash with existing columns get a ``prm_`` prefix).
-    """
-    dt: tuple[dict, ...] = DB_Read.data_withnonnullvalue(
-        only_best_accuracy,
-        task=task,
-        dataset=dataset,
-        metric=metric,
-        nn=nn,
-        epoch=epoch,
-        max_rows=max_rows,
-        sql=sql,
-        nn_prefixes=nn_prefixes,
-        unique_nn=unique_nn,
-        include_nn_stats=include_nn_stats,
-        require_nn_stat_nonnull=require_nn_stat_nonnull,
-        require_prm_nonnull=require_prm_nonnull,
-    )
-    df = DataFrame.from_records(dt)
-    if prm_as_columns:
-        df = expand_prm_columns(df)
-    return df
-
 
 @functools.lru_cache(maxsize=10)
 def run_data(model_name=None, device_type=None, max_rows=None) -> DataFrame:

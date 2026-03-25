@@ -257,8 +257,9 @@ class Train:
                     loss = self.loss_fn(outputs, labels)
                     total_loss += loss.item()
                     num_batches += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[_compute_loss] Exception during validation: {e}")
+                    raise e
 
         return total_loss / max(num_batches, 1)
 
@@ -312,7 +313,15 @@ class Train:
 
             # Training phase
             self.model.train()
-            self.model.learn(DataRoll(self.train_loader, epoch_limit_minutes))
+            learn_res = self.model.learn(DataRoll(self.train_loader, epoch_limit_minutes))
+            if isinstance(learn_res, (tuple, list)) and len(learn_res) >= 2:
+                train_accuracy, train_loss = learn_res[0], learn_res[1]
+            else:
+                train_accuracy, train_loss = 0.0, learn_res
+            # Standard path fallback
+            if train_loss is None or train_loss == 0.0:
+                train_loss = self._compute_loss(self.train_loader)
+                train_accuracy = self._compute_accuracy(self.train_loader)
 
             # Compute gradient norm after training
             grad_norm = compute_gradient_norm(self.model)
@@ -321,14 +330,13 @@ class Train:
             lr_now = get_current_lr(optimizer)
 
             # Compute losses
-            train_loss = self._compute_loss(self.train_loader)
             test_loss = self._compute_loss(self.test_loader)
 
             # Compute accuracies
-            train_accuracy = self._compute_accuracy(self.train_loader)
-            test_accuracy = self.eval(self.test_loader)
+            accuracy, all_metric_results = self.eval(self.test_loader)
 
-            accuracy = test_accuracy[0]
+            # Use primary metric value from dict if available, otherwise keep scalar from eval()
+            accuracy = all_metric_results.get(self.primary_metric, accuracy)
             accuracy = 0.0 if math.isnan(accuracy) or math.isinf(accuracy) else accuracy
             duration = time.time_ns() - start_time
             epoch_duration = (time.time_ns() - epoch_start_time) / 1e9  # seconds
@@ -400,7 +408,9 @@ class Train:
                                       # Current resource usage
                                       | resource_usage
                                       # GPU memory (if available)
-                                      | ({'gpu_memory_kb': get_gpu_memory_kb()} if get_gpu_memory_kb else {}))
+                                      | ({'gpu_memory_kb': get_gpu_memory_kb()} if get_gpu_memory_kb() is not None else {})
+                                      # Multi-metrics implementations
+                                      | {f'metric_{k}': v for k, v in all_metric_results.items()})
 
             if self.save_to_db:
                 if self.is_code:  # We don't want the filename to contain full codes

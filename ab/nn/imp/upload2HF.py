@@ -213,7 +213,7 @@ def main():
             prm = model_entry.get("prm", {})
             
             # --- EXTRACT TRANSFORM STRING ---
-            transform_val = prm.get("transform", "default")
+            transform_val = prm.get("transform")
             target_h = get_resolution_from_transform_file(transform_val, transforms_dir)
 
             if temp_dl_dir.exists(): shutil.rmtree(temp_dl_dir)

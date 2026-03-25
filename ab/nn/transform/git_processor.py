@@ -8,6 +8,8 @@ for image captioning.
 from torchvision import transforms
 
 try:
+    import os
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
     from transformers import GitProcessor
     _processor = GitProcessor.from_pretrained("microsoft/git-large-coco")
 except Exception:

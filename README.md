@@ -61,14 +61,14 @@ For Windows:
    python -m pip install --upgrade pip
    ```
 
-It is assumed that CUDA 12.6 is installed; otherwise, consider replacing 'cu126' with the appropriate version. Some neural network training tasks require GPUs with at least 24 GB of memory.
+It is assumed that CUDA 13.0 is installed; otherwise, consider replacing 'cu130' with the appropriate version. Some neural network training tasks require GPUs with at least 24 GB of memory.
 
 ## Environment for NN Dataset Contributors
 ### Pip package manager
 Create a virtual environment, activate it, and run the following command to install all the project dependencies:
 ```bash
 python -m pip install --upgrade pip
-pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu126
+pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
 ```
 
 ## Contribution
@@ -110,15 +110,15 @@ rm -rf db
 ```
 Installing the stable version:
 ```bash
-pip install --no-cache-dir nn-dataset --upgrade --extra-index-url https://download.pytorch.org/whl/cu126
+pip install --no-cache-dir nn-dataset --upgrade --extra-index-url https://download.pytorch.org/whl/cu130
 ```
 Installing from GitHub to get the most recent code and statistics updates:
 ```bash
-pip install git+https://github.com/ABrain-One/nn-dataset --upgrade --force --extra-index-url https://download.pytorch.org/whl/cu126
+pip install git+https://github.com/ABrain-One/nn-dataset --upgrade --force --extra-index-url https://download.pytorch.org/whl/cu130
 ```
 Adding functionality to export data to Excel files and generate plots for <a href='https://github.com/ABrain-One/nn-stat'>analyzing neural network performance</a>:
 ```bash
-pip install nn-dataset[stat] --upgrade --extra-index-url https://download.pytorch.org/whl/cu126
+pip install nn-dataset[stat] --upgrade --extra-index-url https://download.pytorch.org/whl/cu130
 ```
 and export/generate:
 ```bash
