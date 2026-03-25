@@ -731,3 +731,4 @@ def unique_configs(patterns: list[tuple[str, ...]]) -> list[list[str]]:
             rows = [tuple(pattern)]
         matched_configs = matched_configs + rows
     return list(set(matched_configs))
+    
