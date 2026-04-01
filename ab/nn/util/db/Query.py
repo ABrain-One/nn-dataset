@@ -514,6 +514,16 @@ def join_nn_query_legacy(sql: JoinConf, limit_clause: Optional[str], cur, includ
         q_list.append(f'd2.accuracy > d1.accuracy')
     where_clause = 'WHERE ' + ' AND '.join(q_list) if q_list else ''
 
+    # For smoke path (no enhance_nn, no same_columns) any different-nn row satisfies
+    # the constraint — no ORDER BY needed.  Without ORDER BY, SQLite does a forward
+    # sequential scan and finds a qualifying row in 1-2 rows instead of walking the
+    # full B-tree index, cutting the correlated-subquery cost to near-zero.
+    order_by_clause = (
+        "ORDER BY d2.accuracy DESC, d2.epoch ASC, d2.nn ASC, d2.id ASC"
+        if (sql.enhance_nn or sql.same_columns)
+        else ""
+    )
+
     nn_stats_select = ""
     nn_stats_join = ""
     if include_nn_stats:
@@ -550,7 +560,7 @@ WITH matches AS (
           SELECT d2.id
           FROM {tmp_data} d2
           {where_clause}
-          ORDER BY d2.accuracy DESC, d2.epoch ASC, d2.nn ASC, d2.id ASC
+          {order_by_clause}
           LIMIT {sql.num_joint_nns - 1}
       ) AS matched_id
   FROM {tmp_data} d1
