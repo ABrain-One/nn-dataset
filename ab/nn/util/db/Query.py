@@ -424,7 +424,56 @@ def join_nn_query_sql_Var_num(sql: JoinConf,limit_clause:Optional[str], cur: Cur
 
     return fill_hyper_prm(cur, num_joint_nns=1)
 
-def join_nn_query_legacy(sql: JoinConf,limit_clause:Optional[str], cur):
+
+def _fetch_code_lookup(cur: Cursor, table: str, names: set) -> dict:
+    if not names:
+        return {}
+    lookup = {}
+    ordered_names = sorted(names)
+    chunk_size = 900
+    for start in range(0, len(ordered_names), chunk_size):
+        chunk = ordered_names[start:start + chunk_size]
+        placeholders = ', '.join(['?'] * len(chunk))
+        cur.execute(f"SELECT name, code, id FROM {table} WHERE name IN ({placeholders})", chunk)
+        for name, code, uid in cur.fetchall():
+            lookup[name] = (code, uid)
+    return lookup
+
+
+def _attach_legacy_code_fields(cur: Cursor, results: list) -> None:
+    if not results:
+        return
+    nn_map = _fetch_code_lookup(
+        cur, "nn",
+        {r["nn"] for r in results if r.get("nn")} | {r["nn_2"] for r in results if r.get("nn_2")},
+    )
+    metric_map = _fetch_code_lookup(
+        cur, "metric",
+        {r["metric"] for r in results if r.get("metric")} | {r["metric_2"] for r in results if r.get("metric_2")},
+    )
+    transform_map = _fetch_code_lookup(
+        cur, "transform",
+        {r.get("transform_name") for r in results if r.get("transform_name")} |
+        {r.get("transform_name_2") for r in results if r.get("transform_name_2")},
+    )
+    for rec in results:
+        if rec.get("nn") in nn_map:
+            rec["nn_code"], rec["nn_id"] = nn_map[rec["nn"]]
+        if rec.get("nn_2") in nn_map:
+            rec["nn_code_2"], _ = nn_map[rec["nn_2"]]
+        if rec.get("metric") in metric_map:
+            rec["metric_code"], rec["metric_id"] = metric_map[rec["metric"]]
+        if rec.get("metric_2") in metric_map:
+            rec["metric_code_2"], _ = metric_map[rec["metric_2"]]
+        if rec.get("transform_name") in transform_map:
+            rec["transform_code"], rec["transform_id"] = transform_map[rec["transform_name"]]
+        if rec.get("transform_name_2") in transform_map:
+            rec["transform_code_2"], _ = transform_map[rec["transform_name_2"]]
+        rec.pop("transform_name", None)
+        rec.pop("transform_name_2", None)
+
+
+def join_nn_query_legacy(sql: JoinConf, limit_clause: Optional[str], cur, include_nn_stats: bool = False):
     if _is_real_table(cur, tmp_data):
         cur.execute(f'CREATE INDEX IF NOT EXISTS i_id ON {tmp_data}(id)')
 
@@ -443,6 +492,17 @@ def join_nn_query_legacy(sql: JoinConf,limit_clause:Optional[str], cur):
                 f"CREATE INDEX IF NOT EXISTS idx_tmp_join ON {tmp_data}({t})"
             )
 
+        # Pure diff-only path (no equality constraints, no accuracy threshold):
+        # the correlated subquery ORDER BY is (accuracy DESC, epoch ASC, ...).
+        # Without a covering index this is O(N²); with it SQLite stops after
+        # the first 1-2 rows that satisfy the inequality condition → O(N).
+        # Skip when same_columns exist: idx_tmp_join already covers those queries.
+        if not sql.same_columns and not sql.enhance_nn:
+            cur.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_tmp_acc_order "
+                f"ON {tmp_data}(accuracy DESC, epoch ASC, id ASC)"
+            )
+
     q_list = []
     for c in (sql.same_columns or ()):
         q_list.append(f'd2.{c} = d1.{c}')
@@ -454,32 +514,72 @@ def join_nn_query_legacy(sql: JoinConf,limit_clause:Optional[str], cur):
         q_list.append(f'd2.accuracy > d1.accuracy')
     where_clause = 'WHERE ' + ' AND '.join(q_list) if q_list else ''
 
+    nn_stats_select = ""
+    nn_stats_join = ""
+    if include_nn_stats:
+        nn_stats_select = """
+    ns.total_params AS nn_total_params, ns.trainable_params AS nn_trainable_params,
+    ns.frozen_params AS nn_frozen_params, ns.total_layers AS nn_total_layers,
+    ns.leaf_layers AS nn_leaf_layers, ns.max_depth AS nn_max_depth,
+    ns.flops AS nn_flops, ns.model_size_mb AS nn_model_size_mb,
+    ns.buffer_size_mb AS nn_buffer_size_mb, ns.total_memory_mb AS nn_total_memory_mb,
+    ns.dropout_count AS nn_dropout_count, ns.has_attention AS nn_has_attention,
+    ns.has_residual_connections AS nn_has_residual, ns.is_resnet_like AS nn_is_resnet_like,
+    ns.is_vgg_like AS nn_is_vgg_like, ns.is_inception_like AS nn_is_inception_like,
+    ns.is_densenet_like AS nn_is_densenet_like, ns.is_unet_like AS nn_is_unet_like,
+    ns.is_transformer_like AS nn_is_transformer_like, ns.is_mobilenet_like AS nn_is_mobilenet_like,
+    ns.is_efficientnet_like AS nn_is_efficientnet_like, ns.code_length AS nn_code_length,
+    ns.num_classes_defined AS nn_num_classes, ns.num_functions_defined AS nn_num_functions,
+    ns.uses_sequential AS nn_uses_sequential, ns.uses_modulelist AS nn_uses_modulelist,
+    ns.uses_moduledict AS nn_uses_moduledict, ns.meta_json AS nn_stats_meta,
+    ns.error AS nn_stats_error,
+"""
+        nn_stats_join = f"LEFT JOIN nn_stat ns ON m.nn = ns.nn_name AND m.prm_id = ns.prm_id"
+
     cur.execute(f'''
 WITH matches AS (
   SELECT
-      d1.*,
+      d1.id, d1.task, d1.dataset, d1.metric,
+      NULL AS metric_code, NULL AS metric_id,
+      d1.nn, NULL AS nn_code, NULL AS nn_id,
+      d1.epoch, d1.accuracy, d1.duration,
+      d1.prm AS prm_id,
+      NULL AS transform_code, NULL AS transform_id,
+      d1.transform AS transform_name,
       (
           SELECT d2.id
           FROM {tmp_data} d2
           {where_clause}
+          ORDER BY d2.accuracy DESC, d2.epoch ASC, d2.nn ASC, d2.id ASC
           LIMIT {sql.num_joint_nns - 1}
       ) AS matched_id
   FROM {tmp_data} d1
+  {limit_clause}
 )
 SELECT
-    m.*,
+    m.id, m.task, m.dataset, m.metric,
+    m.metric_code, m.metric_id,
+    m.nn, m.nn_code, m.nn_id,
+    m.epoch, m.accuracy, m.duration, m.prm_id,
+    m.transform_code, m.transform_id, m.transform_name,
+    {nn_stats_select}
     d2.nn       AS nn_2,
-    d2.nn_code  AS nn_code_2,
-    d2.metric AS metric_2,
-    d2.metric_code  AS metric_code_2,
-    d2.transform_code  AS transform_code_2,
-    d2.prm_id AS prm_id_2,
+    NULL        AS nn_code_2,
+    d2.metric   AS metric_2,
+    NULL        AS metric_code_2,
+    NULL        AS transform_code_2,
+    d2.prm      AS prm_id_2,
     d2.accuracy AS accuracy_2,
-    d2.duration AS duration_2,    
-    d2.epoch AS epoch_2    
+    d2.duration AS duration_2,
+    d2.epoch    AS epoch_2,
+    d2.transform AS transform_name_2
 FROM matches m
-LEFT JOIN {tmp_data} d2 ON d2.id = m.matched_id{limit_clause}''')
-    return fill_hyper_prm(cur, sql.num_joint_nns)
+LEFT JOIN {tmp_data} d2 ON d2.id = m.matched_id
+{nn_stats_join}
+{limit_clause}''')
+    results = fill_hyper_prm(cur, sql.num_joint_nns, include_nn_stats=include_nn_stats)
+    _attach_legacy_code_fields(cur, results)
+    return results
 
 #------Hyperparameter assembly------
 def fill_hyper_prm(cur: Cursor, num_joint_nns=1, include_nn_stats=False) -> list[dict]:
@@ -487,13 +587,27 @@ def fill_hyper_prm(cur: Cursor, num_joint_nns=1, include_nn_stats=False) -> list
     if not rows: return []  # short-circuit for an empty result
     columns = [c[0] for c in cur.description]
 
-    # Bulk-load *all* hyperparameters for the retrieved stat_ids
+    # Bulk-load only the hyperparameters needed for the retrieved result rows.
     from collections import defaultdict
     prm_by_uid: dict[str, dict[str, int | float | str]] = defaultdict(dict)
 
-    cur.execute(f"SELECT uid, name, value FROM prm")
-    for uid, name, value in cur.fetchall():
-        prm_by_uid[uid][name] = value
+    col_idx = {name: idx for idx, name in enumerate(columns)}
+    needed_prm_ids: set = set()
+    for col in ["prm_id", *[f"prm_id_{i}" for i in range(2, num_joint_nns + 1)]]:
+        idx = col_idx.get(col)
+        if idx is not None:
+            for row in rows:
+                uid = row[idx]
+                if uid is not None:
+                    needed_prm_ids.add(uid)
+    if needed_prm_ids:
+        chunk_size = 900
+        for i in range(0, len(needed_prm_ids), chunk_size):
+            chunk = sorted(needed_prm_ids)[i:i + chunk_size]
+            placeholders = ",".join("?" for _ in chunk)
+            cur.execute(f"SELECT uid, name, value FROM prm WHERE uid IN ({placeholders})", chunk)
+            for uid, name, value in cur.fetchall():
+                prm_by_uid[uid][name] = value
 
     # Assemble the final result
     results: list[dict] = []

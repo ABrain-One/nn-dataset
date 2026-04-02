@@ -36,6 +36,18 @@ def query_cols_rows(q) -> tuple[list, list]:
     return columns, rows
 
 
+def _is_sql_legacy_join_path(sql) -> bool:
+    """Legacy pairwise/diff join path: similarity_mode=none, not the pure variable-N path."""
+    if not sql or not isinstance(sql, JoinConf):
+        return False
+    if sql.similarity_mode != "none":
+        return False
+    # Pure variable-N path has no same/diff columns — it uses a window-function query
+    if int(sql.num_joint_nns) > 1 and not sql.same_columns and not sql.diff_columns:
+        return False
+    return True
+
+
 def code(table: str, nm: str) -> str:
     return query_rows(f'SELECT code FROM {table} where name = ?', [nm])[0][0]
 
@@ -172,7 +184,7 @@ def data(only_best_accuracy: bool = False,
             LEFT JOIN nn       n ON s.nn = n.name
             LEFT JOIN metric   m ON s.metric = m.name
             LEFT JOIN transform t ON s.transform = t.name
-            LEFT JOIN nn_stat ns ON s.nn = ns.nn_name
+            LEFT JOIN nn_stat ns ON s.nn = ns.nn_name AND s.prm = ns.prm_id
         """
     else:
         select_clause = """
@@ -195,15 +207,19 @@ def data(only_best_accuracy: bool = False,
     conn = None
     try:
         conn, cur = sql_conn()
-        if sql: cur.execute(f'DROP TABLE IF EXISTS {tmp_data}')
-        cur.execute(f'CREATE TEMP TABLE {tmp_data} AS {base_query} ORDER BY RANDOM()' if sql else
-                    f'''{base_query}
+        if _is_sql_legacy_join_path(sql):
+            cur.execute(f'DROP TABLE IF EXISTS {tmp_data}')
+            cur.execute(f'CREATE TEMP TABLE {tmp_data} AS SELECT s.* FROM {source} s', params)
+            results = join_nn_query_legacy(sql, limit_clause, cur, include_nn_stats=include_nn_stats)
+        elif sql:
+            cur.execute(f'DROP TABLE IF EXISTS {tmp_data}')
+            cur.execute(f'CREATE TEMP TABLE {tmp_data} AS {base_query}', params)
+            results = join_nn_query(sql, limit_clause, cur)
+        else:
+            cur.execute(f'''{base_query}
                         ORDER BY s.task, s.dataset, s.metric, s.nn, s.epoch
                         {limit_clause}''',
-                    params)
-        if sql:
-            results = join_nn_query(sql,limit_clause, cur)
-        else:
+                        params)
             results = fill_hyper_prm(cur, include_nn_stats=include_nn_stats)
         return tuple(results)
     finally:
