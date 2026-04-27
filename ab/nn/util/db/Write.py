@@ -1,4 +1,12 @@
 import sys
+import threading
+from contextlib import contextmanager
+from functools import wraps
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - fcntl is Unix-only.
+    fcntl = None
 
 from tqdm import tqdm
 
@@ -9,6 +17,48 @@ from ab.nn.util.Const import nn_stat_table, stat_run_tflite_fp32_dir, stat_run_t
 from ab.nn.util.db.build_nn_similarity import upsert_minhash, upsert_minhash_batch
 
 
+_DB_WRITE_LOCK_MUTEX = threading.RLock()
+_DB_WRITE_LOCK_DEPTH = 0
+_DB_WRITE_LOCK_FILE = None
+
+
+@contextmanager
+def _db_write_lock():
+    global _DB_WRITE_LOCK_DEPTH, _DB_WRITE_LOCK_FILE
+
+    with _DB_WRITE_LOCK_MUTEX:
+        if _DB_WRITE_LOCK_DEPTH == 0:
+            lock_path = db_dir / 'ab.nn.db.lock'
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            _DB_WRITE_LOCK_FILE = open(lock_path, 'a', encoding='utf-8')
+            if fcntl is not None:
+                fcntl.flock(_DB_WRITE_LOCK_FILE.fileno(), fcntl.LOCK_EX)
+        _DB_WRITE_LOCK_DEPTH += 1
+
+        try:
+            yield
+        finally:
+            _DB_WRITE_LOCK_DEPTH -= 1
+            if _DB_WRITE_LOCK_DEPTH == 0:
+                lock_file = _DB_WRITE_LOCK_FILE
+                _DB_WRITE_LOCK_FILE = None
+                if lock_file is not None:
+                    try:
+                        if fcntl is not None:
+                            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    finally:
+                        lock_file.close()
+
+
+def _serialized_db_write(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        with _db_write_lock():
+            return func(*args, **kwargs)
+    return wrapper
+
+
+@_serialized_db_write
 def init_population():
     if not db_file.exists():
         if stat_dir.exists():
@@ -93,6 +143,7 @@ def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
     """, (uuid4(all_values), *all_values))
 
 
+@_serialized_db_write
 def json_train_to_db():
     """
     Reload all statistics into the database for all subconfigs and epochs.
@@ -126,6 +177,7 @@ def json_train_to_db():
     print("All statistics reloaded successfully.")
 
 
+@_serialized_db_write
 def json_nn_to_db():
     """
     Import NN statistics from JSON files in stat/nn into the `nn_stat` table.
@@ -191,6 +243,7 @@ def json_nn_to_db():
     print(f"NN statistics import complete: {success_count} succeeded, {error_count} failed.")
 
 
+@_serialized_db_write
 def save_results(config_ext: tuple[str, str, str, str, int], prm: dict):
     """
     Save Optuna study results for a given model to SQLite DB
@@ -206,6 +259,7 @@ def save_results(config_ext: tuple[str, str, str, str, int], prm: dict):
     close_conn(conn)
 
 
+@_serialized_db_write
 def save_nn(nn_code: str, task: str, dataset: str, metric: str, epoch: int, prm: dict, force_name = None):
     conn, cursor = sql_conn()
     nn = code_to_db(cursor, 'nn', code=nn_code, force_name=force_name)
@@ -215,6 +269,7 @@ def save_nn(nn_code: str, task: str, dataset: str, metric: str, epoch: int, prm:
     return nn
 
 
+@_serialized_db_write
 def save_nn_stat(nn_name: str, prm_id: str, stats: dict):
     """
     Save NN statistics to the database.
@@ -380,6 +435,7 @@ def save_nn_stat(nn_name: str, prm_id: str, stats: dict):
         return False
 
 
+@_serialized_db_write
 def json_run_tflite_to_db():
     """
     Import runtime analytics from tflite JSON files in stat/run/tflite/fp32 and stat/run/tflite/int8.
@@ -530,6 +586,7 @@ def json_run_tflite_to_db():
     close_conn(conn)
 
 
+@_serialized_db_write
 def json_prun_to_db():
     """
     Load pruning analytics from all_models.json files in stat_run_pt_dir.
