@@ -75,7 +75,7 @@ class Net(nn.Module):
         self.prm = prm
         self.encoder = FrozenBlip2Encoder(device)
         self.decoder = CaptionDecoder(q_former_hidden=self.encoder.hidden_size, device=device)
-        self.criterion = lambda outputs, labels: torch.tensor(0.0, device=self.device, requires_grad=True)
+        self.criterion = lambda outputs, labels: outputs # Generative loss is already computed in forward()
         self.idx2word = None
         self.word2idx = None
         self.optimizer = None
