@@ -95,7 +95,7 @@ class Testing(unittest.TestCase):
     # ------------------------------------------------------------------
     def test_data_join(self):
         df = api.data(only_best_accuracy=True, task="img-classification",
-                        nn_prefixes=('rag-',), max_rows=500, include_nn_stats=True,
+                        nn_prefixes=('rag-',), max_rows=500, #, include_nn_stats=True # too slow
                         sql=JoinConf(num_joint_nns=2,
                                      same_columns=('task', 'dataset', 'metric', 'epoch'),
                                      diff_columns=('nn',),
