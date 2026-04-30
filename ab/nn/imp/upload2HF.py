@@ -40,8 +40,6 @@ for p in [out_dir, data_root, temp_dl_dir]:
 import torch
 import torchvision
 import torchvision.transforms as T
-import ai_edge_torch
-import tensorflow as tf
 from huggingface_hub import hf_hub_download, list_repo_files, upload_file, create_repo
 
 # ------------------------
@@ -173,8 +171,21 @@ def main():
     ap.add_argument("--push-hf", action="store_true")
     ap.add_argument("--resume", action="store_true", default=True)
     ap.add_argument("--hf-token", default=DEFAULT_HF_TOKEN)
+    ap.add_argument("--format", choices=["tflite", "onnx"], default="tflite")
     args = ap.parse_args()
     if args.hf_token: os.environ["HF_TOKEN"] = args.hf_token
+
+    # ------------------------
+    # ROUTE TO ONNX PIPELINE
+    # ------------------------
+    if args.format == "onnx":
+        from onnx_pipeline import run_onnx_pipeline
+        run_onnx_pipeline(args, dataset_root)
+        return
+
+    # --- IMPORT TFLITE ONLY WHEN NEEDED ---
+    import ai_edge_torch
+    import tensorflow as tf
 
     if args.push_hf: create_repo(TARGET_REPO, repo_type="model", exist_ok=True)
 
