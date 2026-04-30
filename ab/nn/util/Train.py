@@ -133,6 +133,7 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
                         prms[prm] = trial.suggest_float(prm, 0.0, 1.0)
         prms['epoch_max'] = epoch_max
         batch = add_categorical_if_absent(trial, prms, 'batch', lambda: [max_batch(x) for x in range(min_batch_binary_power, max_batch_binary_power_local + 1)])
+        batch = max(1, int(batch)) # Ensure batch is at least 1 and an integer to prevent indexing errors
         transform_name = add_categorical_if_absent(trial, prms, 'transform', supported_transformers, default=transform)
 
         prm_str = ''
