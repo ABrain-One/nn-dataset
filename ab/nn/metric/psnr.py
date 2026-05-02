@@ -66,7 +66,7 @@ class Net:
         
         # Normalize by 48 dB (professor's requirement)
         # This ensures metric is in [0.0, 1.0] range
-        normalized_psnr = max(0.0, min(raw_psnr / 48.0, 1.0))
+        normalized_psnr = min(raw_psnr / 48.0, 1.0)
         
         return normalized_psnr
     

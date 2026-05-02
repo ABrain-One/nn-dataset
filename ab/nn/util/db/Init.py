@@ -2,12 +2,14 @@ import sqlite3
 from os import makedirs
 from pathlib import Path
 
-from ab.nn.util.Const import param_tables, db_file, db_dir, main_tables, code_tables, dependent_tables, all_tables, index_colum, run_table, nn_stat_table
+from ab.nn.util.Const import param_tables, db_file, db_dir, main_tables, code_tables, dependent_tables, all_tables, index_colum, run_table, nn_stat_table, tflite_table, prun_table
+from ab.nn.util.db.build_nn_similarity import jaccard_blobs
 
 
 def sql_conn():
     conn = sqlite3.connect(db_file)
     conn.row_factory = sqlite3.Row  # Enable row access
+    conn.create_function("jaccard_blobs", 2, jaccard_blobs) #Register Scalar UDF onto connection
     return conn, conn.cursor()
 
 
@@ -115,12 +117,52 @@ def init_db():
         in_dim_3 INTEGER,
         
         device_analytics_json TEXT,
+        precision_type TEXT,
         FOREIGN KEY (model_name) REFERENCES nn (name) ON DELETE CASCADE
     )
     """)
     # Indexes for mobile analytics
     cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{run_table}_model ON {run_table} (model_name);")
     cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{run_table}_device ON {run_table} (device_type);")
+
+    # Create TFLite model metadata table
+    cursor.execute(f"""
+    CREATE TABLE IF NOT EXISTS tflite (
+        id TEXT PRIMARY KEY,
+        model_name TEXT NOT NULL,
+        accuracy REAL,
+        transform TEXT,
+        precision_type TEXT,
+        FOREIGN KEY (model_name) REFERENCES nn (name) ON DELETE CASCADE
+    )
+    """)
+    # Indexes for tflite table
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_tflite_model ON tflite (model_name);")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_tflite_precision ON tflite (precision_type);")
+
+    # Create Pruning analytics table
+    cursor.execute(f"""
+    CREATE TABLE IF NOT EXISTS {prun_table} (
+        id TEXT PRIMARY KEY,
+        model_name TEXT NOT NULL,
+        pruning_method TEXT NOT NULL,
+        task_dataset TEXT NOT NULL,
+        status TEXT,
+        accuracy REAL,
+        duration INTEGER,
+        pruning_ratio REAL,
+        params_before INTEGER,
+        params_after INTEGER,
+        params_removed INTEGER,
+        model_size_before_kb REAL,
+        model_size_after_kb REAL,
+        FOREIGN KEY (model_name) REFERENCES nn (name) ON DELETE CASCADE
+    )
+    """)
+    # Indexes for prun table
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{prun_table}_model ON {prun_table} (model_name);")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{prun_table}_method ON {prun_table} (pruning_method);")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{prun_table}_config ON {prun_table} (pruning_method, task_dataset);")
 
     # Create NN statistics table
     cursor.execute(f"""
@@ -160,9 +202,39 @@ def init_db():
         FOREIGN KEY (nn_name) REFERENCES nn (name) ON DELETE CASCADE
     )
     """)
+
     # Indexes for NN statistics
     cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{nn_stat_table}_nn ON {nn_stat_table} (nn_name);")
     cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{nn_stat_table}_prm ON {nn_stat_table} (prm_id);")
+
+    # Create NN code MinHash signatures table (DB-first diversity)
+    cursor.execute(f"""
+    CREATE TABLE IF NOT EXISTS nn_minhash (
+        nn TEXT PRIMARY KEY,
+        num_perm INTEGER NOT NULL,
+        shingle_n INTEGER NOT NULL,
+        hashvalues BLOB NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+
+    )
+    """)
+
+
+# NN Similarity Table
+    cursor.execute(f"""
+    CREATE TABLE IF NOT EXISTS nn_similarity (
+      nn_a TEXT NOT NULL,
+      nn_b TEXT NOT NULL,
+      jaccard REAL NOT NULL,
+      method TEXT NOT NULL DEFAULT 'minhash',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (nn_a, nn_b)
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nn_minhash_nn ON nn_minhash(nn);")
+
+    #cursor.execute("CREATE INDEX IF NOT EXISTS idx_nn_similarity_a_j ON nn_similarity(nn_a, jaccard);")
+    #cursor.execute("CREATE INDEX IF NOT EXISTS idx_nn_similarity_b ON nn_similarity(nn_b);")
 
     close_conn(conn)
     print(f"Database initialized at {db_file}")
@@ -180,4 +252,6 @@ def reset_db():
     for nm in all_tables:
         cursor.execute(f"DROP TABLE IF EXISTS {nm}")
     close_conn(conn)
+    init_db()
+if __name__ == "__main__":
     init_db()

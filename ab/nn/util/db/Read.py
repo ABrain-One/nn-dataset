@@ -1,6 +1,5 @@
-from __future__ import annotations
 import json
-from typing import Optional, Union, Any
+import math
 
 from ab.nn.util.Const import *
 from ab.nn.util.Util import is_full_config, str_not_none
@@ -47,14 +46,16 @@ def data(only_best_accuracy: bool = False,
          task: Optional[str] = None,
          dataset: Optional[str] = None,
          metric: Optional[str] = None,
-         nn: Optional[Union[str, tuple[str]]] = None,
+         nn: Optional[str | tuple[str]] = None,
          epoch: Optional[int] = None,
          max_rows: Optional[int] = None,
          nn_prefixes: Optional[tuple] = None,
          sql: Optional[JoinConf] = None,
          unique_nn: bool = False,
-          include_nn_stats: bool = False,
-          ) -> tuple[dict[str, Any], ...]:
+         include_nn_stats: bool = False,
+         ) -> tuple[
+    dict[str, int | float | str | dict[str, int | float | str]], ...
+]:
     """
     Get the NN model code and all related statistics from the database.
 
@@ -171,7 +172,7 @@ def data(only_best_accuracy: bool = False,
             LEFT JOIN nn       n ON s.nn = n.name
             LEFT JOIN metric   m ON s.metric = m.name
             LEFT JOIN transform t ON s.transform = t.name
-            LEFT JOIN nn_stat ns ON s.nn = ns.nn_name AND s.prm = ns.prm_id
+            LEFT JOIN nn_stat ns ON s.nn = ns.nn_name
         """
     else:
         select_clause = """
@@ -201,7 +202,7 @@ def data(only_best_accuracy: bool = False,
                         {limit_clause}''',
                     params)
         if sql:
-            results = join_nn_query(sql, limit_clause, cur)
+            results = join_nn_query(sql,limit_clause, cur)
         else:
             results = fill_hyper_prm(cur, include_nn_stats=include_nn_stats)
         return tuple(results)
@@ -209,10 +210,325 @@ def data(only_best_accuracy: bool = False,
         if conn: close_conn(conn)
 
 
+_NN_STAT_OUTPUT_TO_COL: dict[str, str] = {
+    'nn_total_params': 'total_params',
+    'nn_trainable_params': 'trainable_params',
+    'nn_frozen_params': 'frozen_params',
+    'nn_total_layers': 'total_layers',
+    'nn_leaf_layers': 'leaf_layers',
+    'nn_max_depth': 'max_depth',
+    'nn_flops': 'flops',
+    'nn_model_size_mb': 'model_size_mb',
+    'nn_buffer_size_mb': 'buffer_size_mb',
+    'nn_total_memory_mb': 'total_memory_mb',
+    'nn_dropout_count': 'dropout_count',
+    'nn_has_attention': 'has_attention',
+    'nn_has_residual': 'has_residual_connections',
+    'nn_is_resnet_like': 'is_resnet_like',
+    'nn_is_vgg_like': 'is_vgg_like',
+    'nn_is_inception_like': 'is_inception_like',
+    'nn_is_densenet_like': 'is_densenet_like',
+    'nn_is_unet_like': 'is_unet_like',
+    'nn_is_transformer_like': 'is_transformer_like',
+    'nn_is_mobilenet_like': 'is_mobilenet_like',
+    'nn_is_efficientnet_like': 'is_efficientnet_like',
+    'nn_code_length': 'code_length',
+    'nn_num_classes': 'num_classes_defined',
+    'nn_num_functions': 'num_functions_defined',
+    'nn_uses_sequential': 'uses_sequential',
+    'nn_uses_modulelist': 'uses_modulelist',
+    'nn_uses_moduledict': 'uses_moduledict',
+    'nn_stats_meta': 'meta_json',
+    'nn_stats_error': 'error',
+}
+_NN_STAT_COL_SET: frozenset[str] = frozenset(_NN_STAT_OUTPUT_TO_COL.values())
+_NN_STAT_COL_TO_OUT: dict[str, str] = {c: a for a, c in _NN_STAT_OUTPUT_TO_COL.items()}
+_STAT_NONNULL_COLS: frozenset[str] = frozenset(
+    {'id', 'task', 'dataset', 'metric', 'nn', 'epoch', 'accuracy', 'duration', 'transform', 'prm'}
+)
+
+
+def _resolve_nn_stat_sql_col(name: str) -> str:
+    if name in _NN_STAT_OUTPUT_TO_COL:
+        return _NN_STAT_OUTPUT_TO_COL[name]
+    if name in _NN_STAT_COL_SET:
+        return name
+    raise ValueError(f"Unknown nn_stat column or alias: {name!r}")
+
+
+def _nn_stat_out_alias(sql_col: str) -> str:
+    return _NN_STAT_COL_TO_OUT.get(sql_col, f'nn_{sql_col}')
+
+
+def _is_nullish(v) -> bool:
+    if v is None:
+        return True
+    if isinstance(v, float) and math.isnan(v):
+        return True
+    return False
+
+
+def _row_passes_nonnull(
+    rec: dict,
+    require_stat_nonnull: tuple[str, ...],
+    require_nn_stat_nonnull: tuple[str, ...],
+    require_prm_nonnull: tuple[str, ...],
+) -> bool:
+    for c in require_stat_nonnull:
+        key = 'prm_id' if c == 'prm' else c
+        if key not in rec or _is_nullish(rec[key]):
+            return False
+    for name in require_nn_stat_nonnull:
+        sqlc = _resolve_nn_stat_sql_col(name)
+        out = _nn_stat_out_alias(sqlc)
+        if out not in rec or _is_nullish(rec[out]):
+            return False
+    prm = rec.get('prm') or {}
+    for k in require_prm_nonnull:
+        if k not in prm or _is_nullish(prm[k]):
+            return False
+    return True
+
+
+def _assemble_rows_without_prm_bulk(
+    cur, include_nn_stats: bool
+) -> list[dict]:
+    rows = cur.fetchall()
+    if not rows:
+        return []
+    columns = [c[0] for c in cur.description]
+    results = []
+    for r in rows:
+        rec = dict(zip(columns, r))
+        rec['prm'] = {}
+        if include_nn_stats and rec.get('nn_stats_meta'):
+            try:
+                rec['nn_stats_meta'] = json.loads(rec['nn_stats_meta'])
+            except Exception:
+                rec['nn_stats_meta'] = None
+        results.append(rec)
+    return results
+
+
+def data_withnonnullvalue(
+    only_best_accuracy: bool = False,
+    task: Optional[str] = None,
+    dataset: Optional[str] = None,
+    metric: Optional[str] = None,
+    nn: Optional[str | tuple[str]] = None,
+    epoch: Optional[int] = None,
+    max_rows: Optional[int] = None,
+    nn_prefixes: Optional[tuple] = None,
+    sql: Optional[JoinConf] = None,
+    unique_nn: bool = False,
+    include_nn_stats: bool = False,
+    include_prm: bool = True,
+    require_stat_nonnull: tuple[str, ...] = (),
+    require_nn_stat_nonnull: tuple[str, ...] = (),
+    require_prm_nonnull: tuple[str, ...] = (),
+    prm_as_columns: bool = False,
+) -> tuple[dict[str, int | float | str | bool | dict | None], ...]:
+    """
+    Like :func:`data`, but can restrict rows to those where chosen ``stat``, ``nn_stat``,
+    and ``prm`` fields are non-NULL (and non-NaN for numeric values after load).
+
+    - ``include_nn_stats``: when True, selects all architecture-stat columns (same as ``data``).
+    - ``include_prm``: when True, attaches the hyperparameter dict from the ``prm`` table;
+      when False, ``prm`` is left as ``{}`` (faster if you only need stat / nn_stat).
+    - ``require_stat_nonnull``: names of ``stat`` columns that must be NOT NULL
+      (use ``'prm'`` for the FK column; it appears as ``prm_id`` in the row dict before
+      ``prm`` is filled).
+    - ``require_nn_stat_nonnull``: ``nn_*`` output names (e.g. ``nn_flops``) or raw ``nn_stat``
+      column names; implies a join to ``nn_stat`` on ``nn_name`` and ``prm_id``.
+    - ``require_prm_nonnull``: hyperparameter names that must exist on the row's config and
+      be non-null / non-NaN.
+
+    If ``sql`` is not ``None``, use :func:`data` instead (not supported here).
+    """
+    if sql is not None:
+        raise ValueError("data_withnonnullvalue does not support sql=JoinConf; use data() instead.")
+
+    for c in require_stat_nonnull:
+        if c not in _STAT_NONNULL_COLS:
+            raise ValueError(f"require_stat_nonnull: unknown stat column {c!r}")
+
+    for name in require_nn_stat_nonnull:
+        _resolve_nn_stat_sql_col(name)
+
+    need_nn_stat_join = include_nn_stats or bool(require_nn_stat_nonnull)
+    nn_stat_inner = bool(require_nn_stat_nonnull)
+
+    params, where_clause = sql_where([task, dataset, metric, nn, epoch])
+    if nn_prefixes:
+        where_clause += ' AND (' + ' OR '.join([f"nn LIKE '{prefix}%'" for prefix in nn_prefixes]) + ')'
+
+    extra_where: list[str] = []
+    for c in require_stat_nonnull:
+        col = 'prm' if c == 'prm' else c
+        extra_where.append(f's.{col} IS NOT NULL')
+
+    prm_params: list = []
+    for pk in require_prm_nonnull:
+        extra_where.append(
+            'EXISTS (SELECT 1 FROM prm p WHERE p.uid = s.prm AND p.name = ? AND p.value IS NOT NULL)'
+        )
+        prm_params.append(pk)
+
+    if require_nn_stat_nonnull:
+        seen_nn: set[str] = set()
+        nn_null_parts: list[str] = []
+        for name in require_nn_stat_nonnull:
+            sqlc = _resolve_nn_stat_sql_col(name)
+            if sqlc in seen_nn:
+                continue
+            seen_nn.add(sqlc)
+            nn_null_parts.append(f'ns.{sqlc} IS NOT NULL')
+        extra_where.append(
+            'EXISTS (SELECT 1 FROM nn_stat ns WHERE ns.nn_name = s.nn AND ns.prm_id = s.prm AND '
+            + ' AND '.join(nn_null_parts)
+            + ')'
+        )
+
+    if extra_where:
+        where_clause += (' AND ' if where_clause else ' WHERE ') + ' AND '.join(extra_where)
+
+    source = f'(SELECT s.* FROM stat s {where_clause})'
+    if unique_nn:
+        source = (
+            f'(SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY nn ORDER BY accuracy DESC) rn '
+            f'FROM {source}) WHERE rn = 1)'
+        )
+    if only_best_accuracy:
+        source = """
+            (WITH filtered_stat AS {source}
+            SELECT f.* FROM filtered_stat f
+            JOIN (
+                SELECT task, dataset, metric, nn, epoch, MAX(accuracy) AS max_accuracy
+                FROM filtered_stat
+                GROUP BY task, dataset, metric, nn, epoch
+            ) b
+            ON f.task = b.task AND f.dataset = b.dataset AND f.metric = b.metric
+               AND f.nn = b.nn AND f.epoch = b.epoch AND f.accuracy = b.max_accuracy
+        )""".format(source=source)
+
+    join_nn_stat = ''
+    if need_nn_stat_join:
+        join_kw = 'INNER JOIN' if nn_stat_inner else 'LEFT JOIN'
+        join_nn_stat = f"""
+            {join_kw} nn_stat ns ON s.nn = ns.nn_name AND s.prm = ns.prm_id
+        """
+
+    if include_nn_stats:
+        select_clause = """
+            SELECT s.id, s.task, s.dataset, s.metric, m.code AS metric_code, m.id AS metric_id,
+                   s.nn, n.code AS nn_code, n.id AS nn_id, s.epoch, s.accuracy, s.duration,
+                   s.prm AS prm_id, t.code AS transform_code, t.id AS transform_id, s.transform,
+                   ns.total_params AS nn_total_params,
+                   ns.trainable_params AS nn_trainable_params,
+                   ns.frozen_params AS nn_frozen_params,
+                   ns.total_layers AS nn_total_layers,
+                   ns.leaf_layers AS nn_leaf_layers,
+                   ns.max_depth AS nn_max_depth,
+                   ns.flops AS nn_flops,
+                   ns.model_size_mb AS nn_model_size_mb,
+                   ns.buffer_size_mb AS nn_buffer_size_mb,
+                   ns.total_memory_mb AS nn_total_memory_mb,
+                   ns.dropout_count AS nn_dropout_count,
+                   ns.has_attention AS nn_has_attention,
+                   ns.has_residual_connections AS nn_has_residual,
+                   ns.is_resnet_like AS nn_is_resnet_like,
+                   ns.is_vgg_like AS nn_is_vgg_like,
+                   ns.is_inception_like AS nn_is_inception_like,
+                   ns.is_densenet_like AS nn_is_densenet_like,
+                   ns.is_unet_like AS nn_is_unet_like,
+                   ns.is_transformer_like AS nn_is_transformer_like,
+                   ns.is_mobilenet_like AS nn_is_mobilenet_like,
+                   ns.is_efficientnet_like AS nn_is_efficientnet_like,
+                   ns.code_length AS nn_code_length,
+                   ns.num_classes_defined AS nn_num_classes,
+                   ns.num_functions_defined AS nn_num_functions,
+                   ns.uses_sequential AS nn_uses_sequential,
+                   ns.uses_modulelist AS nn_uses_modulelist,
+                   ns.uses_moduledict AS nn_uses_moduledict,
+                   ns.meta_json AS nn_stats_meta,
+                   ns.error AS nn_stats_error
+        """
+    elif need_nn_stat_join:
+        seen: set[str] = set()
+        parts: list[str] = []
+        for name in require_nn_stat_nonnull:
+            sqlc = _resolve_nn_stat_sql_col(name)
+            if sqlc in seen:
+                continue
+            seen.add(sqlc)
+            parts.append(f'ns.{sqlc} AS {_nn_stat_out_alias(sqlc)}')
+        nn_sel = ',\n                   ' + ',\n                   '.join(parts) if parts else ''
+        select_clause = f"""
+            SELECT s.id, s.task, s.dataset, s.metric, m.code AS metric_code, m.id AS metric_id,
+                   s.nn, n.code AS nn_code, n.id AS nn_id, s.epoch, s.accuracy, s.duration,
+                   s.prm AS prm_id, t.code AS transform_code, t.id AS transform_id, s.transform
+                   {nn_sel}
+        """
+    else:
+        select_clause = """
+            SELECT s.id, s.task, s.dataset, s.metric, m.code AS metric_code, m.id AS metric_id,
+                   s.nn, n.code AS nn_code, n.id AS nn_id, s.epoch, s.accuracy, s.duration,
+                   s.prm AS prm_id, t.code AS transform_code, t.id AS transform_id, s.transform
+        """
+
+    join_clause = f"""
+            FROM {{source}} s
+            LEFT JOIN nn       n ON s.nn = n.name
+            LEFT JOIN metric   m ON s.metric = m.name
+            LEFT JOIN transform t ON s.transform = t.name
+            {join_nn_stat}
+        """
+
+    base_query = select_clause + join_clause.format(source=source)
+    limit_clause = str_not_none('LIMIT ', max_rows)
+    exec_params = list(params) + prm_params
+
+    conn = None
+    try:
+        conn, cur = sql_conn()
+        cur.execute(
+            f'''{base_query}
+                ORDER BY s.task, s.dataset, s.metric, s.nn, s.epoch
+                {limit_clause}''',
+            exec_params,
+        )
+        if include_prm:
+            results = fill_hyper_prm(cur, include_nn_stats=include_nn_stats)
+        else:
+            results = _assemble_rows_without_prm_bulk(cur, include_nn_stats=include_nn_stats)
+
+        filtered = [
+            r for r in results
+            if _row_passes_nonnull(
+                r, require_stat_nonnull, require_nn_stat_nonnull, require_prm_nonnull
+            )
+        ]
+
+        if prm_as_columns:
+            out = []
+            for r in filtered:
+                row = dict(r)
+                prm = row.pop('prm', None) or {}
+                for k, v in prm.items():
+                    row[k] = v
+                out.append(row)
+            filtered = out
+
+        return tuple(filtered)
+    finally:
+        if conn:
+            close_conn(conn)
+
+
 def run_data(
-        model_name: Optional[str] = None,
-        device_type: Optional[str] = None,
-        max_rows: Optional[int] = None,
+        model_name: str | None = None,
+        device_type: str | None = None,
+        max_rows: int | None = None,
 ):
     """
     Query mobile runtime analytics from the `mobile` table with optional filters.
@@ -234,12 +550,12 @@ def run_data(
     try:
         cur.execute(
             f"""
-            SELECT id, model_name, device_type, os_version, valid, emulator, error_message, duration,
-                   iterations, unit, cpu_duration, cpu_min_duration, cpu_max_duration, cpu_std_dev, cpu_error,
+                 SELECT id, model_name, device_type, os_version, valid, emulator, error_message, duration,
+                     iterations, unit, cpu_duration, cpu_min_duration, cpu_max_duration, cpu_std_dev, cpu_error,
                    gpu_duration, gpu_min_duration, gpu_max_duration, gpu_std_dev, gpu_error,
                    npu_duration, npu_min_duration, npu_max_duration, npu_std_dev, npu_error,
                    total_ram_kb, free_ram_kb, available_ram_kb, cached_kb,
-                   in_dim_0, in_dim_1, in_dim_2, in_dim_3, device_analytics_json
+                   in_dim_0, in_dim_1, in_dim_2, in_dim_3, device_analytics_json, precision_type
             FROM {run_table}
             {where_clause}
             ORDER BY model_name
@@ -259,6 +575,93 @@ def run_data(
                 rec['device_analytics'] = None
             rec.pop('device_analytics_json', None)
             results.append(rec)
+        return tuple(results)
+    finally:
+        close_conn(conn)
+
+
+def tflite_data(
+        model_name: str | None = None,
+        precision_type: str | None = None,
+        max_rows: int | None = None,
+):
+    """
+    Query TFLite model analytics from the `tflite` table with optional filters.
+    Returns a tuple of dicts with columns: id, model_name, accuracy, transform, precision_type.
+    """
+    params = []
+    filters = []
+    if model_name is not None:
+        filters.append('model_name = ?')
+        params.append(model_name)
+    if precision_type is not None:
+        filters.append('precision_type = ?')
+        params.append(precision_type)
+
+    where_clause = (' WHERE ' + ' AND '.join(filters)) if filters else ''
+    limit_clause = (' LIMIT ' + str(max_rows)) if max_rows else ''
+
+    conn, cur = sql_conn()
+    try:
+        cur.execute(
+            f"""
+                SELECT id, model_name, accuracy, transform, precision_type
+                FROM {tflite_table}
+                {where_clause}
+                ORDER BY model_name
+                {limit_clause}
+            """,
+            params,
+        )
+        rows = cur.fetchall()
+        columns = [c[0] for c in cur.description]
+        results = [dict(zip(columns, r)) for r in rows]
+        return tuple(results)
+    finally:
+        close_conn(conn)
+
+
+def prun_data(
+        model_name: str | None = None,
+        pruning_method: str | None = None,
+        task_dataset: str | None = None,
+        max_rows: int | None = None,
+):
+    """
+    Query pruning analytics from the `prun` table with optional filters.
+    Returns a tuple of dicts with columns: id, model_name, pruning_method, task_dataset, status, accuracy, duration, etc.
+    """
+    params = []
+    filters = []
+    if model_name is not None:
+        filters.append('model_name = ?')
+        params.append(model_name)
+    if pruning_method is not None:
+        filters.append('pruning_method = ?')
+        params.append(pruning_method)
+    if task_dataset is not None:
+        filters.append('task_dataset = ?')
+        params.append(task_dataset)
+
+    where_clause = (' WHERE ' + ' AND '.join(filters)) if filters else ''
+    limit_clause = (' LIMIT ' + str(max_rows)) if max_rows else ''
+
+    conn, cur = sql_conn()
+    try:
+        cur.execute(
+            f"""
+                SELECT id, model_name, pruning_method, task_dataset, status, accuracy, duration, pruning_ratio,
+                       params_before, params_after, params_removed, model_size_before_kb, model_size_after_kb
+                FROM {prun_table}
+                {where_clause}
+                ORDER BY model_name
+                {limit_clause}
+            """,
+            params,
+        )
+        rows = cur.fetchall()
+        columns = [c[0] for c in cur.description]
+        results = [dict(zip(columns, r)) for r in rows]
         return tuple(results)
     finally:
         close_conn(conn)
@@ -324,9 +727,9 @@ def remaining_trials(config_ext, n_optuna_trials) -> tuple[int, int]:
 
 
 def nn_stat_data(
-        nn_name: Optional[str] = None,
-        prm_id: Optional[str] = None,
-        max_rows: Optional[int] = None,
+        nn_name: str | None = None,
+        prm_id: str | None = None,
+        max_rows: int | None = None,
 ):
     """
     Query NN statistics from the `nn_stat` table with optional filters.

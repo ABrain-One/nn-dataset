@@ -1,7 +1,10 @@
 import importlib
+import platform
+import psutil
 import sys
 import time as time
 from dataclasses import dataclass, asdict
+from pathlib import Path
 from typing import List, Optional
 from typing import Union
 
@@ -62,9 +65,53 @@ def get_gpu_memory_kb() -> Optional[float]:
     return None
 
 
+def get_system_info() -> dict:
+    """Collect comprehensive system information"""
+    info = {
+        'cpu_type': platform.processor() or platform.machine(),
+        'cpu_count': psutil.cpu_count(logical=True),
+        'total_ram_kb': round(psutil.virtual_memory().total / 1024, 2),
+    }
+    
+    # GPU information
+    if torch.cuda.is_available():
+        try:
+            gpu_props = torch.cuda.get_device_properties(0)
+            info['gpu_type'] = gpu_props.name
+            info['gpu_total_memory_kb'] = round(gpu_props.total_memory / 1024, 2)
+        except Exception:
+            info['gpu_type'] = 'CUDA Available (details unavailable)'
+    else:
+        info['gpu_type'] = 'No GPU'
+    
+    return info
+
+
+def get_current_resource_usage() -> dict:
+    """Get current resource usage metrics"""
+    usage = {
+        'occupied_ram_kb': round(psutil.virtual_memory().used / 1024, 2),
+        'ram_usage_percent': psutil.virtual_memory().percent,
+        'cpu_usage_percent': psutil.cpu_percent(interval=0.1),
+    }
+    
+    # GPU memory usage
+    if torch.cuda.is_available():
+        try:
+            occupied_gpu_kb = torch.cuda.memory_allocated() / 1024
+            usage['occupied_gpu_memory_kb'] = round(occupied_gpu_kb, 2)
+            usage['gpu_memory_usage_percent'] = round(
+                (torch.cuda.memory_allocated() / torch.cuda.get_device_properties(0).total_memory) * 100, 2
+            )
+        except Exception:
+            pass
+    
+    return usage
+
+
 def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout,
                      max_dropout, min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, epoch_max,
-                     pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights, save_to_db=True):
+                     pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights):
     task, dataset_name, metric, nn = config
     try:
         # Load model
@@ -73,16 +120,17 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
         prms = dict(nn_prm)
         for prm in s_prm:
             if not (prm in prms and prms[prm]):
-                if prm == 'lr':
-                    prms[prm] = trial.suggest_float(prm, min_lr, max_lr, log=True)
-                elif prm == 'momentum':
-                    prms[prm] = trial.suggest_float(prm, min_momentum, max_momentum)
-                elif prm == 'dropout':
-                    prms[prm] = trial.suggest_float(prm, min_dropout, max_dropout)
-                elif prm == 'pretrained':
-                    prms[prm] = float(pretrained if pretrained else trial.suggest_categorical(prm, [0, 1]))
-                else:
-                    prms[prm] = trial.suggest_float(prm, 0.0, 1.0)
+                match prm:
+                    case 'lr':
+                        prms[prm] = trial.suggest_float(prm, min_lr, max_lr, log=True)
+                    case 'momentum':
+                        prms[prm] = trial.suggest_float(prm, min_momentum, max_momentum)
+                    case 'dropout':
+                        prms[prm] = trial.suggest_float(prm, min_dropout, max_dropout)
+                    case 'pretrained':
+                        prms[prm] = float(pretrained if pretrained else trial.suggest_categorical(prm, [0, 1]))
+                    case _:
+                        prms[prm] = trial.suggest_float(prm, 0.0, 1.0)
         prms['epoch_max'] = epoch_max
         batch = add_categorical_if_absent(trial, prms, 'batch', lambda: [max_batch(x) for x in range(min_batch_binary_power, max_batch_binary_power_local + 1)])
         transform_name = add_categorical_if_absent(trial, prms, 'transform', supported_transformers, default=transform)
@@ -94,7 +142,7 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
         # Load dataset
         out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset_name, transform_name)
         return Train(config, out_shape, minimum_accuracy, batch, nn_mod('nn', nn), task, train_set, test_set, metric,
-                     num_workers, prms, save_to_db=save_to_db).train_n_eval(epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set)
+                     num_workers, prms).train_n_eval(epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set)
 
     except Exception as e:
         accuracy_duration = 0.0, 0.0, 1
@@ -145,8 +193,13 @@ class Train:
         self.task = task
         self.prm = prm
 
-        self.metric_name = metric
-        self.metric_function = self.load_metric_function(metric)
+        # Support multiple comma-separated metrics: "bleu,meteor,cider"
+        self.metric_names = [m.strip() for m in metric.split(',')]
+        self.metric_fns = {name: self.load_metric_function(name) for name in self.metric_names}
+        self.primary_metric_fn = list(self.metric_fns.values())[0]  # First metric function used for accuracy comparison
+        self.primary_metric = self.metric_names[0]  # First metric used for accuracy comparison
+        self.metric_name = metric  # Keep original for compatibility
+        self.all_metric_results = {}  # Store all metric results
         self.save_to_db = save_to_db
         self.is_code = is_code
 
@@ -170,55 +223,14 @@ class Train:
         self.epoch_history: List[EpochMetrics] = []
         self.best_accuracy = 0.0
         self.best_epoch = 0
+        self.save_path = None
         
-        # Benchmark metrics (MAI 2025 requirements)
-        self.benchmark_metrics = self._collect_benchmark_metrics()
-        
-        # Ensure model is back on the correct device (Benchmarking might move it to CPU)
-        self.model.to(self.device)
-
-    def _collect_benchmark_metrics(self) -> dict:
-        """Collect benchmark metrics for MAI 2025 thesis"""
-        try:
-            from ab.nn.util.Benchmark import count_parameters, count_flops, measure_latency
-            
-            # Count parameters
-            params = count_parameters(self.model)
-            
-            # Count FLOPs
-            try:
-                flops = count_flops(self.model, self.in_shape)
-            except Exception as e:
-                print(f"[WARN] Could not compute FLOPs: {e}")
-                flops = {'total_flops': 0, 'gflops': 0, 'mflops': 0}
-            
-            # Measure latency (quick measurement with fewer runs)
-            try:
-                latency = measure_latency(self.model, self.in_shape, num_runs=10, warmup_runs=2, device='cpu')
-            except Exception as e:
-                print(f"[WARN] Could not measure latency: {e}")
-                latency = {'mean_ms': 0, 'fps': 0}
-            
-            benchmark = {
-                'parameters': params['total'],
-                'parameters_mb': params['total_mb'],
-                'gflops': flops['gflops'],
-                'latency_ms': latency['mean_ms'],
-                'fps': latency.get('fps', 0),
-            }
-            
-            print(f"[Benchmark] Params: {params['total']:,} ({params['total_mb']:.2f}MB), "
-                  f"FLOPs: {flops['gflops']:.2f}G, Latency: {latency['mean_ms']:.2f}ms")
-            
-            return benchmark
-            
-        except Exception as e:
-            print(f"[WARN] Benchmark collection failed: {e}")
-            return {}
+        # System information (collected once at initialization)
+        self.system_info = get_system_info()
 
     def _get_loss_function(self):
-        """Get loss function for metric tracking"""
-        if hasattr(self.model, 'criterion'):
+        """Build loss function based on the task or use model's custom criterion."""
+        if hasattr(self.model, 'criterion') and self.model.criterion is not None:
             return self.model.criterion
         elif hasattr(self.model, 'loss_fn'):
             return self.model.loss_fn
@@ -245,23 +257,24 @@ class Train:
                     loss = self.loss_fn(outputs, labels)
                     total_loss += loss.item()
                     num_batches += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[_compute_loss] Exception during validation: {e}")
+                    raise e
 
         return total_loss / max(num_batches, 1)
 
     def _compute_accuracy(self, data_loader) -> float:
         """Compute accuracy over a dataset using the metric function"""
         self.model.eval()
-        self.metric_function.reset()
+        self.primary_metric_fn.reset()
 
         with torch.no_grad():
             for inputs, labels in data_loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 outputs = self.model(inputs)
-                self.metric_function(outputs, labels)
+                self.primary_metric_fn(outputs, labels)
 
-        return self.metric_function.result()
+        return self.primary_metric_fn.result()
 
     def load_metric_function(self, metric_name):
         """
@@ -281,6 +294,11 @@ class Train:
     def train_n_eval(self, epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set, save_path: Union[str, Path] = None):
         """ Training and evaluation with comprehensive metrics tracking """
 
+        # Set save_path if not provided (for non-code training)
+        if save_path is None and not self.is_code:
+            save_path = model_stat_dir(self.config)
+        self.save_path = save_path
+
         start_time = time.time_ns()
         self.model.train_setup(self.prm)
         accuracy_to_time = 0.0
@@ -295,25 +313,30 @@ class Train:
 
             # Training phase
             self.model.train()
-            train_loss = self.model.learn(DataRoll(self.train_loader, epoch_limit_minutes))
-            if train_loss is None:
-                train_loss = 0.0
+            learn_res = self.model.learn(DataRoll(self.train_loader, epoch_limit_minutes))
+            if isinstance(learn_res, (tuple, list)) and len(learn_res) >= 2:
+                train_accuracy, train_loss = learn_res[0], learn_res[1]
+            else:
+                train_accuracy, train_loss = 0.0, learn_res
+            # Standard path fallback
+            if train_loss is None or train_loss == 0.0:
+                train_loss = self._compute_loss(self.train_loader)
+                train_accuracy = self._compute_accuracy(self.train_loader)
 
             # Compute gradient norm after training
             grad_norm = compute_gradient_norm(self.model)
 
             # Get current learning rate
             lr_now = get_current_lr(optimizer)
-            
-            # Transition to evaluation
-            self.model.eval()
+
+            # Compute losses
             test_loss = self._compute_loss(self.test_loader)
 
             # Compute accuracies
-            test_accuracy = self.eval(self.test_loader)
-            train_accuracy = 0.0  # Skip for speed, test_accuracy is the key metric
+            accuracy, all_metric_results = self.eval(self.test_loader)
 
-            accuracy = test_accuracy
+            # Use primary metric value from dict if available, otherwise keep scalar from eval()
+            accuracy = all_metric_results.get(self.primary_metric, accuracy)
             accuracy = 0.0 if math.isnan(accuracy) or math.isinf(accuracy) else accuracy
             duration = time.time_ns() - start_time
             epoch_duration = (time.time_ns() - epoch_start_time) / 1e9  # seconds
@@ -359,38 +382,44 @@ class Train:
             # Build extended parameters with new metrics
             only_prm = {k: v for k, v in self.prm.items() if k not in {'uid', 'duration', 'accuracy', 'epoch'}}
             # Use 'lr' as the canonical learning-rate key to avoid duplication with 'learning_rate'
+            
+            # Collect current resource usage
+            resource_usage = get_current_resource_usage()
+            
             prm = merge_prm(self.prm, {
                                           'uid': uuid4(only_prm),
                                           'duration': duration,
                                           'accuracy': accuracy,
-                                          # NEW: Loss metrics
+                                          # Loss metrics
                                           'train_loss': train_loss,
                                           'test_loss': test_loss,
-                                          # NEW: Accuracy metrics
+                                          # Accuracy metrics
                                           'train_accuracy': train_accuracy,
-                                          # NEW: Training dynamics - store under 'lr' to match common hyperparameter naming
+                                          # Training dynamics
                                           'gradient_norm': grad_norm,
-                                          # NEW: Timing metrics
+                                          # Timing metrics
                                           'samples_per_second': samples_per_second,
-                                          # NEW: Best tracking
+                                          # Best tracking
                                           'best_accuracy': self.best_accuracy,
                                           'best_epoch': self.best_epoch,
-                                      } | ({'lr_now': lr_now} if lr_now else {})
-                                      # NEW: GPU memory (if available)
-                                      | ({'gpu_memory_kb': get_gpu_memory_kb()} if get_gpu_memory_kb else {})
-                                      # NEW: MAI 2025 Benchmark metrics
-                                      | self.benchmark_metrics)
+                                      } 
+                                      # System information
+                                      | self.system_info
+                                      # Current resource usage
+                                      | resource_usage
+                                      # GPU memory (if available)
+                                      | ({'gpu_memory_kb': get_gpu_memory_kb()} if get_gpu_memory_kb() is not None else {})
+                                      # Multi-metrics implementations
+                                      | {f'metric_{k}': v for k, v in all_metric_results.items()})
 
             if self.save_to_db:
                 if self.is_code:  # We don't want the filename to contain full codes
-                    if save_path:
-                        save_results(self.config + (epoch,), join(save_path, f"{epoch}.json"), prm)
+                    if self.save_path:
+                        save_results(self.config + (epoch,), join(self.save_path, f"{epoch}.json"), prm)
                     else:
                         print(f"[WARN]parameter `save_Path` set to null, the statics will not be saved into a file.")
                 else:  # Legacy save result codes in file
-                    if save_path is None:
-                        save_path = model_stat_dir(self.config)
-                    save_results(self.config + (epoch,), join(save_path, f"{epoch}.json"), prm)
+                    save_results(self.config + (epoch,), join(self.save_path, f"{epoch}.json"), prm)
                     DB_Write.save_results(self.config + (epoch,), prm)  # Separated from Calc.save_results()
 
         # Save training summary at the end
@@ -402,6 +431,10 @@ class Train:
     def _save_training_summary(self):
         """Save comprehensive training summary"""
         import json
+        
+        # Get final resource usage
+        final_resource_usage = get_current_resource_usage()
+        
         summary = {
             'config': {
                 'task': self.config[0],
@@ -414,6 +447,7 @@ class Train:
                 'input_shape': list(self.in_shape),
                 'output_shape': list(self.out_shape) if hasattr(self.out_shape, '__iter__') else self.out_shape,
             },
+            'system_info': self.system_info,
             'training_summary': {
                 'total_epochs': len(self.epoch_history),
                 'best_accuracy': self.best_accuracy,
@@ -423,6 +457,7 @@ class Train:
                 'final_accuracy': self.epoch_history[-1].test_accuracy if self.epoch_history else 0,
                 'gpu_memory_kb': get_gpu_memory_kb(),
             },
+            'final_resource_usage': final_resource_usage,
             'learning_curves': {
                 'epochs': [e.epoch for e in self.epoch_history],
                 'train_loss': [e.train_loss for e in self.epoch_history],
@@ -444,7 +479,7 @@ class Train:
             print(f"[WARN] Failed to save training summary: {e}")
 
     def eval(self, test_loader):
-        """Evaluation with standardized metric interface"""
+        """Evaluation with standardized metric interface - supports multiple metrics"""
         if debug:
             for inputs, labels in test_loader:
                 print(f"[EVAL DEBUG] labels type: {type(labels)}")
@@ -454,19 +489,25 @@ class Train:
                     print(f"[EVAL DEBUG] labels sample: {labels[:2]}")
         self.model.eval()
 
-        # Reset the metric at the start of evaluation
-        self.metric_function.reset()
+        # Reset ALL metrics at the start of evaluation
+        for metric_fn in self.metric_fns.values():
+            metric_fn.reset()
 
         with torch.no_grad():
             for inputs, labels in test_loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 outputs = self.model(inputs)
 
-                # Call the metric - all metrics now use the same interface
-                self.metric_function(outputs, labels)
+                # Call ALL metrics - they all use the same interface
+                for metric_fn in self.metric_fns.values():
+                    metric_fn(outputs, labels)
 
-        # Get the final result from the metric
-        return self.metric_function.result()
+        # Collect results from ALL metrics
+        all_results = {name: fn.result() for name, fn in self.metric_fns.items()}
+        
+        # Return primary metric (first one) for accuracy comparison, and all results
+        primary_accuracy = all_results[self.primary_metric]
+        return primary_accuracy, all_results
 
 
 def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Union[str, None] = None, save_path: Union[str, None] = None, export_onnx=False,
@@ -549,5 +590,4 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             pass
         release_memory()
 
-    score = res['score'] if (res and 'score' in res) else 0.0
-    return model_name, accuracy, accuracy_to_time, score
+    return model_name, accuracy, accuracy_to_time, res['score']
