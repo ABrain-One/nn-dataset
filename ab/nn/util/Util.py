@@ -192,10 +192,7 @@ def save_if_best(model, model_name, current_score, save_pth_weights, save_onnx_w
     """
     Called by the training framework to save weights if performance improves.
     """
-    if save_path:
-        checkpoint_dir = Path(save_path) / model_name.split('.')[-1]
-    else:
-        checkpoint_dir = ckpt_dir / model_name.split('.')[-1]
+    checkpoint_dir = ckpt_dir / model_name.split('.')[-1]
     makedirs(checkpoint_dir, exist_ok=True)
     # Compare the current score with the best score recorded.
     if current_score > getattr(model, "best_score", 0):
@@ -206,7 +203,7 @@ def save_if_best(model, model_name, current_score, save_pth_weights, save_onnx_w
         if save_pth_weights: export_torch_weights(model, best_checkpoint_path)
         if save_onnx_weights:
             t = first_tensor(train_set, num_workers)
-            export_model_to_onnx(model, t, join(checkpoint_dir, "best_model.onnx"))
+            export_model_to_onnx(model, t, join(checkpoint_dir, "best_model.onnx") if save_path else onnx_file)
 
 
 def first_tensor(train_set, num_workers=default_num_workers) -> Any:

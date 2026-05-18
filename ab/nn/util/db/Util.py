@@ -57,7 +57,10 @@ def get_package_location(package_name) -> Optional[Path]:
 def check_if_script_is_pip_installed() -> bool:
     script_location = os.path.abspath(__file__)
     site_packages_dirs = site.getsitepackages()
-
+    try:
+        site_packages_dirs = site_packages_dirs + [site.getusersitepackages()]
+    except Exception:
+        pass
     for site_package in site_packages_dirs:
         if site_package in script_location:
             return True

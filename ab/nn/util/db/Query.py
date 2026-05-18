@@ -9,11 +9,13 @@ from ab.nn.util.Const import main_columns_ext, tmp_data
 
 #-----curriculum bands-----
 
-SIM_BANDS: dict[str, tuple[float, float]] = {
-    "high": (0.95, 1.0000001),
-    "medium": (0.85, 0.95),
-    "low": (0.60, 0.85),
-    "very_low": (0.0, 0.60),
+SIM_BANDS = {
+    "very_high":     (0.98, 1.0000001),   # 218 models — nearly identical
+    "high":          (0.95, 0.98),         # 290 models — same family, some variation
+    "medium":        (0.85, 0.95),         # 810 models
+    "low":           (0.60, 0.85),         # 3 models
+    "very_low_near": (0.30, 0.60),
+    "very_low_far":  (0.0,  0.30),
 }
 
 
@@ -82,6 +84,65 @@ def build_stat_filters_sql(sql: JoinConf, alias: str = "b") -> tuple[str, list]:
         return "", []
 
     return "WHERE " + " AND ".join(clauses), params
+
+
+def _anchor_candidates_table() -> str:
+    return f"{tmp_data}_anchor_candidates"
+
+
+def _ensure_temp_work_indexes(cur: Cursor, work_table: str) -> None:
+    if work_table != tmp_data or not _is_real_table(cur, work_table):
+        return
+    cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{work_table}_id ON {work_table}(id)")
+    cur.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{work_table}_nn_acc_epoch "
+        f"ON {work_table}(nn, accuracy DESC, epoch ASC, id)"
+    )
+    cur.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{work_table}_acc_nn_epoch "
+        f"ON {work_table}(accuracy DESC, nn, epoch ASC, id)"
+    )
+
+
+def _prepare_anchor_candidates(cur: Cursor, sql: "JoinConf", work_table: str) -> str:
+    cand_table = _anchor_candidates_table()
+    where_sql, params = build_stat_filters_sql(sql, alias="s")
+
+    _ensure_temp_work_indexes(cur, work_table)
+    cur.execute(f"DROP TABLE IF EXISTS {cand_table}")
+    cur.execute(
+        f"""
+        CREATE TEMP TABLE {cand_table} AS
+        WITH base AS (
+          SELECT s.id, s.nn, s.accuracy, s.epoch
+          FROM {work_table} s
+          {where_sql}
+        ),
+        best_per_nn AS (
+          SELECT b.id,
+                 b.nn,
+                 b.accuracy,
+                 b.epoch,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY b.nn
+                   ORDER BY b.accuracy DESC, b.epoch ASC, b.nn ASC
+                 ) AS rn
+          FROM base b
+        )
+        SELECT p.id, p.nn, p.accuracy, p.epoch, m.hashvalues AS hv
+        FROM best_per_nn p
+        JOIN nn_minhash m ON m.nn = p.nn
+        WHERE p.rn = 1
+        """,
+        params,
+    )
+    cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{cand_table}_nn ON {cand_table}(nn)")
+    cur.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{cand_table}_acc_epoch "
+        f"ON {cand_table}(accuracy DESC, epoch ASC, nn)"
+    )
+    cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{cand_table}_id ON {cand_table}(id)")
+    return cand_table
 #---------DB MinHash + SQLite UDF----------
 def _anchor_band_db(
     *,
@@ -94,9 +155,20 @@ def _anchor_band_db(
     limit_k: int,
 ) -> None:
     """
+    Fast anchor-band retrieval with prompt-design-compatible output.
+
     Requires:
-      - table nn_minhash(nn, hashvalues, ...)
+      - nn_minhash(nn, hashvalues, ...)
+      - prepared temp candidate table from _prepare_anchor_candidates()
       - SQLite UDF: jaccard_blobs(blob_a, blob_b)
+
+    Returns rows containing:
+      - stat fields
+      - nn_code
+      - transform_code
+      - prm_id
+      - anchor_jaccard
+      - anchor_nn
     """
 
     cur.execute(
@@ -105,57 +177,61 @@ def _anchor_band_db(
     if not cur.fetchone():
         raise RuntimeError("nn_minhash table missing in this db_file. You're on the wrong DB.")
 
-    # Ensure anchor exists
     cur.execute("SELECT 1 FROM nn_minhash WHERE nn = ? LIMIT 1", (anchor_nn,))
     if not cur.fetchone():
         raise ValueError(f"anchor_nn='{anchor_nn}' missing in nn_minhash")
 
-    where_sql, where_params = build_stat_filters_sql(sql, alias="d")
+    cand_table = _anchor_candidates_table()
+
+    anchor_hv_row = cur.execute(
+        f"SELECT hv FROM {cand_table} WHERE nn = ? LIMIT 1",
+        (anchor_nn,),
+    ).fetchone()
+
+    if anchor_hv_row:
+        anchor_hv = anchor_hv_row[0]
+    else:
+        anchor_hv = cur.execute(
+            "SELECT hashvalues FROM nn_minhash WHERE nn = ?",
+            (anchor_nn,),
+        ).fetchone()[0]
 
     cur.execute(
         f"""
-        WITH base AS (
-          SELECT d.*
-          FROM {work_table} d
-          {where_sql}
-        ),
-        best_per_nn AS (
-          SELECT b.*,
-                 ROW_NUMBER() OVER (
-                   PARTITION BY b.nn
-                   ORDER BY b.accuracy DESC, b.epoch ASC, b.nn ASC
-                 ) AS rn
-          FROM base b
-        ),
-        anchor AS (
-          SELECT hashvalues AS a_hv
-          FROM nn_minhash
-          WHERE nn = ?
-        ),
-        cand AS (
-          SELECT p.id, p.nn, p.accuracy, p.epoch, m.hashvalues AS hv
-          FROM best_per_nn p
-          JOIN nn_minhash m ON m.nn = p.nn
-          WHERE p.rn = 1 AND p.nn <> ?
-        ),
-        scored AS (
+        WITH scored AS (
           SELECT
             c.id,
             c.nn,
             c.accuracy,
             c.epoch,
-            jaccard_blobs((SELECT a_hv FROM anchor), c.hv) AS j
-          FROM cand c
+            jaccard_blobs(?, c.hv) AS j
+          FROM {cand_table} c
+          WHERE c.nn <> ?
         )
-        SELECT d.*, s.j AS anchor_jaccard
+        SELECT
+          st.*,
+          n.code AS nn_code,
+          t.code AS transform_code,
+          st.prm AS prm_id,
+          s.j AS anchor_jaccard,
+          ? AS anchor_nn
         FROM scored s
-        JOIN {work_table} d ON d.id = s.id
+        JOIN stat st       ON st.id = s.id
+        JOIN nn n          ON n.name = st.nn
+        JOIN transform t   ON t.name = st.transform
         WHERE s.j IS NOT NULL
           AND s.j >= ? AND s.j < ?
         ORDER BY s.accuracy DESC, s.j DESC, s.nn ASC, s.epoch ASC
         LIMIT ?
         """,
-        [*where_params, anchor_nn, anchor_nn, float(min_j), float(max_j), int(limit_k)],
+        [
+            anchor_hv,
+            anchor_nn,
+            anchor_nn,
+            float(min_j),
+            float(max_j),
+            int(limit_k),
+        ],
     )
 #---------Band Aware Anchor Selection---------
 def _resolve_anchor(
@@ -177,19 +253,17 @@ def _resolve_anchor(
     if not cur.fetchone():
         raise RuntimeError("nn_minhash table missing in this db_file")
 
-    where_sql, params = build_stat_filters_sql(sql, alias="s")
+    cand_table = _anchor_candidates_table()
 
-    # Candidate anchors: top accuracy models that also have minhash
+    # Candidate anchors: top unique NNs from the prepared candidate table.
     anchors = cur.execute(
         f"""
-        SELECT s.nn
-        FROM {work_table} s
-        JOIN nn_minhash m ON m.nn = s.nn
-        {where_sql}
-        ORDER BY s.accuracy DESC
+        SELECT c.nn
+        FROM {cand_table} c
+        ORDER BY c.accuracy DESC, c.epoch ASC, c.nn ASC
         LIMIT ?
         """,
-        params + [int(max_trials)],
+        [int(max_trials)],
     ).fetchall()
 
     if not anchors:
@@ -198,52 +272,60 @@ def _resolve_anchor(
             f"found for task={sql.task}, dataset={sql.dataset}, metric={sql.metric}"
         )
 
-    # For each candidate anchor, check if the requested band has enough neighbors.
-    for (a_nn,) in anchors:
-        cnt = cur.execute(
-            f"""
-            WITH base AS (
-              SELECT s.*
-              FROM {work_table} s
-              {where_sql}
-            ),
-            best_per_nn AS (
-              SELECT b.*,
-                     ROW_NUMBER() OVER (
-                       PARTITION BY b.nn
-                       ORDER BY b.accuracy DESC, b.epoch ASC, b.nn ASC
-                     ) AS rn
-              FROM base b
-            ),
-            anchor AS (
-              SELECT hashvalues AS a_hv
-              FROM nn_minhash
-              WHERE nn = ?
-            ),
-            cand AS (
-              SELECT p.nn, m.hashvalues AS hv
-              FROM best_per_nn p
-              JOIN nn_minhash m ON m.nn = p.nn
-              WHERE p.rn = 1 AND p.nn <> ?
-            ),
-            scored AS (
-              SELECT jaccard_blobs((SELECT a_hv FROM anchor), c.hv) AS j
-              FROM cand c
+    attempted_bands: list[tuple[str, float, float]] = []
+    if sql.similarity_band in SIM_BANDS:
+        ordered_band_names = [
+            band_name
+            for band_name, _ in sorted(
+                SIM_BANDS.items(),
+                key=lambda item: (float(item[1][0]), float(item[1][1])),
+                reverse=True,
             )
-            SELECT COUNT(*)
-            FROM scored
-            WHERE j IS NOT NULL AND j >= ? AND j < ?
-            """,
-            [*params, a_nn, a_nn, float(min_j), float(max_j)],
-        ).fetchone()[0]
+        ]
+        start_idx = ordered_band_names.index(str(sql.similarity_band))
+        for band_name in ordered_band_names[start_idx:]:
+            band_min, band_max = SIM_BANDS[band_name]
+            attempted_bands.append((band_name, float(band_min), float(band_max)))
+    else:
+        attempted_bands.append(("custom", float(min_j), float(max_j)))
 
-        if cnt >= int(limit_k):
-            return a_nn
+    # For each candidate anchor, check the requested band first, then lower bands if needed.
+    for band_name, band_min, band_max in attempted_bands:
+        for (a_nn,) in anchors:
+            anchor_hv_row = cur.execute(
+                f"SELECT hv FROM {cand_table} WHERE nn = ? LIMIT 1",
+                (a_nn,),
+            ).fetchone()
+            if not anchor_hv_row:
+                continue
+            anchor_hv = anchor_hv_row[0]
+            cnt = cur.execute(
+                f"""
+                WITH
+                scored AS (
+                  SELECT jaccard_blobs(?, c.hv) AS j
+                  FROM {cand_table} c
+                  WHERE c.nn <> ?
+                )
+                SELECT COUNT(*)
+                FROM scored
+                WHERE j IS NOT NULL AND j >= ? AND j < ?
+                """,
+                [anchor_hv, a_nn, band_min, band_max],
+            ).fetchone()[0]
 
-    # Raise error if no anchor had enough neighbors in that band.
+            if cnt >= int(limit_k):
+                return a_nn
+
+    attempted_desc = ", ".join(
+        f"{band_name}=[{band_min}, {band_max})"
+        for band_name, band_min, band_max in attempted_bands
+    )
+
     raise ValueError(
         f"Auto-anchor failed: no anchor among top {len(anchors)} models has >= {limit_k} "
-        f"neighbors in band [{min_j}, {max_j}) for task={sql.task}, dataset={sql.dataset}, metric={sql.metric}."
+        f"neighbors in attempted bands {attempted_desc} for task={sql.task}, "
+        f"dataset={sql.dataset}, metric={sql.metric}."
     )
 #-----JoinConf-----
 
@@ -271,7 +353,7 @@ class JoinConf:
     min_arch_jaccard: float = 0.0
     max_arch_jaccard: float = 1.0
 
-    overfetch_factor: int = 20
+    overfetch_factor: int = 10
 
     supported_columns = main_columns_ext
 
@@ -355,9 +437,12 @@ def join_nn_query_anchor_otf(sql: JoinConf, limit_clause: Optional[str], cur: Cu
     work = resolve_work_table(cur, preferred=tmp_data, fallback="stat")
 
     min_j, max_j = band_to_range(sql.similarity_band, sql.min_arch_jaccard, sql.max_arch_jaccard)
+    _prepare_anchor_candidates(cur, sql, work)
 
-    # Band-aware auto-anchor selection
     anchor = _resolve_anchor(cur, sql, work, min_j=min_j, max_j=max_j, limit_k=n)
+
+    # fetch n * overfetch_factor rows instead of just n
+    fetch_limit = n * int(sql.overfetch_factor)
 
     _anchor_band_db(
         cur=cur,
@@ -366,7 +451,7 @@ def join_nn_query_anchor_otf(sql: JoinConf, limit_clause: Optional[str], cur: Cu
         anchor_nn=anchor,
         min_j=min_j,
         max_j=max_j,
-        limit_k=n,
+        limit_k=fetch_limit,    # CHANGED from limit_k=n
     )
 
     selected = fill_hyper_prm(cur, num_joint_nns=1)
@@ -490,10 +575,24 @@ def fill_hyper_prm(cur: Cursor, num_joint_nns=1, include_nn_stats=False) -> list
     # Bulk-load *all* hyperparameters for the retrieved stat_ids
     from collections import defaultdict
     prm_by_uid: dict[str, dict[str, int | float | str]] = defaultdict(dict)
+    prm_ids: list[str] = []
+    seen_prm_ids: set[str] = set()
+    for r in rows:
+        rec = dict(zip(columns, r))
+        for i in range(1, num_joint_nns + 1):
+            key = 'prm_id' if i == 1 else f'prm_id_{i}'
+            prm_id = rec.get(key)
+            if prm_id and prm_id not in seen_prm_ids:
+                seen_prm_ids.add(prm_id)
+                prm_ids.append(prm_id)
 
-    cur.execute(f"SELECT uid, name, value FROM prm")
-    for uid, name, value in cur.fetchall():
-        prm_by_uid[uid][name] = value
+    chunk_size = 500
+    for start in range(0, len(prm_ids), chunk_size):
+        chunk = prm_ids[start:start + chunk_size]
+        placeholders = ', '.join(['?'] * len(chunk))
+        cur.execute(f"SELECT uid, name, value FROM prm WHERE uid IN ({placeholders})", chunk)
+        for uid, name, value in cur.fetchall():
+            prm_by_uid[uid][name] = value
 
     # Assemble the final result
     results: list[dict] = []
@@ -503,6 +602,7 @@ def fill_hyper_prm(cur: Cursor, num_joint_nns=1, include_nn_stats=False) -> list
         for i in range(2, num_joint_nns + 1):
             i = str(i)
             rec['prm_' + i] = prm_by_uid.get(rec['prm_id_' + i], {})
+        rec.pop('transform', None)
 
         # Parse nn_stats_meta JSON if present
         if include_nn_stats and 'nn_stats_meta' in rec and rec['nn_stats_meta']:

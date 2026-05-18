@@ -277,17 +277,12 @@ class Train:
         """Compute accuracy over a dataset using the metric function"""
         self.model.eval()
         self.primary_metric_fn.reset()
-        start_t = time.time()
 
         with torch.no_grad():
             for inputs, labels in data_loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 outputs = self.model(inputs)
                 self.primary_metric_fn(outputs, labels)
-                
-                # Bug fix: Prevent excessive evaluation time on massive training datasets
-                if time.time() - start_t > 180:
-                    break
 
         return self.primary_metric_fn.result()
 
