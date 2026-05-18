@@ -5,6 +5,10 @@ import ab.nn.util.Train as Train
 from ab.nn.util.Const import default_epoch_limit_minutes
 from pandas import DataFrame
 import functools
+import sys
+import importlib.util
+from pathlib import Path
+import torch
 
 from ab.nn.util.db.Query import JoinConf
 
@@ -239,3 +243,24 @@ def check_nn(nn_code: str, task: str, dataset: str, metric: str, prm: dict, save
     """
     return Train.train_new(nn_code, task, dataset, metric, prm, save_to_db=save_to_db, prefix=prefix, save_path=save_path, export_onnx=export_onnx,
                            epoch_limit_minutes=epoch_limit_minutes, transform_dir=transform_dir)
+
+
+def load_nn_from_file(file_path, in_shape, out_shape, prm, device):
+    """
+    Dynamically loads a Net class from a .py file and instantiates it.
+    """
+    path = Path(file_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Model file not found: {file_path}")
+
+    module_name = f"dynamic_model_{path.stem}_{hash(str(path)) % 10000}"
+    spec = importlib.util.spec_from_file_location(module_name, str(path))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = mod
+    spec.loader.exec_module(mod)
+
+    if not hasattr(mod, 'Net'):
+        raise AttributeError(f"Module {file_path} does not have a 'Net' class")
+
+    model = mod.Net(in_shape, out_shape, prm, device)
+    return model.to(device)

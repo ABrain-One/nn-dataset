@@ -1,0 +1,57 @@
+Alright, so the user wants me to design a PyTorch class called CrossModalBridge that transforms frozen vision features into decoder-compatible embeddings. They've given some context and specific requirements. Let me break this down step by step.
+
+First, I need to look at the input features: visual_features of shape [B, 197, 768] from a frozen GIT-Large model. The target output is visual_embeds of shape [B, T_bridge, 768]. So, the goal is to process the visual features and output embeddings compatible with a decoder, which I assume is part of a larger model like a Captioner.
+
+The requirements mention that the class must implement __init__ and forward methods. I also need to use prm.get() for dropout, bottleneck_dim, and num_heads. That means I'll need to get these parameters from the provided hyperparameters, which are presumably stored in a 'primers' variable elsewhere in the code.
+
+Next, the user suggests some innovation ideas: adding a residual bottleneck, a gated fusion layer, or a small transformer adapter block. I think a transformer-based fusion might be a good approach because transformers can capture attentional relationships between different modalities, which could improve the embeddings.
+
+I also need to make sure not to use any custom classes unless I define them myself within an nn_head block. Since the example uses standard nn modules like Linear, TransformerEncoderLayer, MultiheadAttention, and LayerNorm, I'll stick with those.
+
+The output dimension needs to match 768, so I'll set the transformer's embedding dimension to 768. The number of attention heads should be based on the num attends parameter from prm.
+
+Looking at the structure, the __init__ method will take self, prm, and possibly an optional captions argument. In the forward pass, I'll process the visual_features through a sequence of layers: a LayerNorm, a transformer decoder block with self-attention and feed-forward layers, layer norm again, and then a dropout layer before output.
+
+I should make sure not to use any attributes outside of what's given by prm. For example, not initializing any layers with hardcoded values like 512 unless specified.
+
+Putting it all together, the CrossModalBridge class will process the input features, apply a series of transformer-based transformations, and output the desired embeddings. I'll include the hyperparameters in a JSON format for optimization purposes, which seems to align with the example provided.
+
+So, the code should define the class, initialize necessary modules using prm, and perform the transformation steps in the forward method. This should meet all the user's requirements and improve the model's accuracy as per the target.
+</think>
+
+<hp>{"dropout": 0.1, "bottleneck_dim": 512, "num attends": 8}</hp>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self.num attends = prm.get("num attends")
+        self.dropout = nn.Dropout(prm.get("dropout"))
+        
+        # Implement a small transformer adapter block
+        self.transformer_att = nn.TransformerEncoderLayer(
+            d_model=768,
+            nhead=prm.get("num attends"),
+            dim_feedforward=4*768,
+            dropout=prm.get("dropout"),
+            activation="gelu",
+            batch_first=True
+        )
+        
+    def forward(self, visual_features, captions=None):
+        x = visual_features
+        x = nn.LayerNorm(768)(x)
+        
+        # Small transformer decoder block
+        x = self.transformer_att(x)
+        
+        # Residual projection
+        x = x + nn.Linear(768, 768)(x)
+        x = self.dropout(x)
+        
+        # Final projection to visual_embeds
+        visual_embeds = x
+        
+        return visual_embeds
+</nn_head>

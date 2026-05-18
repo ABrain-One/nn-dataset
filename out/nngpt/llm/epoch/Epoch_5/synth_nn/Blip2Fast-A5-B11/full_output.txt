@@ -1,0 +1,61 @@
+Alright, I need to create a PyTorch class called CrossModalBridge that transforms visual features into decoder-compatible embeddings. Let's see the requirements.
+
+First, the input is visual_features of shape [B, 197, 768]. I need to output visual_embeds with shape [B, T_bridge, 768]. So, the key here is to transform the features into something that the decoder can use.
+
+The current best accuracy is given, but I don't think I need to incorporate that directly into the code. Focus is on the structure.
+
+The class must implement __init__ and forward. In __init__, I'll take the parameters from prm. So I'll retrieve dropout, bottleneck_dim, and num_heads using prm.get().
+
+The output shape is the same as the input's visual_features, so 768 is important. The intermediate step is bottleneck_dim.
+
+Now, for the architecture. Innovation ideas include a residual bottleneck, a gated fusion layer, or a small transformer adapter block. I think adding a small transformer block would help in capturing more complex features without overcomplicating things.
+
+Let me structure the layers. I'll add a MultiheadAttention layer to get a good representation, then a residual with layer normalization. After that, a Linear layer to reduce the dimension to bottleneck_dim, followed by another MultiheadAttention for finer details, then a Linear back to 768, with dropout applied.
+
+In the forward method, I'll pass the visual_features through the attention layer, apply ReLU, then the residual connection, normalization, and dropout. Then pass through the second attention and linear layers to get the final embeddings.
+
+I need to make sure I don't use any custom classes unless I define them. So, for example, if I need a small transformer block, I'll use nn.Sequential to hold the new layers.
+
+Putting it all together, the code should define CrossModalBridge with the mentioned layers, ensuring that the dimensions match and the dropout is correctly applied. Testing should verify that the output dimensions are as expected, but with the given information, that's the approach.
+</think>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self.num_heads = prm.get("num_heads")
+        self.dropout = nn.Dropout(p=prm.get("dropout"))
+        
+        # Configuring the decoder-compatible transformer block
+        dim = 768
+        self.slf_attn = nn.MultiheadAttention(
+            embed_dim=dim, 
+            num_heads=self.num_heads, 
+            dropout=self.dropout
+        )
+        
+        # Residual bottleneck with layer norm
+        self.bottleneck = nn.Sequential(
+            nn.Linear(dim, self.bottleneck_dim, bias=False),
+            nn.ReLU(),
+            nn.Linear(self.bottleneck_dim, dim)
+        )
+        
+        # Final output layer
+        self.proj = nn.Linear(dim, dim)
+        
+    def forward(self, visual_features, captions=None):
+        x = visual_features
+        
+        # Applying self-attention
+        x, _ = self.slf_attn(x, x, x)
+        x = x + self.dropout(x)  # Adding residual connection
+        
+        # Applying bottleneck
+        x = self.bottleneck(x)
+        x = self.proj(x)
+        
+        # Final output with scaled init
+        return x * (1/(self.bottleneck_dim ** 0.5))
+</nn_head>

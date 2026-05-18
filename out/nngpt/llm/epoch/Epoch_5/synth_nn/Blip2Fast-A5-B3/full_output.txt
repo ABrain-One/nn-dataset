@@ -1,0 +1,65 @@
+Alright, let's see what the user is asking for. They want me to generate a PyTorch class called CrossModalBridge that transforms frozen vision features into decoder-compatible embeddings. The context given includes the input shape [B, 197, 768] and target output [B, T_bridge, 768]. 
+
+First, I need to understand the requirements. The class must have __init__ and forward methods. They mentioned using prm.get() for dropout, bottleneck_dim, and num_heads. That's important, so I should make sure those parameters are fetched from the prm object.
+
+The innovation part is interesting. They want to add a residual bottleneck, a gated fusion layer, or a small transformer adapter block. Residual bottlenecks are common in neural networks to help with gradient flow, so that's a solid idea. I'll go with a residual mechanism to make it more robust.
+
+I should also consider using standard nn modules. So, I'll stick to layers like Linear, TransformerEncoderLayer, MultiheadAttention, etc., and avoid any custom classes unless necessary.
+
+Another critical point is not to use any attributes not explicitly retrieved or initialized. That means I can't have any hardcoded values or parameters outside of the specified methods. 
+
+Let me outline the steps. In the __init__ method, I'll initialize the various modules. For the transformation paths, maybe I'll process the visual features through a series of layers, applying some attention and linear layers. 
+
+For the fusion part, since I'm using a residual bottleneck, I'll have an encoder part that processes the visual features with some layers, then a bottleneck layer, and then another decoder part that fuses it back. The bottleneck layer should be smaller, like bottleneck_dim, as per the parameters.
+
+In the forward pass, the input visual_features go through the transformation paths. After processing, they are concatenated and then passed through a multi-head attention layer to allow cross-attention between the encoder and decoder parts. Finally, some normalization and activation layers will ensure the embeddings are well-behaved.
+
+I need to make sure the output shape matches [B, T_bridge, 768], which should be achievable with appropriate attention and linear layers. Also, using T_bridge =1 for now might help test the code without making it too complex.
+
+I should double-check that all the necessary imports are included, especially if using things like MultiheadAttention, which requires importing from torch.nn.Module and so on. Wait, no, MultiheadAttention is already in torch.nn as _transformation, so the class should have that imported properly.
+
+Finally, testing the code. Maybe run it with some dummy data to see if it works. For instance, when input is [B,197,768], after processing, the output should be [B, T_bridge, 768]. Since I set T_bridge=1, the output will be [B,1,768].
+
+I think that covers all the requirements. Now, putting it all together into the code.
+</think>
+
+<hp>{"dropout": 0.0, "bottleneck_dim": 512, "num_heads": 8}</hp>
+
+```nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.slf_attn = nn.MultiheadAttention(
+            embed_dim=prm.get("emb_dim", 768),
+            num_heads=prm.get("num_heads", 8),
+            dropout=prm.get("dropout", 0.0),
+        )
+        self.slf_fpn = nn.Linear(
+            in_features=768,
+            out_features=prm.get("bottleneck_dim", 512),
+            bias=True,
+        )
+        self.fpn_attn = nn.Linear(
+            in_features=768,
+            out_features=768,
+            bias=True,
+        )
+        self.slf_dec = nn.Linear(
+            in_features=768,
+            out_features=768,
+            bias=True,
+        )
+        self.slf_norm = nn.LayerNorm(768)
+        
+    def forward(self, visual_features, captions=None):
+        x = visual_features
+        x1 = self.slf_attn(x, None, None)[0]
+        x2 = self.slf_fpn(x1)
+        x3 = self.slf_attn(x2, x3=None, x2=None)[0]
+        x_bridge = x3 + x1
+        x_bridge = self.slf_norm(x_bridge)
+        x_bridge = torch.relu(x_bridge)
+        return x_bridge
+```
+
+<nn_head>

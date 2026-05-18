@@ -1,0 +1,65 @@
+Okay, I need to create a CrossModalBridge class in PyTorch that transforms visual features into decoder-compatible embeddings. The input is visual_features of shape [B, 197, 768], and the output should be [B, T_bridge, 768]. 
+
+First, I'll start by looking at the requirements. The class must have __init__ and forward methods. It should use prm.get() for dropout, bottleneck_dim, and num_heads. Also, I can add a residual bottleneck, a gated fusion layer, or a small transformer adapter block. 
+
+I think a residual bottleneck would be a good addition because it can help with gradient flow and prevent vanishing gradients. So in the __init__ method, I'll define a bottleneck using a Linear layer to reduce the dimension and then expand it back. Using dropout here makes sense to prevent overfitting, so I'll include a dropout layer as well.
+
+Next, for the attention part, a small transformer adapter block could be beneficial. This would allow for more fine-grained control over how the features are processed. I'll set the attention to have a num Heads and a low dimension, which would make the computations faster and more efficient.
+
+In the forward pass, I'll start by applying the residual transformation to the visual_features. Then, I'll pass it through the adapter block, which includes multi-head attention and feed-forward layers. After processing, I'll expand the dimensions to match the target output size and apply dropout before returning the final embeddings.
+
+I need to ensure that all the parameters are initialized using prm.get(). So I'll set dropout, bottleneck_dim, and num_heads from the parameters. Also, I'll make sure not to use any custom classes unless I define them, which I'm not doing here. I'll stick to standard PyTorch modules like Linear, LayerNorm, and MultiheadAttention.
+
+Putting it all together, I'll structure the class with the __init__ method initializing all the necessary components and the forward method handling the sequence of operations. This should achieve the desired transformation from visual features to decoder-compatible embeddings.
+</think>
+
+```
+<hp>{"dropout": 0.1, "bottleneck_dim": 512, "num_heads": 8}</hp>
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self.dropout = nn.Dropout(prm.get("dropout"))
+        self.num_heads = prm.get("num_heads")
+        
+        # Residual bottleneck with dropout
+        self.reducer = nn.Linear(768, self.bottleneck_dim)
+        self.expand = nn.Linear(self.bottleneck_dim, 768)
+        
+        # Small transformer adapter block
+        self.slf_attn = nn.MultiheadAttention(768, self.num_heads, batch_first=True)
+        self9Mlp = nn.Sequential(
+            nn.Linear(768, 3072),
+            nn.ReLU(inplace=True),
+            nn.Linear(3072, 768)
+        )
+        
+        # Layer norm and activation
+        self.reducer_norm = nn.LayerNorm(768)
+        self.expand_norm = nn.LayerNorm(768)
+
+    def forward(self, visual_features, captions=None):
+        B = visual_features.size(0)
+        
+        # Residual transformation
+        x = visual_features
+        x = self.reducer(x)
+        x = self.bottleneck_dim * torch.randn([B, self.bottleneck_dim])
+        x = self.expand(x)
+        
+        # Transformer adapter block
+        x = x.permute(0, 2, 1)
+        x = self.slf_attn(x)[0]
+        x = x.permute(0, 2, 1)
+        x = self9Mlp(x)
+        
+        # Final transformation
+        x = x + visual_features
+        x = self.reducer_norm(x)
+        x = self.expand(x)
+        x = self.expand_norm(x)
+        x = self.dropout(x)
+        
+        return x
+```

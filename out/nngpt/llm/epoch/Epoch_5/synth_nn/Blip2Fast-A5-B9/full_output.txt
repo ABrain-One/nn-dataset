@@ -1,0 +1,393 @@
+Okay, so I'm trying to solve this problem where I need to create a PyTorch module called CrossModalBridge. The goal is to transform frozen vision features into decoder-compatible embeddings. The input is visual_features of shape [B, 197, 768], and the output should be visual_embeds of shape [B, T_bridge, 768]. 
+
+First, I need to understand what exactly the CrossModalBridge should do. From the context, it's supposed to bridge between visual features and some captions. The user mentioned that using a residual bottleneck, a gated fusion layer, or a small transformer adapter block could be innovative ideas. Also, it's important not to use custom classes unless they're defined inside the <nn_head> block, so I have to be careful about that.
+
+Looking at the requirements, the module must have __init__ and forward methods. Also, the dropout, bottleneck_dim, and num_heads should be retrieved using prm.get(). That means I need to make sure all these parameters are accessible through the given parameters.
+
+The user provided an example where the JSON tag is used for hyperparameters, but in this case, I think it's more about the structure rather than actual hyperparameter values. So I should focus on the structure and layers.
+
+The innovation idea suggests adding a residual bottleneck. That usually involves projecting the input into a lower-dimensional space, then applying some transformations, and then adding it back to the original input. This helps in maintaining information flow and might help with training stability, especially when the feature dimensions change.
+
+Another idea is a gated fusion layer. Gated mechanisms often use some kind of attention mechanism to control how different components interact. In this case, it might mean fusing the visual features with another modality's features (like text) in a way that the fusion is modulated by some gating mechanism, maybe like a sigmoid gate to control the flow.
+
+Alternatively, a small transformer adapter block can be used. That might involve using a few layers of a transformer encoder to process the visual features, allowing for more complex transformations before fusing them.
+
+But considering the requirements, I should choose one innovation idea. Let's go with the residual bottleneck and a transformer adapter block because they are both standard and can be combined effectively.
+
+So, the plan is:
+
+1. **Residual Bottleneck**: Take the input visual_features, project it into a lower-dimensional space using a linear layer with bottleneck_dim, and then pass it through multiple layers (maybe a couple of transformer encoder layers). After processing, project it back up to the original dimension and add it to the processed input via residual connection.
+
+2. **Transformer Adapter Block**: This block will consist of multi-head attention layers, layer normalization, and feed-forward layers. It can capture more complex representations from the visual features and then project them to a certain dimension.
+
+Additionally, since the current best accuracy is quite low, 0.08367, perhaps implementing a more nuanced model will help improve it. The user already mentioned they should do this for the model, so maybe the CrossModalBridge needs to be optimized.
+
+I should structure the CrossModalBridge class with these components. In the forward pass:
+
+- Apply the transformer adapter block to the visual_features.
+- Then apply the residual bottleneck, which includes projecting to the bottleneck_dim, perhaps through multi-head attention, then applying non-linearities, and adding it back to the original features.
+
+Wait, but adding a projection would change the dimensions. Let's make sure that the residual connection maintains the same dimension. So, the projection from 768 to bottleneck_dim (say 512) and then back up would involve projecting to the same 768 dimensions. So the code for the residual part could be something like:
+
+features = self.transformer适应器(visual_features)
+proj_in = F.relu(self Projects(features, to_bottleneck))
+proj_back = F.投影(proj_in, from_bottleneck_to_original)
+output = visual_features + proj_back
+
+But to maintain dimension, perhaps the residual is just another branch that goes through some processing. Alternatively, if the residual is a separate path that's processed by another small network and then scaled appropriately before adding back.
+
+Alternatively, another way is to use the same dimension for the processing without scaling down and up. Hmm.
+
+But considering the code structure, I'll proceed step by step.
+
+In the __init__ method, I need to initialize the transformer blocks for both the residual and the transformer adapter. Also, the attention layers should be implemented using standard PyTorch modules like nn.TransformerEncoderLayer and nn.MultiheadAttention.
+
+So, putting it all together, the CrossModalBridge will have two main branches: one applying the transformer adapter (which is the initial processing) and another applying the residual bottleneck. However, the output should be the result after the residual processing.
+
+Wait, in the initial step, the transformer adapter is applied as the main processing, and then the residual is added as another processing step.
+
+Alternatively, the CrossModalBridge could process the visual features first through a transformer adapter block, and then apply the residual bottleneck to enhance the representations.
+
+So the forward method will first apply the transformer适应器, then the residual, and output that.
+
+I also need to make sure that I use the parameters from prm.get() for dropout, bottleneck_dim, and num_heads.
+
+Putting it all together, the CrossModalBridge module should have these components and carefully handle the dimensions to ensure the output shape is [B, T_bridge, 768]. Since T_bridge can vary, but in our case, it's the same as the input's first dimension, but with the same dimension size, 768.
+
+I also have to ensure that the number of attention heads is set appropriately, perhaps using the num_heads from the parameters. Using layer normalization (LayerNorm) and dropout (from the parameters) is essential to stabilize training and prevent overfitting.
+
+In code, inside the forward function:
+
+- Start by applying the transformer适应器 to the visual_features to get a new embedding.
+- Then, project this through a linear layer down to the bottleneck_dim, apply another attention or feed-forward network, and project back up.
+- Finally, add the processed version of visual_features (from the residual path) to the transformer适应器 output.
+
+Wait, maybe the residual and transformer adapter are separate branches. So:
+
+First, process the visual_features through the transformer适应器, which is a separate pathway, probably involving multi-head attention and feed-forward layers.
+
+Then, apply a linear projection down to the bottleneck_dim, maybe using a few layers (like two layers in the residual network) and then project back up, then add this to the original features.
+
+But the problem is the shape. If the original visual_features is [B, 197, 768], and if we project to, say, 512, then after the projections and residuals, we need to get back to 768.
+
+Alternatively, the residual pathway might not change the dimension, perhaps just adding a mask or scaling the projection. But in this case, perhaps the code should handle the shapes appropriately.
+
+So, in the code, after applying the transformer适应器, which is a sequence of multiple layers (like maybe 2 or 3), the output should have the same shape as the input, so we can add it to another processed version.
+
+Wait, no, the residual may involve projecting the input into a different space. So let's think: The residual is a small network that transforms the input, and then that is added to the main output.
+
+Therefore, in code, after the main transformer适应器 is applied, the residual network is built by projecting the input, perhaps applying some non-linearity, then projected back, scaled, and added.
+
+In terms of code, perhaps:
+
+from the original features, apply transformer适应器 and get hidden.
+
+then, compute residual_features = (self.projection networks)(visual_features)
+
+then, output is hidden + residual_features, where residuals may have gone through some processing but same dimension.
+
+But the exact implementation depends on whether the residual is to have the same dimension as the hidden state.
+
+Alternatively, in the code, the residual block can process the input through a smaller network and then scale it by a learnable parameter before adding.
+
+Alternatively, in the initial phase, when bottleneck_dim is applied, perhaps project to 512, process, project back, scale, then add.
+
+But I think the key is to follow the residual connection logic correctly.
+
+So, in the code, perhaps:
+
+def forward(self, visual_features, captions=None):
+    # Apply transformer适应器
+    x = self.transformer适应器(visual_features)
+
+    # Apply residual network
+    residual = self.residual(visual_features)
+
+    # Sum them
+    output = x + residual
+
+    return output
+
+But then the residual can have its own layers and scaling.
+
+Alternatively, in the residual network, perhaps process it using some transformations, but in any case, the output should have the same dimensions as x.
+
+But I'm getting a bit stuck on the exact implementation of the residual.
+
+Wait, maybe I need to create a residual block, like this:
+
+class Residual(nn.Module):
+    def __init__(self, channels):
+        super(Residual, self).__init__()
+        self projects = nn.Linear(channels, channels, bias=False)
+        self project_back = nn.Linear(channels, channels, bias=False)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(self prm.get('dropout'))
+
+    def forward(self, x):
+        x = self.projects(F.relu(x))
+        x = self.project_back(F.relu(x))
+        x = self.dropout(x)
+        return x + x
+
+But that's a simple residual with two ReLU and linear layers, which might not be optimal. Perhaps using a more sophisticated structure with, say, multiple layers in the residual network.
+
+Alternatively, perhaps combining the two for the CrossModalBridge: first a transformer适应器, then the residual, and then combining both.
+
+But time is limited, so perhaps a better approach is to define the CrossModalBridge with a sequence of layers, including the residual and the transformer适配器.
+
+Given that, I'll proceed to implement it with a transformerAdpt block and a residual block.
+
+So, I'll outline the class:
+
+- __init__ method sets up the hyperparameters using prm.get(), including dropout, bottleneck_dim, and num_heads.
+
+- The crossmodalbridge consists of a transformerAdpt layer and a residual layer.
+
+Wait, but perhaps the transformation should be a stack of multiple transformer layers for better capture.
+
+So, in the forward pass:
+
+1. Apply a multi-layer transformer to the visual_features to get x.
+2. Apply the residual processing.
+3. Return the sum of x and the residual.
+
+But, according to the problem, the output is [B, T_bridge, 768], but T_bridge isn't clear what it refers to, but it's possible that it's a sequence length but each token has 768 features.
+
+But since the input has 197 tokens, perhaps the output uses the same, but each has transformed features.
+
+But the goal is to process visual_features into an output of similar shape as input, but transformed.
+
+Wait, but the problem says that the output visual_embeds has shape [B, T_bridge, 768], but since T_bridge is T, which is a step count, it's possible that the model is designed for autoregressive prediction, where each step depends on the previous, as in caption generation.
+
+Alternatively, perhaps it's meant to produce a representation that's a function of the input visual features, perhaps with the same or different sequence length.
+
+But since the problem states the output should be [B, T_bridge, 768], perhaps T_bridge is 1, but in any case, the code must manage varying T_bridge.
+
+But considering the problem statement, perhaps the T_bridge is the same as the original sequence length, so 197 tokens.
+
+But that's probably not needed here.
+
+I think the focus is more on the structure of the CrossModalBridge than the exact T_bridge.
+
+So, the module should take visual_features of [B, 197, 768], process it with a Transformer适配器 (a series of multi-head attention and feed-forward layers), perhaps using residual connections within this adapted sequence.
+
+But for the residual network, it's more about additional processing steps, maybe with lower-dimensional projections to increase efficiency.
+
+Alternatively, perhaps stacking two fully connected layers with residuals on each step.
+
+In any case, the key is to create a module that processes the visual features and outputs the correct shape, using the specified hyperparameters.
+
+I think the best way is to first process the visual_features through a series of layers (like a transformer), then project through a residual network and sum it back.
+
+So, the CrossModalBridge class would have these layers:
+
+- An initial transformer适配器.
+- A residual projection to bottleneck_dim, apply non-linearities, and project back.
+- The sum of the transformer adapted features and the residual processed features.
+
+Here's the code outline:
+
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.reducer_dim = prm.get('bottleneck_dim')
+        self.dropout_rate = prm.get('dropout')
+
+        # Self-attention layers
+        self.transformer_adpt = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                dim=768,
+                nhead=prm.get('num_heads'),
+                dropout=self.dropout_rate,
+            ),
+            num_layers=2,
+        )
+
+        # Residual blocks
+        self.res_proj = nn.Linear(768, self.reducer_dim, bias=False)
+        self.res_MHA = nn.MultiheadAttention(self.reducer_dim, 3)  # as an example
+        self.res投影回来 = nn.Linear(self.reducer_dim, 768, bias=False)
+
+        # Final layer
+        self.reducer = nn.Linear(768, 768)  # if needed.
+
+    def forward(self, visual_features, captions=None):
+        # Apply transformer适配器
+        x = self.transformer_adpt(visual_features)
+        x = F.dropout(x, p=self.dropout_rate)
+        x = x + visual_features  # identity skip connection
+
+        # Apply residual processing
+        residual = F.relu(self.res_proj(x))
+        residual, _ = self.res_MHA(residual)
+        residual = F.relu(self.res_projection_back(residual))
+        # Scale the residual
+        scaled_residual = F.dropout(residual * self reducer_scale, p=self.dropout_rate)
+
+        # Apply the final projection to match the original dimensions
+        x += scaled_residual
+
+        return x
+
+Wait, but this may need some refining. Maybe the code inside __init__ is needed for the layers, and the forward function implements the flow.
+
+Also, note that the problem said to avoid defining any custom classes unless necessary. So I should use the standard layers and avoid creating new classes.
+
+But I think that the CrossModalBridge itself doesn't need to have custom classes, so the code should be written with standard PyTorch layers.
+
+Now, the residual can be integrated into the transformerAdpt processing itself, as each layer can have a residual connection. So maybe each transformer encoder layer uses a residual connection that includes the original input.
+
+In the code, perhaps:
+
+Within the CrossModalBridge's __init__, define the residual dimensions.
+
+Then, in forward, perform the following steps:
+
+1. Start with visual_features.
+2. Pass through the transformer适配器 with residual connections.
+3. After processing with the transformer, project to the bottleneck_dim.
+4. Maybe perform an attention in the bottleneck_dim, then project back up.
+5. Scale this processed input and add it back to the transformer output.
+
+But, to maintain the 768-dimensional output, each projection must account for the scaling factors. Typically, in such cases, a projection to a lower dimension is followed by a projection back with scaling to keep the norm, but if the dimensionality stays the same, scaling isn't required.
+
+But to get [B, T, 768], the entire processing is such that the transformations don't change the feature size. Therefore, perhaps the residual processing after the transformer适配器 is minimal.
+
+But perhaps the residual is only applied once.
+
+Alternatively, applying residual processing after each layer.
+
+Given that, I think it's best to define the code that includes a transformer适配器 with residual connections, maybe, but considering the limited time, perhaps better to add a standard residual connection within the CrossModalBridge.
+
+Here's an alternative approach:
+
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.transformer_adpt = nn.Sequential(
+            nn.TransformerEncoderLayer(
+                d_model=768,
+                nhead=prm.get('num_heads'),
+                dropout=prm.get('dropout'),
+            ),
+            nn.TransformerEncoderLayer(
+                d_model=768,
+                nhead=prm.get('num_heads'),
+                dropout=prm.get('dropout'),
+            )
+        )
+        self.res_proj = nn.Linear(768, 512)
+        self.res_MHA = nn.MultiheadAttention(512, 3)
+        self.res_projection_back = nn.Linear(512, 768)
+
+    def forward(self, visual_features):
+        # Apply transformer adapt
+        x = self.transformer_adpt(visual_features)
+        x_transformer = x
+
+        # Residual projection
+        residual = self.res_proj(x_transformer)
+        # MHA
+        residual, _ = self.res_MHA(residual)
+        # Project back
+        residual_back = self.res_projection_back(residual)
+
+        # Scale and add
+        x_output = x_transformer + F.dropout(residual_back, p=self.dropout)
+        return x_output
+
+Wait, this is simpler. So the forward function first applies the transformer adapt, then computes residual via projecting down, then MHA, then back, and scales with a dropout before adding back.
+
+But adding F.dropout here introduces some stochasticity.
+
+But the user could have mentioned in the requirements that they prefer not to use any new attributes, so perhaps using dropout from the parameters is correct.
+
+In this approach, each path (the transformer adapt and the residual) has the same dropout.
+
+So the forward pass would combine the output of the transformer adapt with the residual processing.
+
+I think this would produce a shape that matches the original, [B, T, 768], assuming that the transformer_adpt output is the same as the input, and the residual processing preserves the dimensions.
+
+Alternatively, the residual processing, which first reduces the dimension to 512, applies MHA, then scales up to 768, and then applies dropout before adding.
+
+But does that preserve the dimensions correctly? Let's see: the initial projection is 768 -> 512, then MHA returns 512 x B x 512 (wait, MHA expects the last dimension as the embedding size. So, the residual projection is 512. After MHA, the output is (B, S, 512), which is then projected to 768 again as in the original.
+
+Wait, but that might require the residual projection back is 512->768.
+
+In the code above, yes, self.res_projection_back has in_channels=512.
+
+Then, the residual_back has shape [B, S, 768], and scaling it with dropout (probably applied after scaling by gain).
+
+Wait, the code does:
+
+residual_back = self.res_projection_back(residual)
+
+Then, x_output = x_transformer + F.dropout(residual_back, p=self.dropout)
+
+But this would sum [B, S, 768] with [B, S, 768], and then adds the dropout on the residual_back before combining.
+
+Hmm, that's acceptable. So the output is still the same as the original, with the same dimension.
+
+But given that, perhaps the hyperparameters need to be set, and maybe in the problem statement, since 'hp' wasn't provided, perhaps the code should assume certain defaults, but the problem specified to provide code regardless.
+
+But in the problem statement, the instruction was to output code, so given the code uses the hyperparameters, the __init__ should have lines:
+
+self.reducer_dim = self.num_heads, for example.
+
+But given the code I'm planning, perhaps using something like:
+
+self.reducer_dim = prm.get('bottleneck_dim')
+self.dropout = prm.get('dropout')
+
+So, the __init__ is defining those parameters.
+
+But then, putting the code together.
+
+I think that with this plan, the CrossModalBridge module should implement a transformer adapted features, apply a residual processing through a lower-dimensional projection, and then combine the two outputs.
+
+Yes, I think this would meet the requirements.
+</think>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.reducer_dim = prm.get('bottleneck_dim')
+        self.dropout = prm.get('dropout')
+        
+        # Self-attention layers
+        self.transformer_adpt = nn.Sequential(
+            nn.TransformerEncoderLayer(
+                d_model=768,
+                nhead=prm.get('num_heads'),
+                dropout=self.dropout,
+            ),
+            nn.TransformerEncoderLayer(
+                d_model=768,
+                nhead=prm.get('num_heads'),
+                dropout=self.dropout,
+            ),
+        )
+        
+        # Residual blocks
+        self.res_proj = nn.Linear(768, self.reducer_dim, bias=False)
+        self.res_MHA = nn.MultiheadAttention(self.reducer_dim, 3)
+        self.res_projection_back = nn.Linear(self.reducer_dim, 768)
+
+    def forward(self, visual_features):
+        # Apply transformer adaptation with residual connections
+        x = self.transformer_adpt(visual_features)
+        x_transformer = x
+        
+        # Residual processing
+        residual = self.res_proj(x_transformer)
+        residual, _ = self.res_MHA(residual)
+        residual_back = self.res_projection_back(residual)
+        
+        # Scale the residual and add to the transformer output
+        scaled_residual = F.dropout(residual_back, p=self.dropout)
+        output = x_transformer + scaled_residual
+        
+        return output
+</nn_head>

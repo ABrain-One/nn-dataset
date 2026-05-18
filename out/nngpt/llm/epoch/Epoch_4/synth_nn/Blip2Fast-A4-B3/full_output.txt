@@ -1,0 +1,70 @@
+Alright, so I've been given this task to create a PyTorch class called CrossModalBridge that transforms frozen vision features into decoder-compatible embeddings. Let me try to break this down and figure out how to approach it.
+
+First, let's understand the context and requirements. The input is visual_features of shape [B, 197, 768], and the output needs to be visual_embeds with shape [B, T_bridge, 768]. The model is part of a Git-SOTA image captioning setup. The user is an expert NAS engineer, so I'm expecting a well-optimized and innovative solution.
+
+Looking at the requirements, I need to implement the CrossModalBridge class with an __init__ and forward method. It must use prm.get() for dropout, bottleneck_dim, and num_heads. Also, it's important to include innovation ideas like a residual bottleneck, gated fusion, or a small transformer adapter block. However, custom classes like Bottleneck, TransformerBlock, or GatedFusion are only allowed if defined within the <nn_head> block. I should avoid any other custom classes unless explicitly allowed.
+
+The output should only include the CrossModalBridge class, nothing else. Also, no attributes except those retrieved via prm.get() or initialized in __init__ are allowed. That means I can't just make up any extra parameters or layers without proper initialization.
+
+Starting with the __init__ method, I know I need to initialize some layers. The requirements mention using the prm to get dropout, bottleneck_dim, and num_heads. So I should define those as attributes in __init__.
+
+For the forward pass, I need to process the visual_features. The first thing that comes to mind is applying a dropout layer to prevent overfitting. So I'll use nn.Dropout2d with the dropout value from prm.
+
+Next, the idea of a residual bottleneck suggests that after processing the features, we might project them into a lower-dimensional space, then project back, adding a residual connection. This can help in stabilizing the training and adding some depth to the model. So I'll add a first projection layer using Linear, then a dropout, then another projection back to the original space, adding the residual connection, and applying another dropout before passing it to the decoder.
+
+In the decoder path, incorporating a transformer-based decoder makes sense. Maybe using a transformer encoder layer for multi-head attention and positional embeddings. I'll need to define a transformer encoder layer within the class, perhaps by subclassing nn.Module, to include self-attention and feed-forward layers. Adding layer normalization and residual connections will help in training stability.
+
+Gating mechanisms, like using sigmoid activations for fusion, can add non-linearity and allow the model to learn how to combine visual and caption embeddings. So I'll include a gated fusion where the transformer encoder's outputs are passed through a sigmoid gate before being added back.
+
+Putting it all together, I'll first project the visual features through a series of layers including residual bottlenecks and dropout, then feed them into a transformer decoder with a small expansion layer and attention mechanisms, incorporating gates for fusion.
+
+I should make sure that all layers use the specified dimensions and dropout rates. Also, since the output needs to be compatible with the decoder, the final embeddings should align in dimension, which they are as the final layer's output is [B, T_bridge, 768].
+
+Finally, I need to structure this into a class with __init__ and forward methods, using the defined layers and applying the necessary operations. Ensuring that all attributes are properly initialized via prm.get() and not adding any extra layers without proper setup is crucial.
+
+After carefully considering each part, I think I have a clear plan for implementing the CrossModalBridge class as required.
+</think>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self.num_heads = prm.get("num_heads")
+        self.dropout = nn.Dropout(prm.get("dropout"))
+        
+        # Residual bottleneck with dropout
+        self.first_proj = nn.Linear(768, self.bottleneck_dim)
+        self.dropout1 = self.dropout
+        self.second_proj = nn.Linear(self.bottleneck_dim, 768)
+        
+        # Decoder path with transformer adapter
+        self.transformer_layer = nn.TransformerEncoderLayer(
+            d_model=768,
+            nhead=self.num_heads,
+            dropout=self.dropout,
+            dim_FEEDFORWARD=4 * 768
+        )
+        self.adapter = nn.Sequential(
+            nn.Linear(768, 3072),
+            nn.ReLU(),
+            nn.Linear(3072, 768),
+            nn.Sigmoid()
+        )
+        
+    def forward(self, visual_features, captions=None):
+        # Apply dropout on input features
+        x = self.dropout(visual_features)
+        
+        # Residual bottleneck processing
+        x1 = self.dropout1(self.first_proj(visual_features))
+        x2 = self.second_proj(x1)
+        x_res = x + x2
+        
+        # Transformer adapter for decoder compatibility
+        x = x_res + self.adapter(x)
+        x = self.transformer_layer(x)
+        
+        # Return compatible embeddings for decoder
+        return x
+</nn_head>

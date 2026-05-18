@@ -1,0 +1,443 @@
+Okay, I need to create a PyTorch class called CrossModalBridge that transforms frozen vision features into decoder-compatible embeddings. The input is visual_features of shape [B, 197, 768], and the output should be visual_embeds of shape [B, T_bridge, 768]. 
+
+First, I remember the requirements: the class must have __init__ and forward methods. I need to use prm.get() for dropout, bottleneck_dim, and num_heads. I should also add a residual bottleneck, a gated fusion layer, or a small transformer adapter block as an innovation idea. Also, I must not use custom classes unless defining them inside nn_head, and use standard nn modules.
+
+So, starting with the __init__ method. I'll include the parameters from prm: hidden_dim, bottleneck_dim, num_heads, and dropout. I'll set self.bottleneck using nn.Linear layers with the specified dimensions. The residual projection should also be another Linear layer. The decoder_input will also be a Linear layer projecting to the target embedding dimension, which is the same as the input features' embedding size, I think 768 here.
+
+In the forward method, the input visual_features is passed through the ResidualBottleneck. This involves applying a layer norm, projecting to the bottleneck dimension, adding a residual connection, then another layer norm and projection back. Then, using the decoder_input on the bottleneck features.
+
+But wait, the optional innovation idea is to add a small transformer adapter block. Maybe I should include that as an optional parameter in prm. But since it's not specified, perhaps for the minimal solution, I'll stick to the residual bottleneck.
+
+I need to make sure not to use any custom classes except within nn_head, but in the example provided, within the CrossModalBridge class. So defining classes like BottleNeck or AttentionHead should be avoided unless inside the nn_head block.
+
+Now, implementing attention. I'll create an AttentionHead class within nn_head. It should have query, key, value projections, attention masks, and apply masking during the attention computation.
+
+Putting it all together, in forward, after getting the bottle_features, apply the attention head. Then pass through the final layer norm and projection to get visual_embeds.
+
+Also, for the optional dropout, I need to make sure to apply dropout correctly, probably after the attention or projection layers.
+
+Wait, the original requirements said to prefer using standard modules like nn.Linear, nn.TransformerEncoderLayer, etc. So perhaps using an nn.TransformerEncoderLayer with numheads set, but since I'm already using an AttentionHead, maybe that's redundant. Alternatively, for the adapter, using self attends using the transformer layer.
+
+Alternatively, maybe it's better to create a small transformer adapter within the CrossModalBridge class. Let me think: perhaps in the forward method, after getting to the decoder_input, project to the hidden_dim, then apply a transformer layer, and then get back.
+
+Hmm, but the initial code has an AttentionHead in the head of the cross-modality bridge. Maybe it's better to include both residual and transformer parts if possible, but since the problem specifies 'innovation ideas', adding a small transformer block would enhance the model. But since it's optional, maybe for now, the minimal version is just the residual bottleneck. But the user suggests considering it as an innovation.
+
+Wait, in the user's example, within the CrossModalBridge class, they have a nn_head where they define an AttentionHead as a nested class. So perhaps I should follow that structure.
+
+So perhaps in the __init__, after processing the initial features, project to hidden_dim, and then use the transformer block to attend. Then, finally project back to 768 or whatever the required output is.
+
+I think perhaps a better approach is to have a layered structure. First, apply a residual bottleneck, then apply an attention head (transformer layer), then project. So in the __init__, self.transformer will be an nn.TransformerEncoder or similar.
+
+But wait, given the instructions to not use any custom classes except in the nn_head, perhaps the initial code is better. Let me adjust: add a self.attention within the CrossModalBridge, which is an instance of MyAttentionHead.
+
+In summary, I'll code the CrossModalBridge with the residual bottleneck, then apply an AttentionHead (nested class within nn_head) after projecting through the hidden dimension. Then, project back to the target embedding and return.
+
+I should also handle cases where maybe the visual features need to be adjusted. The input is [B, 197, 768], so I'll first apply a layer norm, project down to bottleneck_dim, add a residual connection (x + proj(x)), then norm again and project to 768? Or maybe just project down and up. But for a bottleneck, typically the projection is after adding the residual.
+
+But looking back, the original code I wrote in the example uses the following steps:
+
+- Apply BottleNeck: layer_norm, project to bottlenecks, add residual, layer_norm, project to 768.
+
+Wait, let me get that right. Let's say self.bottleneck is a Linear layer of size (768, bottlenecks). Then:
+
+visual_features are input [B,197,768]
+
+Apply layer norm, then apply the bottleneck linear (768 → bottlenecks), then element-wise add with the original visual_features (x + self.bottleneck(visual_features)), then another layer norm (after adding back in), then another linear to 768. So the forward is:
+
+processed_features = self.bottleneck(visual_features)
+processed_features = visual_features + F.glu(processed_features) ? No, wait in the original code: processed_features is the result of self.bottleneck(visual_features). Then, visual_features + processed_features with layer norm in between.
+
+Wait no:
+
+In the example code:
+
+# ResidualBottleneck
+
+x = self.visual_layer(visual_features)
+x = self.visual_layer_norm(x)
+x += visual_features
+x = self.visual_layer_norm_2(x)
+visual embeds: self.decoder_input(x)
+
+Wait, so the process is:
+
+1. Apply layer norm to visual_features.
+2. Project to bottleneck dimension: x = self.bottleneck(visual_features).
+3. Add x to visual_features: x = visual_features + x. But without a layer norm here, so then apply another norm and projection.
+But in the example, they have x = self.bottleneck(visual_features) after applying the first norm. Then x is added back and after another norm.
+
+Wait, no, in the example, they first do:
+
+x = self.visual_layer(visual_features)
+Then x is passed through first norm.
+Then x = visual_features + x.
+Then x is passed through the second norm.
+Then x is passed through self.decoder_input to get the final embedding.
+
+But that would be adding to the features before applying the decoder_input.
+
+So, in code:
+
+processed = self.visual_layer(visual_features)
+processed = self.visual_layer_norm(processed)
+processed += visual_features
+processed = self.visual_layer_norm_2(processed)
+processed_embeds = self.decoder_input(processed)
+
+But since during forward, the model is passed through:
+
+so perhaps after projection to bottleneck, the residual is added, then another projection and layer norm, then the decoder_input.
+
+So, perhaps in the CrossModalBridge, the steps are:
+
+1. Add layer norm after the vision features (visual_features).
+2. Project to hidden_dim using self.hidden.
+3. Residual: visual_features + hidden_features.
+4. Layer norm on the residual.
+5. Project to target_dim (visual_embeds) using self.output_layer.
+6. Return visual_embeds.
+
+Then, perhaps adding an attention block.
+
+But the example code had:
+
+visual_layer(768 → bottlenecks)
+norm
+added visual_features → x = x + visual_features
+norm again
+decoding into 768.
+
+So, given that, in the __init__, we have:
+
+- hidden_dim: input_dim (768), bottleneck_dim, etc.
+- init with Linear layers to hidden and then again.
+- decoder_input is the next Linear.
+
+So, in code:
+
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.bottleneck = nn.Linear(768, prm.get('bottleneck_dim', 512))
+        self.visual_layer_norm = nn.LayerNorm([197,768])
+        self.visual_layer_norm_2 = nn.LayerNorm([197,768])
+        self.visual_layer = nn.Linear(768, prm.get('bottleneck_dim',512))
+        self.decoder_input = nn.Linear(prm.get('bottleneck_dim',512),768)
+        self.dropout = nn.Dropout(prm.get('dropout',0.1))
+
+    def forward(self, visual_features, captions=None):
+        x = self.bottleneck(visual_features)
+        x = self.visual_layer_norm(x)
+        x += visual_features
+        x = self.visual_layer_norm_2(x)
+        x = self.decoder_input(x)
+        return x
+
+But wait, this is without any attention. So, I should add an optional innovation. Perhaps as an optional argument to __init__ whether to include attention or not. But according to the requirements, I can't define a new class unless it's defined inside nn_head.
+
+So, perhaps to add an AttentionHead as a nested class. So in __init__, maybe I set include_attention, and create it in nn_head.
+
+Alternatively, maybe including an attention in the form of multi-head attention as an optional adapter.
+
+Alternatively, another option is to apply a small transformer-based adapter. So, within the forward method, I can optionally apply an attention.
+
+But the example in the problem defines the initial code, but with an optional input. Since it's supposed to be minimal, I'll go with adding an attention.
+
+So, defining the MyAttentionHead class as a nested module in __init__, which is an AttentionHead with query, key, value projections, and apply masking.
+
+Wait, perhaps creating an AttentionHead that takes in the parameters, like key_dim, query_dim, etc. So inside __init__, I can have self.attention which is an instance of AttentionHead.
+
+Putting it all together:
+
+In __init__:
+
+self.attention = None
+self.include_attention = True
+
+If include_attention is True, then self.attention is an AttentionHead.
+
+But since the code should be minimal, perhaps the user is supposed to avoid adding anything unless necessary. But the requirement says to include it as innovation.
+
+Hmm. Alternatively, maybe the optional is to have a transformer-based adapter. Let me think.
+
+Another idea is to define a small transformer adapter within the cross-modality bridge. This would involve applying a sequence of attention and feed-forward layers. So within the forward method, after projecting the features through a linear layer, perhaps pass through a few transformer blocks.
+
+But for the minimal code, perhaps including just a single transformer block would be better.
+
+In any case, the code should only define standard modules.
+
+Therefore, in the example code, the final output uses the MyAttentionHead, which is an innovation. So that's acceptable.
+
+Thus, in the final code, I'll include the AttentionHead as a nested class.
+
+But wait, the original example in the code uses self.decoder_input which is an instance of nn.Linear, so I'll have to make sure the code follows that.
+
+Putting it all together:
+
+The CrossModalBridge will have:
+
+- __init__ with parameters for hidden_dim, bottleneck_dim, etc.
+- forward with possible attention layers.
+
+In code:
+
+class CrossModalBridge(nn.Module):
+    <init>
+        self.h = ...
+        self.bottleneck = nn.Linear(...)
+        self attend is defined as a nested MyAttentionHead
+    ...
+
+    def forward:
+        process with ResidualBottleneck
+        apply optional attention
+        then decode
+        output
+
+But since the problem says to use in the <hp> tags and write the code, and given that in the __init__ and forward, and the use of pre-initialized parameters.
+
+So the code will be structured as follows:
+
+I'll define within __init__ that self.attention is defined as None and set self.include_attention to True or False.
+
+Wait, perhaps more carefully:
+
+In the __init__, include_attention is a parameter, but in the code example, the cross-modal bridge doesn't take any parameters except self, but perhaps I need to include the option for attention as per parameters.
+
+Wait, but in the problem statement, 'params are obtained via self.get()', but perhaps to add attention, we need to retrieve new params, which is optional.
+
+But perhaps for this problem, the code doesn't need to handle that, just include an optional attention part, but in minimal code, just include attention.
+
+Alternatively, perhaps just always include it.
+
+Wait, perhaps it's easier to define a default MyAttentionHead in __init__.
+
+In summary, the minimal code is to have the ResidualBottleneck and then apply the decoder_input. But considering the innovation idea, adding an attention step would be a good touch.
+
+So, considering all that, I'll proceed to write the code as follows:
+
+In __init__:
+
+self.hid_dim = prm.get('hidden_dim', 768)
+self.bottleneck_dim = prm.get('bottleneck_dim', 512)
+self.attention_query = nn.Linear(self.hid_dim, self.bottleneck_dim)
+self.attention_key = nn.Linear(self.hid_dim, self.bottleneck_dim)
+self.attention_value = nn.Linear(self.hid_dim, self.bottleneck_dim)
+self.attention = nn.Linear(self.bottleneck_dim, self.hid_dim)
+self included_attention = True
+Wait, no, perhaps define an attention class.
+
+Alternatively, create an AttentionHead class within __init__ and set self.attention.
+
+Let me define:
+
+class MyAttentionHead(nn.Module):
+    def __init__(self, key_dim, query_dim):
+        self.key = nn.Linear(query_dim, key_dim)
+        self.query = nn.Linear(query_dim, key_dim)
+        self.value = nn.Linear(query_dim, key_dim)
+        self.attn = nn.Linear(key_dim, query_dim)
+        self.dropout = nn.Dropout(prm.get('dropout', 0.1))
+    
+    def forward(self, x):
+        # x is (B, L, key_dim)
+        q = self.query(x)  # (B, L, key_dim)
+        k = self.key(x)    # (B, L, key_dim)
+        v = self.value(x)  # (B, L, key_dim)
+        # compute attention: [q]k^T . [v] via scaled dot-product
+        att = (q @ k.transpose(-1, -2)) * (1 / (key_dim ** 0.5))
+        att = F.softmax(att, dim=-1)
+        att = self.dropout(att)
+        x = self.attn(att @ v)
+        return x
+
+Then, in the CrossModalBridge:
+
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.bottleneck = nn.Linear(768, prm.get('bottleneck_dim',512))
+        self.visual_layer = nn.Linear(768, 512)
+        self.visual_layer_norm = nn.LayerNorm(768)
+        self.visual_layer_norm_2 = nn.LayerNorm(768)
+        self.decoder_input = nn.Linear(512, 768)
+        self.dropout = nn.Dropout(prm.get('dropout',0.1))
+        self.attention = MyAttentionHead(512, 768)
+    
+    def forward(self, visual_features, captions=None):
+        x = F.relu(self.bottleneck(visual_features))  # [B,197,512]
+        x = self.visual_layer_norm(x)
+        # Apply optional attention
+        if self.attention is not None:
+            x = x.transpose(1,2)  # [B,512,197]
+            x = self.attention(x)
+            x = x.transpose(1,2)  # [B,197,512]
+        x = self.visual_layer_norm_2(x)
+        x = self.decoder_input(x)
+        return x
+
+But wait, perhaps the MyAttentionHead's forward method should return the attention output.
+
+But in the code, the x is transformed with self.attention(x), which would return the [B, L, hid_dim] after attending.
+
+So, perhaps the self.attention part is handled by the attention class.
+
+Thus, adding the MyAttentionHead as a nested module.
+
+In any case, the final code should include that.
+
+Therefore, the minimal code would be:
+
+Implement the CrossModalBridge with ResidualBottleneck, and the optional AttentionHead.
+
+But given that, the code in the <nn_head> tag would define the MyAttentionHead.
+
+But given the problem statement's requirement to only output the class and the hyperparameters in JSON tags, the user may be expecting the minimal CrossModalBridge and then a JSON for the hyperparameters.
+
+Wait, perhaps the user provided the example as code in <hp> and the CrossModalBridge as code in <nn_head>.
+
+Wait, looking back:
+
+The example is:
+
+<hp>{"dropout": 0.1, "bottleneck_dim": 512}</hp>
+<nn_head>
+class AttentionHead(nn.Module):
+    ...
+</nn_head>
+</hp>
+
+But perhaps, the correct approach is to make the CrossModalBridge implement __init__ and forward as per requirements, and the optional parameters are retrieved via prm.get().
+
+Thus, perhaps the correct code is:
+
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.hid_dim = prm.get('hidden_dim', 768)
+        self.bottleneck_dim = prm.get('bottleneck_dim',512)
+        self.bottleneck = nn.Linear(768, self.bottleneck_dim)
+        self.visual_layer = nn.Linear(768, self.bottleneck_dim)
+        self.visual_layer_norm = nn.LayerNorm(768)
+        self.visual_layer_norm_2 = nn.LayerNorm(768)
+        self.decoder_input = nn.Linear(self.bottleneck_dim, 768)
+        self.dropout = nn.Dropout(prm.get('dropout',0.1))
+        # Attention for bridge
+        self.att = nn.Sequential(
+            nn.Linear(self.bottleneck_dim, self.hid_dim),
+            nn.LayerNorm(self.hid_dim),
+            nn.Dropout(prm.get('dropout',0.1)),
+            nn.Linear(self.hid_dim, self.bottleneck_dim)
+        )
+        self.include_attention = True
+    
+    def forward(self, visual_features, captions=None):
+        x = self.bottleneck(visual_features)
+        x = self.visual_layer_norm(x)
+        x = x + visual_features
+        x = self.visual_layer_norm_2(x)
+        x = self.decoder_input(x)
+        if self.include_attention:
+            x = x.permute(1,2,0) # [L, B, 768]
+            x = self.att(x).permute(2,0,1) # back to [B, L, 768]
+        return x
+
+But perhaps this is overcomplicating.
+
+In the initial code example, the bottleneck is projecting to the hidden_dim, then residual addition, and then projecting again.
+
+But given that the code should use standard modules, perhaps including an optional attention via a class defined within __init__.
+
+But within __init__, how to create MyAttentionHead without classes.
+
+Alternatively, maybe to implement the attention within the forward method.
+
+In any case, the final code should include the ResidualBottleneck, with attention optionally.
+
+But given the requirement, perhaps it's better to include the optional parts as per innovation.
+
+Hence, perhaps the CrossModalBridge code will have an '注意力' part added, but for the minimal version without that. But given that the problem says 'innovation ideas' is an option, and perhaps it's better to include it.
+
+Therefore, to comply, the code will include a residual bottleneck and optionally apply an attention block.
+
+Thus, the code in __init__ would:
+
+- Take parameters.
+- Include a hidden_dim for residual.
+- Include a MyAttentionHead.
+- In forward, apply the ResidualBottleneck, followed by optional attention and then decoder_input.
+
+But in the __init__.
+
+But since within __init__ we need to get 'attention_dim' via prm.get, perhaps the code becomes.
+
+But given all that, in the minimal code, it's:
+
+Implement a CrossModalBridge that:
+
+- Projects the features into a lower dimension.
+- Adds a residual connection.
+- Optionally applies a transformer-based attention.
+
+But due to time constraints, I think the correct code is to include the bottleneck with optional attention, as defined via the MyAttentionHead in __init__.
+
+Therefore, I think the code is as follows, including the MyAttentionHead as part of the module.
+</think>
+
+<nn_head>
+class MyAttentionHead(nn.Module):
+    def __init__(self, key_dim, query_dim):
+        self.key = nn.Linear(query_dim, key_dim)
+        self.query = nn.Linear(query_dim, key_dim)
+        self.value = nn.Linear(query_dim, key_dim)
+        self.attn = nn.Linear(key_dim, query_dim)
+        self.dropout = nn.Dropout(prm.get('dropout', 0.1))
+    
+    def forward(self, x):
+        # [B, L, key_dim] after key projection
+        k = self.key(x)  # (B, L, key_dim)
+        q = self.query(x)  # (B, L, key_dim)
+        v = self.value(x)  # (B, L, key_dim)
+        # compute attention: [q]k^T . [v] via scaled dot-product
+        att = (q @ k.transpose(-1, -2)) * (1 / (key_dim ** 0.5))
+        att = F.softmax(att, dim=-1)
+        att = self.dropout(att)
+        x = self.attn(att @ v)
+        return x
+</nn_head>
+
+<hp>{"dropout": 0.1, "bottleneck_dim": 512}</hp>
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.bottleneck_dim = prm.get('bottleneck_dim', 512)
+        self.hidden_dim = prm.get('hidden_dim', 768)
+        self.dropout = nn.Dropout(prm.get('dropout', 0.1))
+        
+        # Residual bottleneck layers
+        self.bottleneck = nn.Linear(768, self.bottleneck_dim)
+        self.visual_layer = nn.Linear(768, self.hidden_dim)
+        self.visual_layer_norm = nn.LayerNorm([197, 768])
+        self.visual_layer_norm_2 = nn.LayerNorm([197, 768])
+        
+        # Attention head
+        self.att_head = MyAttentionHead(self.hidden_dim, 768)
+        
+        # Output layer
+        self.decoder_input = nn.Linear(self.hidden_dim, 768)
+    
+    def forward(self, visual_features, captions=None):
+        # Process through residual bottleneck
+        x = self.bottleneck(visual_features)
+        x = self.visual_layer_norm(x)
+        # Apply self-attention
+        if hasattr(self, 'att_head') and self.att_head is not None:
+            x = x.transpose(1, 2)  # [B, 512, 197] → [B, 197, 512]
+            x = self.att_head(x)
+            x = x.transpose(1, 2)  # [B, 197, 512]
+        x = self.visual_layer_norm_2(x)
+        x = self.decoder_input(x)
+        return x
+</nn_head>
+</hp>

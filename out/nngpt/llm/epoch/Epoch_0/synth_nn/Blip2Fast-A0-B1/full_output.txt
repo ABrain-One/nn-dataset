@@ -1,0 +1,71 @@
+Okay, I need to create a PyTorch class called CrossModalBridge that transforms visual features into decoder-compatible embeddings. Let me think through the requirements and figure out the best way to approach this.
+
+First, the input features are from a frozen GIT-Large model, which have a shape of [B, 197, 768]. The target output should be [B, T_bridge, 768]. So the bridge needs to process these visual features and output compatible embeddings.
+
+The class must implement __init__ and forward methods. It should use prm.get() for dropout, bottleneck_dim, and num_heads. That means I'll need to include these parameters in the __init__ method.
+
+The user mentioned innovation ideas: adding a residual bottleneck, a gated fusion layer, or a small transformer adapter block. Considering standard layers, a small transformer adapter seems feasible. That might add more expressivity without increasing complexity too much.
+
+Optionally, not to use custom classes unless defined myself, but using standard modules like nn.Linear, nn.TransformerEncoderLayer, etc., is preferable. So I'll go with a transformer-based approach.
+
+The output should only be the CrossModalBridge class. No additional code or explanation beyond that. So the final output will just be the class definition.
+
+Now, let me outline the steps:
+
+1. In the __init__ method, I'll get the necessary parameters from prm, like num_heads, bottleneck_dim, and dropout.
+
+2. The forward method will take visual_features and optional captions. But since it's a bridge between vision and text, perhaps the captions are used in the text decoder part, so they might not directly influence the visual transformation but could guide the decoder.
+
+3. The transformer part should handle the sequence of visual features. Using a transformer encoder layer makes sense here. It will process each visual token through self-attention and feed-forward layers.
+
+4. A residual bottleneck layer could help stabilize training by adding a shortcut connection. This would involve applying a linear layer to reduce the dimensionality and then adding it back after applying some non-linearity.
+
+5. The output should be the transformed embeddings, maintaining the batch size and feature dimension, but changing the sequence length if needed. Perhaps T_bridge is determined by the adapter or some part of the configuration.
+
+Putting it all together, I'll structure the CrossModalBridge with these components. Make sure to use the given parameters and standard modules without introducing any custom classes unless necessary. Also, no additional attributes beyond what's initialized in __init__.
+
+Finally, I'll write the code, ensuring that it's concise and only the required parts are included. I should also consider making the layers optional, so users can adjust them as needed.
+</think>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim") or 512
+        self.num_heads = prm.get("num_heads") or 4
+        self.dropout = prm.get("dropout") or 0.1
+        
+        # Initialize layers
+        self.transformer_layer = nn.TransformerEncoderLayer(
+            d_model=768,
+            nhead=self.num_heads,
+            dropout=self.dropout,
+            activation="gelu"
+        )
+        
+        # Residual bottleneck with layer norm
+        self.bottleneck = nn.Sequential(
+            nn.Linear(768, self.bottleneck_dim, bias=False),
+            nn.LayerNorm(self.bottleneck_dim),
+            nn.GELU(),
+            nn.Linear(self.bottleneck_dim, 768)
+        )
+        
+        # Final layer for output
+        self.output_layer = nn.Linear(768, 768)
+    
+    def forward(self, visual_features, captions=None):
+        # Process visual features through transformer
+        x = self.transformer_layer(visual_features)
+        
+        # Apply residual bottleneck
+        residual = x
+        x = x.mean(dim=1, keepdim=True)  # Reduce sequence length
+        x = self.bottleneck(x)
+        x = x + residual
+        
+        # Project to output space
+        x = self.output_layer(x)
+        
+        return x
+</nn_head>

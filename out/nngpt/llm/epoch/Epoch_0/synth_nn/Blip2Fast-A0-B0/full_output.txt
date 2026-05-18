@@ -1,0 +1,96 @@
+Alright, I'm faced with a task to optimize a cross-modal bridge for an Image Captioning model using PyTorch. The goal is to create a class called `CrossModalBridge` that transforms visual features into compatible embeddings. Let's break down the problem step by step.
+
+First, the input features are of shape [B, 197, 768], which is from a frozen GIT-Large model. The target output is [B, T_bridge, 768]. So, essentially, I need to process these visual features into a sequence of embeddings compatible with a decoder.
+
+The requirements mention using `prm.get()` for several parameters like dropout, bottleneck_dim, and num_heads. This suggests that these values are crucial for the model's hyperparameters. Also, I need to ensure that I don't use any custom classes unless they're defined within the module, so I'll stick to standard PyTorch modules like Linear, Transformers, and LayerNorm.
+
+The user suggested adding a residual bottleneck, a gated fusion layer, or a small transformer adapter block as innovation ideas. Residual bottlenecks are common in network design to help with gradient flow, so that seems like a good candidate. A fused layer might help combine the visual and, perhaps, textual features more effectively. But since the task is just to bridge between vision and the decoder, maybe a residual bottleneck would suffice.
+
+So, the structure of the `CrossModalBridge` class would likely involve a series of layers that process the input visual features. Starting with a dropout layer to prevent overfitting. Then, I'll add a bottleneck by projecting the features into a smaller dimension (bottleneck_dim) using a linear layer. After that, applying layer normalization and a ReLU activation to introduce non-linearity.
+
+Once the features are reduced, I'll project them back up to the original dimension. Then, apply another layer norm and dropout before applying an adaptive average pooling to ensure the sequence length matches the target output. This pooling helps in handling varying lengths of visual sequences, making it easier for the decoder to process them.
+
+I should also consider if I need to concatenate any other embeddings, but in this case, since we're starting from raw visual features, it's just the processed features. I'll make sure that all these layers are wrapped in a PyTorch module.
+
+Wait, how about the sequence length? The input is 197 features, but the output needs to be T_bridge. Using adaptive average pooling with output_size will adjust the sequence length, which should be compatible with the decoder expecting a certain number of time steps. That makes sense.
+
+I also need to consider the transformer adapter block. Since I'm thinking about adding a small transformer block, maybe this is a fused layer with multi-head attention. This would allow the model to capture more complex relationships between the visual embeddings.
+
+Putting it all together: start with dropout, apply a projection to bottleneck_dim, use layer norm, apply ReLU, project back, then use layer norm, adaptive average pooling, dropout, and then optionally add a transformer adapter block for more complex feature extraction.
+
+The code should be structured to handle the input dimension properly. Let me outline the steps:
+
+1. Dropout layer to regularize the input.
+2. Project the features from 768 to bottleneck_dim.
+3. Layer norm and ReLU activation.
+4. Project back to 768 dimensions.
+5. Layer norm and adaptive average pooling to adjust the sequence length.
+6. Optional transformer adapter for better representation.
+
+I think adding the residual connection here would make the model more robust. So, the output after the projection back should have a residual connection that's added before the next layer.
+
+Hmm, but I need to make sure that the residual is correctly summed and has the same dimension. The input is 768, and after projecting to and from the bottleneck, it should also be 768. So, yes, the residual makes sense.
+
+I also need to ensure that the number of heads is accounted for. The `num_heads` is retrieved from the parameters, so it should work seamlessly with different configurations.
+
+Overall, the code should be clean, using standard layers and not introducing any unnecessary complexity. I'll make sure to not include any attributes that aren't explicitly handled, adhering to the user's critical points.
+
+So, in the end, the `CrossModalBridge` class should process the visual features through several layers, including projections, layer normalization, adaptive pooling, and potentially a transformer block for deeper feature extraction.
+</think>
+
+<hp>{"dropout": 0.1, "bottleneck_dim": 512, "num_heads": 8}</hp>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.dropout = nn.Dropout(prm.get('dropout'))
+        self.target_dim = prm.get('visual_features')[2]
+        
+        # Create decoder compatible embedding
+        self.bottleneck_dim = prm.get('bottleneck_dim')
+        self.dropout_rate = prm.get('dropout')
+        
+        self.transformer.slf_attn = TransformerSLAFusion()
+        
+        # Projection layers
+        self.reducer = nn.Linear(self.target_dim, self.bottleneck_dim)
+        self.expand = nn.Linear(self.bottleneck_dim, self.target_dim)
+        
+        # Normalization layers
+        self.reducer_norm = nn.LayerNorm(self.bottleneck_dim)
+        self.expand_norm = nn.LayerNorm(self.target_dim)
+        
+        self.attn_layer = nn.MultiheadAttention(self.target_dim, 
+                                               self HP['num_heads'],
+                                               dropout=0.1)
+        
+        # Optional residual connection
+        self.res_proj = nn.Linear(self.target_dim, self.target_dim)
+        
+    def forward(self, visual_features, captions=None):
+        x = self.dropout(visual_features)
+        
+        # Create Bottleneck
+        y = self.reducer(x)
+        y = F.relu(self.reducer_norm(y))
+        x = self.expand(x) + self.res_proj(y)
+        x = self.expand_norm(x)
+        x = self.attn_layer(x)[0]
+        
+        # Alternative Bottleneck
+        if captions is not None:
+            z = torch.randn_like(y)
+            x = torch.cat((x, z), 1)
+            
+        return x
+</nn_head>
+
+< CrossModalBridge
+    prm={dict(
+        dropout=0.1,
+        bottleneck_dim=512,
+        num_heads=8,
+        attention_dropout=0.1,
+    )}
+>

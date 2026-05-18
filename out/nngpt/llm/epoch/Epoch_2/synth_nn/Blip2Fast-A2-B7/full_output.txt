@@ -1,0 +1,75 @@
+Okay, so I have to design a PyTorch class called CrossModalBridge that transforms frozen vision features into decoder-compatible embeddings. The user gave me some specific tasks and requirements, so I need to carefully go through each one to make sure I meet all the criteria.
+
+First, I look at the input features: visual_features are of shape [B, 197, 768], where B is the batch size. The target is to produce visual_embeds of shape [B, T_bridge, 768]. So, the model needs to process these visual features and expand them along the sequence dimension to T_bridge. But T_bridge isn't provided, so maybe it's a hyperparameter that I can set.
+
+The class needs to implement __init__ and forward methods. That's standard, so I'll start by defining those.
+
+Next, the user says to use prm.get() for dropout, bottleneck_dim, and num_heads. So I should make sure to initialize those in the __init__ method. I think defining these as attributes in the class makes sense.
+
+Now, the innovation part: I need to add a residual bottleneck, a gated fusion layer, or a small transformer adapter block. Since the user prefers using standard modules, maybe a residual bottleneck with a small number of layers is a good idea. A residual block typically includes some layers that are used both as input and output, with the idea of adding a transformed version of the input to the original output.
+
+So, in the __init__, I'll add a TimeDistributed LayerNorm, which applies LayerNorm across the sequence dimension. Then, I'll create a bottleneck projection. I'll use a multi-head attention layer with the specified number of heads and then a feed-forward network. The output will be transformed, and then I'll apply dropout if needed.
+
+In the forward method, I'll first apply the TimeDistributed LayerNorm to the visual_features. Then, I'll pass this through the bottleneck, which includes the multi-head attention followed by the feed-forward layers. After that, I'll add the residual connection by adding the original input (after the initial LayerNorm) to the transformed output, then apply dropout, and then pass through another LayerNorm before expanding the sequence length using Repeat.
+
+Wait, does adding a residual connection make sense here? It could help with training stability. But I need to be careful not to make it too deep, as residual connections can sometimes lead to gradient issues.
+
+Let me structure this. In __init__, I'll initialize the TimeDistributed LayerNorm, the bottleneck layers, and dropout. Then, in forward, I'll process each step as described.
+
+I should also make sure that any attributes are only set using prm.get() or explicitly initialized, as per the critical requirement. So, I'll avoid any arbitrary values that aren't retrieved or defined.
+
+Another thing is the use of standard modules. I'll use nn.Sequential for composing layers, so that's fine. No need to use custom classes unless necessary.
+
+Hmm, what about the output dimension for the sequence expansion? Since visual_features are [B, 197, 768], if I set T_bridge to be 10, then the expansion would go from 197 to 10. The example code uses a Repeat, but I need to ensure that the embedding dimension stays consistent. So after the residual block, I'll apply a time distributed LayerNorm again and then use Repeat to achieve the desired sequence length. But how does the scaling work here? I'll assume that the Repeat layer scales each element in the sequence, effectively creating new time steps.
+
+Putting it all together, the code should reflect this structure. I'll make sure to use the proper hyperparameters from prm, such as dropout, bottleneck_dim, and num_heads.
+
+Wait, in the current best accuracy, the output is 0.08367, which seems quite low. Maybe the model isn't learning effectively with the current parameters. But the main task is just to generate the class, not to optimize the hyperparameters. So perhaps I can leave the hyperparameters as they are or make some reasonable assumptions.
+
+Also, in the code, I need to import necessary modules like nn and Repeat from torch.nn, but since it's code generation, I can include the necessary tags.
+
+In summary, the CrossModalBridge class will use a residual bottleneck with a small transformer-like block, a LayerNorm for normalization, and a Repeat to expand the sequence length. This should achieve the desired embedding transformation while being compatible with downstream decoder models.
+</think>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim") or 512
+        self.num_heads = prm.get("num_heads") or 16
+        self.dropout = nn.Dropout(prm.get("dropout") or 0.1)
+        self.transformer_time = nn.Sequential(
+            nn.Linear(768, 256),
+            nn.ReLU(),
+            nn.Linear(256, 768)
+        )
+        
+    def forward(self, visual_features, captions=None):
+        B = visual_features.size(0)
+        
+        # TimeDistributed LayerNorm
+        spatial_dim = 197
+        time_dim = visual_features.size(1)
+        
+        # LayerNorm + TimeDistributed
+        l = nn.Linear(768, self.bottleneck_dim)
+        x = visual_features
+        x = x.permute(0, 2, 1)
+        x = l(x)
+        x = x.permute(0, 2, 1)
+        x = x.view(B, self.bottleneck_dim, -1)
+        
+        # Transformer Time
+        x = x + self.transformer_time(x)
+        x = self.dropout(x)
+        x = nn.LayerNorm(768)(x)
+        
+        # Repeat along time dimension
+        x = x.unsqueeze(-1)
+        x = x.expand(-1, -1, -1, 10)
+        x = x.squeeze(-1)
+        
+        return x
+</nn_head>
+
+<hp>{"bottleneck_dim": 512, "num_heads": 16}</hp>

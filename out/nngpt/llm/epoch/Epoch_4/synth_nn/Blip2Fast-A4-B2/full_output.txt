@@ -1,0 +1,102 @@
+Alright, I need to generate a PyTorch class called CrossModalBridge that transforms frozen vision features into decoder-compatible embeddings. The input is visual_features with shape [B, 197, 768], and the output should be visual_embeds of shape [B, T_bridge, 768]. 
+
+First, I need to make sure the class only implements the __init__ and forward methods. I'll need to retrieve some hyperparameters using self.prm.get(). Looking at the requirements, the hyperparameters likely include dropout, bottleneck_dim, and num_heads. Maybe other attributes like freeze_vit and num bridged heads. I'll add these to the __init__ method and store them as instance variables.
+
+Next, the architecture must include a residual bottleneck. Residual bottlenecks are useful for feature enhancement as they allow the network to learn a compressed representation while maintaining the original features. So, I'll compute the compressed representation and then concatenate it with the original features. I'll pass the concatenated result through a Dropout layer if needed to prevent overfitting.
+
+In addition to the residual bottleneck, the requirement suggests using a small transformer adapter block. I'll use nn.TransformerEncoderLayer for this. I'll create a small layer with one encoder layer, which includes multi-head attention and feed-forward layers.
+
+I should also incorporate a gated fusion mechanism as an innovation. Gated fusion uses a sigmoid gate to modulate the feature fusion, allowing the model to learn to combine features more effectively. This means I'll have a gate that's concatenated and combined with the query features before applying the transformer decoder layers.
+
+The output needs to match the shape [B, T_bridge, 768], so I'll use a TimeSigmoidLayer to adapt the output to the desired dimensions. Each element in the output will use a TimeSigmoidLayer to project the features.
+
+Putting it all together, the forward method will first compute the output of the frozen vision model. Then, the residual pathway computes the bottleneck features, applies dropout, and computes a time series embedding. The feature fusion uses a spatial global average pooling to get query features, applies the gate fusion, and then uses the transformer layers. Finally, the output is processed through TimeSigmoidLayer.
+
+I must ensure that all modules used are from standard PyTorch, without using any custom classes unless defined within the nn_head block. Also, all attributes are initialized using prm.get() or explicitly set in __init__.
+
+I'll test this logic by creating an example CrossModalBridge with the specified hyperparameters and verify that the output shape is as expected. It's crucial to handle all the dimensions correctly, especially since the input is [B, 197, 768] and the output should be [B, T_bridge, 768]. The transformer layers will handle the temporal dimension, expanding or contracting the sequence as needed.
+
+Finally, I'll structure the code properly, ensuring that the CrossModalBridge class is self-contained and adheres to all the given requirements, including avoiding any unwanted custom classes unless necessary.
+</think>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self.dropout = nn.Dropout(prm.get("dropout"))
+        self.num_heads = prm.get("num_heads")
+        self Freevez = prm.get("freeze_vit")
+        
+        # Spatial_global_avg_pool
+        if not self.Freevez:
+            self-freevez = nn.Sequential(
+                nn.AdaptiveAvgPool2d((1, 1)),
+                nn.Flatten(),
+            )
+        self.slf_attn = nn.MultiheadAttention(
+            embeddim=768,
+            numheads=self.num_heads,
+            dropout=self.dropout,
+        )
+        
+        # Gated Fusion
+        self.gate = nn.Sequential(
+            nn.Linear(768, 768, bias=False),
+            nn.ReLU(),
+            nn.Linear(768, 768, bias=False),
+            nn.Sigmoid(),
+        )
+        
+        # Small transformer adapter
+        self.slf50 = nn.Sequential(
+            nn.TransformerEncoderLayer(
+                d_model=768,
+                nhead=self.num_heads,
+                dim_FEEDFORWARD=3072,
+                dropout=self.dropout,
+                activation="gelu",
+            ),
+        )
+        
+        # TimeSigmoidLayer
+        self.time_sigmoid_layer = nn.Linear(768, 768)
+    
+    def forward(self, visual_features, captions=None):
+        B = visual_features.size(0)
+        if self.Freevez:
+            x = visual_features
+        else:
+            x = self.freevez(visual_features)
+            x = x.view(-1, 768)
+        x0 = x
+        x1 = x0
+        x2 = self.dropout(x1)
+        visual_embeds = x2
+        
+        query_f = x0.unsqueeze(1)
+        key_f = x2.unsqueeze(1)
+        
+        key_f = key_f.view(-1, self.bottleneck_dim)
+        query_f = query_f.view(-1, self.bottleneck_dim)
+        
+        gate = self.gate(torch.cat([key_f, query_f], -1))
+        key_f = key_f * gate
+        key_f = key_f.view(-1, B, self.bottleneck_dim)
+        key_f = key_f.sum(dim=1)
+        key_f = key_f.unsqueeze(1)
+        key_f = key_f.view(-1, self.bottleneck_dim)
+        
+        x = self.slf50(
+            query=key_f,
+            key=key_f,
+            value=key_f,
+        )
+        
+        x = x.view(-1, 768)
+        
+        x_final = self.time_sigmoid_layer(x)
+        visual_embeds = visual_embeds + x_final
+        
+        return visual_embeds
+</nn_head>

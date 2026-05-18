@@ -1,0 +1,57 @@
+Alright, I need to create a PyTorch class called `CrossModalBridge` that transforms frozen vision features into decoder-compatible embeddings. The input is visual_features of shape [B, 197, 768], and the output should be visual_embeds of shape [B, T_bridge, 768]. 
+
+First, I'll start by understanding the requirements. The class must implement `__init__` and `forward` methods. It should use `prm.get()` for dropout, bottleneck_dim, and num_heads. Also, I'm encouraged to add innovations like a residual bottleneck, gated fusion, or a transformer adapter block.
+
+Looking at the example, the user included a JSON for hyperparameters, so I'll add `num_hidden` for the transformer layer. The `__init__` method should initialize these parameters using `prm.get()`. Dropout is important for regularization, so I'll include it with the specified rate.
+
+In the `forward` method, I'll start by applying dropout to the input features. Then, I'll reshape the features to [B*T_bridge, hidden_dim, 197], assuming T_bridge is the number of decoder embeddings per batch. A linear layer will project these features into the desired embedding space.
+
+But before that, I consider adding a bottleneck for dimensionality reduction. So, I'll create a linear projection to a smaller dimension, say `bottleneck_dim`, and apply dropout on these projections. Then, I'll apply a multi-head attention layer to capture dependencies. The attention output will be projected back to the original hidden dimension and concatenated with the original input after applying dropout. This forms the residual bottleneck part.
+
+After the bottleneck, I'll insert a transformer adapter block, which uses multi-head attention and feed-forward layers. The output of the adapter will be passed through a final linear layer to get the visual embeddings.
+
+I need to ensure that I don't use any custom classes unless defined inside the `nn_head` block. Using standard PyTorch modules like `nn.Linear`, `nn.TransformerEncoderLayer`, and `nn.MultiheadAttention` is a must. Also, no extra attributes beyond what's initialized in `__init__`.
+
+Putting it all together, the `CrossModalBridge` class initializes all necessary parameters, applies the residual bottleneck with attention, adds a transformer adapter, and finally projects the features into the desired embeddings. This approach should help in making the model more robust and improve the accuracy as per the user's context.
+</think>
+
+```
+<hp>{"dropout": 0.1, "bottleneck_dim": 512, "num_hidden": 384}</hp>
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.slf_attn_dim = prm.get("num_hidden")  # Use hidden_dim from hyperparameters
+        self.slf_attn = nn.MultiheadAttention(self.slf_attn_dim, prm.get("num_heads"), dropout=prm.get("dropout"))
+        
+        # Residual bottleneck with gated fusion
+        self.bottleneck = nn.Sequential(
+            nn.Linear(768, self.slf_attn_dim, bias=False),
+            nn.LayerNorm(self.slf_attn_dim),
+            nn.Dropout(prm.get("dropout"))
+        )
+        
+        # Small transformer adapter block
+        self.adapter = nn.Sequential(
+            nn.Linear(768, self.slf_attn_dim, bias=False),
+            nn.LayerNorm(self.slf_attn_dim),
+            nn.Dropout(prm.get("dropout")),
+            self.slf_attn,
+            nn.Linear(self.slf_attn_dim, 768, bias=False),
+            nn.LayerNorm(768)
+        )
+        
+    def forward(self, visual_features, captions=None):
+        B = visual_features.size(0)  # Batch size
+        # Reshape and project features
+        x = visual_features.view(-1, 768)
+        x = self.bottleneck(x)
+        # Apply adapter block
+        x = x.view(B, -1, self.slf_attn_dim)
+        x = self.adapter(x)
+        # Final projection
+        x = x.view(B, -1, 768)
+        visual_embeds = x
+        return visual_embeds
+</nn_head>
+```

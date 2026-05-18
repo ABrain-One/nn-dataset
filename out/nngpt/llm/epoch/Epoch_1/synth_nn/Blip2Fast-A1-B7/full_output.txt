@@ -1,0 +1,71 @@
+Okay, I need to create a PyTorch class called CrossModalBridge that transforms frozen vision features into decoder-compatible embeddings. Let me start by understanding the problem.
+
+First, the input is visual_features with shape [B, 197, 768]. The target is visual_embeds of shape [B, T_bridge, 768]. So, the class needs to process the visual features and output embeddings compatible with a decoder, maybe for something like text generation.
+
+The requirements mention using prm for dropout, bottleneck_dim, and num_heads, so I should make sure those are initialized in the __init__ method. Also, I need to think about innovation ideas: maybe adding a residual bottleneck, a gated fusion layer, or a small transformer adapter block.
+
+Let me outline the steps. In the __init__, I'll define the necessary layers using the parameters from prm. Then, in the forward method, I'll process the visual features through these layers.
+
+I think a residual bottleneck makes sense. So, after the initial projection, I'll pass through a bottleneck layer with ReLU and then apply dropout. The residual connection will add the original features back, which helps with gradient flow.
+
+For the cross-modality, a small transformer adapter block could be used. This will allow the model to learn more complex relationships. I'll use a multi-head attention layer with the same number of heads as the input features' dimension.
+
+Wait, the attention heads should be set to (bottleneck_dim // target_dim), but maybe target_dim is the same as the original embedding size? I'm a bit unsure, but I'll set it based on the number of attention heads for now.
+
+I'll also need a final projection layer to match the output dimension to 768, ensuring it's compatible with the decoder.
+
+Putting it all together, I'll structure the CrossModalBridge with these components. Let me make sure I don't use any custom classes like Bottleneck or GatedFusion unless I define them within the block, which I shouldn't. Instead, I'll use built-in layers like MultiheadAttention and LayerNorm.
+
+In the forward method, I'll first project the visual features into the bottleneck dimension. Then apply ReLU and dropout. After that, add the original features and go through the transformer adapter, and finally project to the target size.
+
+I think that covers all the requirements. I'll write the code accordingly, making sure it's optimized and meets the project's needs.
+</think>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self.target_dim = 768  # assuming target_dim is same as input embedding size
+        self(num_heads, dim_per_head) = 1, 512  # 768 = num_heads * dim_per_head
+        
+        # Vision to Bottleneck
+        self.vision_proj = nn.Linear(768, self.bottleneck_dim)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(p=prm.get("dropout"))
+        
+        # Residual Bottleneck (optional for improvement)
+        self.bottleneck = nn.Linear(self.bottleneck_dim, self.bottleneck_dim)
+        
+        # Cross-Modal Adapter
+        self.adapter = nn.TransformerEncoderLayer(
+            d_model=self.bottleneck_dim,
+            nhead=self.num_heads,
+            dim_FEEDFORWARD_N hidden_dim=2048,
+            dropout=0.1
+        )
+        
+        # Final Projection
+        self visual_proj = nn.Linear(self.bottleneck_dim, self.target_dim)
+        
+    def forward(self, visual_features, captions=None):
+        # Vision to Bottleneck
+        x = self.vision_proj(visual_features)
+        x = self.relu(x)
+        x = self.dropout(x)
+        
+        # Residual Connection
+        x = x + visual_features
+        x = self.bottleneck(x)
+        x = self.relu(x)
+        
+        # Cross-Modal Adapter
+        if captions is not None:
+            adapter_out = self2.adapter(x)
+            x = x + adapter_out
+        x = self visual_proj(x)
+        
+        return x
+</nn_head>
+The hyperparameters should be configured as:
+<hp>{"dropout": 0.1, "bottleneck_dim": 512, "num_heads": 1, "adapter_hidden_dim": 2048}</hp>

@@ -1,0 +1,51 @@
+Okay, so the user needs to create a PyTorch class called CrossModalBridge. The goal is to transform frozen vision features into decoder-compatible embeddings. The input is visual_features of shape [B, 197, 768], and the output should be visual_embeds of shape [B, T_bridge, 768].
+
+First, I need to make sure the class implements __init__ and forward. That’s straightforward. The __init__ method will take parameters from prm, so I'll use prm.get() for dropout, bottleneck_dim, and num_heads. Since the user mentioned adding innovations, maybe a small transformer adapter block would be good. I'll include that to make the model more efficient.
+
+In the forward method, the input visual_features are processed through layers like LayerNorm, then a linear projection. After that, I'll add the adapter block, which involves multi-head attention and feed-forward layers. This should fuse the features effectively.
+
+I also need to ensure that I don't use any custom classes unless I define them inside nn_head, which I'll follow. The output should only include the class definition, so I'll structure it accordingly.
+
+Choosing the number of decoder layers is important. Maybe 2 layers would suffice for the task. The configuration will include bottleneck_dim and num_heads from the parameters, which adds flexibility for different model sizes.
+
+Testing is essential, but since it's just the class, I'll make sure the code is clean and follows best practices. Using standard nn modules like MultiheadAttention and TransformerEncoderLayer is key to comply with the user's requirements.
+
+I think that's a solid plan. Now, I'll write the code with these considerations in mind.
+</think>
+
+<hp>{"dropout": 0.1, "bottleneck_dim": 512}</hp>
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self.num_heads = prm.get("num_heads")
+        self.dropout = nn.Dropout(prm.get("dropout"))
+        
+        # Configuration
+        self.config = {
+            "ndecoderlayers": 2,
+            "dimension": 768,
+            "nhead": self.num_heads,
+            "dmodel": 768,
+            "dprojection": self.bottleneck_dim,
+            "dropout": self.dropout
+        }
+        
+        # Bottleneck layers
+        self.bottleneck = nn.Linear(768, self.bottleneck_dim)
+        self.adapter_block = AdapterBlock(dimension=self.config["dimension"],
+                                         dprojection=self.config["dprojection"],
+                                         nhead=self.config["nhead"],
+                                         dropout=self.config["dropout"])
+        
+    def forward(self, visual_features, captions=None):
+        # Pass through layer norm
+        x = self.dropout(visual_features)
+        x = self.bottleneck(x)
+        
+        # Adapter block fusion
+        x = self.adapter_block(x, captions=captions)
+        
+        return x
+</nn_head>

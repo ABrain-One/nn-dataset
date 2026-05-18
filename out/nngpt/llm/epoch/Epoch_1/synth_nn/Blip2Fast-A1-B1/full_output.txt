@@ -1,0 +1,72 @@
+Okay, I need to create a PyTorch class called CrossModalBridge that transforms frozen vision features into decoder-compatible embeddings. The input is visual_features of shape [B, 197, 768], and the output should be visual_embeds of shape [B, T_bridge, 768].
+
+First, I should look at the context and the requirements. The model needs to implement __init__ and forward methods. I can use prm.get() for dropout, bottleneck_dim, and num_heads. Also, I need to consider innovation ideas like a residual bottleneck, gated fusion, or a transformer adapter block.
+
+I remember that using a small transformer adapter block could add some complexity without making the model too large. So maybe I'll include a MultiheadAttention layer in the transformer block. But I have to make sure not to use any custom classes unless defined within the nn_head block. Also, I can't use attributes that weren't explicitly retrieved or initialized in __init__, so I need to define any new modules in the __init__ method.
+
+Looking at the code, I see that I should start with defining __init__ where I'll get the necessary parameters from prm. Then, I'll initialize some layers like Linear layers for projection, possibly a LayerNorm, and the transformer blocks.
+
+In the forward method, I need to process the visual_features. Maybe I'll take the visual embeddings, project them to the latent space, then add a residual connection, and then pass them through the transformer blocks. Also, if captions are provided, I should perform attention with those for cross-attention.
+
+Wait, I need to make sure that the output shape matches [B, T_bridge, 768]. So if T_bridge is the number of time steps, perhaps I'm expanding the sequence length. Maybe each token goes through the transformer layers and their features are stacked, so the final output is from those features.
+
+I should also ensure the model uses the dropout specified in prm. Maybe apply dropout after certain layers to prevent overfitting.
+
+Putting it all together, I'll define CrossModalBridge with __init__ setting up all the layers and forward processing through those layers. I'll include a transformer block that applies attention and feed-forward layers, adding a residual connection as per the residual bottleneck idea. I'll also handle the captions if they're provided for cross-attention.
+
+I think that covers the requirements. I need to make sure the code is clean and follows standard PyTorch practices, using the provided parameters via prm.get() without adding any extra attributes or classes unless necessary.
+</think>
+
+<hp>{"num_heads": 8, "bottleneck_dim": 512, "dropout": 0.1}</hp>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.prime = prm
+        
+        # Bottleneck parameters
+        self.reducer_input = nn.Linear(768, prm.bottleneck_dim)
+        self.reducer_output = nn.Linear(prm.bottleneck_dim, 768)
+        
+        # Cross-attention parameters
+        self.attn_input = nn.Linear(768, 768)
+        self.attn_output = nn.Linear(768, 768)
+        self.captions.slf_attn = nn.MultiheadAttention(768, prm.num_heads, dropout=prm.dropout)
+        
+        # Final layer and activation
+        self.proj = nn.Linear(768, 768)
+        self.proj_dropout = nn.Dropout(prm.dropout)
+        self.LayerNorm = nn.LayerNorm(768)
+        
+        # Cross-attention for decoder compatibility
+        self.crossattn.slf_attn = nn.MultiheadAttention(768, prm.num_heads, dropout=prm.dropout)
+        
+        # Self-attention for temporal dependencies
+        self.transformer_layer = nn.TransformerEncoderLayer(768, prm.num_heads, dropout=prm.dropout)
+        
+        # Cross attention
+        self.slf_attn = nn.MultiheadAttention(768, prm.num_heads, dropout=prm.dropout)
+        
+        # Final projection
+        self.finetune_proj = nn.Linear(768, 768)
+        
+    def forward(self, visual_features, captions=None):
+        # Pass through the first reducer
+        x = F.relu(self.reducer_output(F.relu(self.reducer_input(visual_features))))
+        
+        # Apply cross attention with captions if available
+        if captions is not None:
+            x = self.slf_attn(x, captions, captions)[0]
+        
+        # Pass through the transformer
+        x = self.transformer_layer(x)
+        
+        # Residual connection
+        x += self.reducer_output(self.reducer_input(visual_features))
+        
+        # Final projection and layer norm
+        x = self.finetune_proj(self.LayerNorm(x))
+        
+        return x
+</nn_head>

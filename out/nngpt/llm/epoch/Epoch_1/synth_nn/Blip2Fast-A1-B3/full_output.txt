@@ -1,0 +1,62 @@
+Okay, I need to create a PyTorch class called CrossModalBridge that transforms frozen vision features into decoder-compatible embeddings. Let me break down the requirements.
+
+First, the input features are of shape [B, 197, 768], which are the visual features from a frozen GIT-Large model. The target output should be [B, T_bridge, 768], meaning I need to transform the visual features into a sequence of embeddings that are compatible with the decoder.
+
+The class must implement __init__ and forward methods. I'll need to use prm.get() for dropout, bottleneck_dim, and num_heads. That makes sense because these are hyperparameters that should be configurable.
+
+The requirements mention innovation ideas: residual bottleneck, gated fusion, or small transformer adapter block. Residual bottlenecks can help with gradient flow, so maybe using that would be good. Also, a small transformer adapter block would allow for more flexibility in the model architecture without too much overhead.
+
+Let's think about the structure. In the __init__ method, I should initialize several components like a projection layer, a dropout layer, and the components for the cross-modal bridge. Maybe a multi-head attention layer with residual connections.
+
+In the forward method, I'll start by projecting the visual features to the hidden dimension, then apply dropout. Then pass this through a multi-head attention block with residual connections. If I want to add a small transformer adapter block, I can add another attention and feed-forward layer before a residual connection. Finally, project this to the output embeddings.
+
+I have to make sure not to use any custom classes unless defined within the <nn_head> block. So using standard layers like nn.Linear, nn.TransformerEncoderLayer, and nn.MultiheadAttention is allowed. Also, I shouldn't use any attributes not explicitly retrieved from prm or initialized in __init__.
+
+Putting it all together, I'll define the CrossModalBridge class. In __init__, I'll get the necessary hyperparameters, create the embedding layer, dropout, and the cross-modal attention layers. In forward, I'll apply these in sequence, adding residual connections after each key-value transformation and after the adapter block if included.
+
+I should also structure the code clearly, making sure everything is properly nested and the layers are applied correctly. Let me write the code, making sure that I follow these steps.
+</think>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self.num_heads = prm.get("num_heads")
+        self.dropout = nn.Dropout(prm.get("dropout"))
+
+        self_visual_proj = nn.Linear(768, self.bottleneck_dim)
+        self.transformer_attention = nn.MultiheadAttention(
+            embeddim=self.bottleneck_dim,
+            numheads=self.num_heads,
+            dropout=self.dropout
+        )
+        
+        # Innovation: Added a small transformer adapter block
+        self small_transformer_layer = nn.TransformerEncoderLayer(
+            d_model=self.bottleneck_dim,
+            nhead=self.num_heads,
+            dropout=self.dropout
+        )
+    
+    def forward(self, visual_features, captions=None):
+        if visual_features is None:
+            return visual_features
+        x = self.visual_proj(visual_features)
+        
+        # Innovation: Adding a residual bottleneck with scaling
+        residual = x
+        x = self.transformer_attention(x)[0]
+        x = (x + residual) * (1 / (2**0.5))
+        
+        # innovation: applying small transformer adapter
+        residual_after = x
+        x = self_small_transformer_layer(x)
+        x = (x + residual_after) * (1 / (2**0.5))
+        
+        if captions is not None:
+            x = torch.cat((visual_features, x), dim=1)
+            
+        return x
+</nn_head>
+<hp>{"dropout": 0.1, "bottleneck_dim": 512, "num_heads": 8}</hp>

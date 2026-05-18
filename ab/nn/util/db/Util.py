@@ -22,6 +22,26 @@ def unique_nn_cls(epoch_max, dataset='cifar-10', task='img-classification', metr
 
 
 def get_attr(mod, f):
+    if mod.startswith('out.nn.tmp.'):
+        # Handle temporary models by direct file path to avoid ModuleNotFoundError
+        import importlib.util
+        import sys
+        if mod in sys.modules:
+            del sys.modules[mod]
+        import sys
+        from ab.nn.util.Const import ab_root_path
+        model_name = mod.split('.')[-1]
+        file_path = ab_root_path / 'out' / 'nn' / 'tmp' / f"{model_name}.py"
+        
+        # CLEAR MODULE CACHE to force fresh load of new_nn.py
+        if mod in sys.modules:
+            del sys.modules[mod]
+            
+        spec = importlib.util.spec_from_file_location(mod, str(file_path))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return getattr(module, f)
+        
     return get_obj_attr(__import__(mod, fromlist=[f]), f)
 
 def get_package_location(package_name) -> Optional[Path]:

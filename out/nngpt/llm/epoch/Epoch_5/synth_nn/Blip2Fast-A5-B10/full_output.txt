@@ -1,0 +1,74 @@
+Alright, I need to create a PyTorch class called CrossModalBridge that transforms visual features into decoder-compatible embeddings. The user has provided some specific requirements, so I need to make sure I address each one.
+
+First, the class must implement __init__ and forward methods. That's straightforward. I'll start by defining the __init__ method, which will initialize all the necessary parameters using prm.get(). The requirements mention using dropout, bottleneck_dim, and num_heads, so I'll include those as parameters in the constructor. I'll also add a residual bridge if needed, but since the innovation idea suggests a residual bottleneck, I'll include that.
+
+Next, the forward method takes visual_features and captions as input. The visual_features are of shape [B, 197, 768], and the target output is [B, T_bridge, 768]. I need to process these features through the CrossModalBridge.
+
+The bottleneck_dim is retrieved from prm.get(), so I'll apply a Linear layer to reduce the dimension from 768 to bottleneck_dim. Then, I'll pass this through a LayerNorm for normalization. Adding a residual connection here makes sense for optimization, so I'll sum the original feature after applying a Linear layer with the same dimensions.
+
+If captions are provided, I need to incorporate them into the embeddings. I'll get the number of captions, project them into the same size as visual features, and then apply MultiheadAttention. This will allow the model to consider the caption information when computing the embeddings.
+
+Finally, I'll use another Linear layer to project the embeddings back to the original size, 768. If captions are given, I'll concatenate the bridge features and the caption features before projection.
+
+I also need to ensure that all attributes are retrieved via prm.get() or initialized in __init__. I won't use any custom classes unless necessary, so I'll stick with standard PyTorch modules like Linear, LayerNorm, and MultiheadAttention.
+
+Let me put it all together. In the __init__, I'll define the layers and norms, and add the optional cross-attention if captions are provided. In forward, I'll process the visual features, apply the bottleneck, and if captions are given, compute the attention and concatenate the outputs before projecting.
+
+I think that covers all the requirements. I'll write the code accordingly.
+</think>
+
+<hp>{"dropout": 0.1, "bottleneck_dim": 512, "num_heads": 8}</hp>
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.dropout = nn.Dropout(p=prm.get("dropout"))
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self.num_heads = prm.get("num_heads")
+        
+        self.bottleneck = nn.Linear(768, self.bottleneck_dim)
+        self.bottleneck_norm = nn.LayerNorm(self.bottleneck_dim)
+        
+        self.residual_dim = 768
+        
+        # Initialize cross-modal attention if captions are provided
+        self.register_buffer("cross_modal enabled", torch.tensor(False))
+        
+        if getattr(prm, "caption_dim", None) is not None:
+            self.register_buffer("cross_modal enabled", torch.tensor(True))
+            self.caption projector = nn.Linear(
+                in_features=prm.get("caption_dim"), 
+                out_features=self.residual_dim
+            )
+            self.cla达imattention = nn.MultiheadAttention(
+                embeddim=self.residual_dim,
+                numheads=self.num_heads,
+                dropout=self.dropout
+            )
+
+    def forward(self, visual_features, captions=None):
+        B = visual_features.size(0)
+        x = self.bottleneck(visual_features)
+        x = self.bottleneck_norm(x)
+        
+        # Residual bridge
+        residual = visual_features + self.dropout(x)
+        
+        # Compute cross-modal attention if enabled
+        if self.cross_modal_enabled:
+            c projected = self.captionprojector(captions)
+            x attends = self.cla达imattention(
+                query=x,
+                key=c projected,
+                value=c projected
+            )[0]
+            x = torch.cat([x, x attends], dim=-1)
+            
+        x = self.bottleneck_norm(x)
+        x = self.dropout(x)
+        x = self.bottleneck NormLinear(x, self.residual_dim)
+        
+        if self.cross_modal_enabled and captions is not None:
+            return x, captions
+        return x
+</nn_head>

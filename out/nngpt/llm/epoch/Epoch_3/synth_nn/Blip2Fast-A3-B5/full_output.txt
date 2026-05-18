@@ -1,0 +1,64 @@
+Okay, I need to help design a CrossModalBridge class for a PyTorch model. The goal is to transform visual features into decoder-compatible embeddings. Let me think through the requirements step by step.
+
+First, the input visual_features are of shape [B, 197, 768], and the output needs to be [B, T_bridge, 768]. So the model should maintain the same embedding size but possibly adjust the sequence length.
+
+The task mentions using prm.get() for dropout, bottleneck_dim, and num_heads. That makes sense for flexibility. I'll include those in the __init__ method.
+
+Looking at the requirements, innovation ideas include adding a residual bottleneck, a gated fusion layer, or a small transformer adapter block. Since the user prefers standard modules, maybe a residual bottleneck with a linear layer and dropout would work. Also, a gated fusion could be implemented using multi-head attention or a similar mechanism.
+
+I'll structure the forward method. If captions are provided, the code should handle fusing the visual features with the captions. But for the minimal code, I'll proceed without handling captions since the main focus is on the bridge.
+
+In the __init__, I'll include layers like a linear layer for dimensionality reduction, another linear layer for projection, layer norm, and dropout based on the parameters from prm.
+
+Applying a residual connection means adding the output of the linear layer after some processing back to the input. So, I'll compute the residual and add it after applying ReLU and dropout.
+
+The output should maintain the same embedding size, so the projection layer from the bottleneck to the final output uses the same dimension as the original features.
+
+Putting it all together, I'll define the class with the specified methods, ensuring that all necessary layers are included and that the code is optimized using standard PyTorch modules without any external classes unless defined.
+
+I need to make sure all attributes are retrieved from prm and not hardcoded. Using standard modules like nn.Linear and LayerNorm fits the requirements. No custom classes except for defining necessary components within the <nn_head> block, which I can do without issues.
+
+Testing the logic, the model should transform the input to the desired shape, maintaining the same embedding size while adjusting the sequence length through the bottleneck and projection layers. The residual connection helps in gradient flow, which is a good practice.
+
+Finally, I'll ensure the code is concise and only includes necessary parts as per the user's instructions, avoiding any extra complexities or attributes that aren't part of the defined prm parameters.
+</think>
+
+<hp>{"dropout": 0.1, "bottleneck_dim": 512, "num_heads": 8}</hp>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self hid_dim = prm.get("model.hid_dim")  # Assuming this exists or use 768 as default
+        self.embed_dim = self.bottleneck_dim
+        self.dropout = nn.Dropout(prm.get("dropout"))
+        
+        # Input processing
+        self.input_proj = nn.Linear(prm.get("visual_dim"), self.embed_dim)
+        
+        # Bottleneck layer with residual connection
+        self.bottleneck = nn.Linear(self.embed_dim, self.bottleneck_dim)
+        self.residual_layer = nn.Linear(self.embed_dim, self.embed_dim)
+        
+        # Output projection
+        self.output_proj = nn.Linear(self.bottleneck_dim, self.embed_dim)
+        self.LayerNorm = nn.LayerNorm(self.embed_dim)
+        
+    def forward(self, visual_features, captions=None):
+        # Process visual features
+        x = self.input_proj(visual_features)
+        x = self.LayerNorm(x)
+        
+        # Apply bottleneck with residual connection
+        residual = x
+        x = self.bottleneck(x)
+        x = F.relu(x)
+        x = self.dropout(x)
+        x += residual  # Residual connection
+        
+        # Output projection
+        x = self.output_proj(x)
+        
+        return x
+</nn_head>

@@ -1,0 +1,74 @@
+Okay, so the user has given me a task to generate a PyTorch class called CrossModalBridge. The goal is to transform frozen vision features into decoder-compatible embeddings. Let me try to understand what exactly is needed here.
+
+First, looking at the context: the input is visual_features with shape [B, 197, 768], which comes from a frozen GIT-Large model. The target output should be visual_embeds of shape [B, T_bridge, 768]. Hmm, so the output has the same embedding dimension as the input but a different sequence length.
+
+The requirements mention that the class must implement __init__ and forward methods. Also, it should use prm.get() for dropout, bottleneck_dim, and num_heads. That makes sense. They also want innovation ideas like adding a residual bottleneck, a gated fusion layer, or a small transformer adapter block. I should include one of these for better performance.
+
+It's critical to not use custom classes unless I define them myself within the __init__. So, I can't use Bottleneck, TransformerBlock, or GatedFusion unless I write those inside. But I should stick to standard PyTorch modules like Linear, TransformerEncoderLayer, MultiheadAttention, etc.
+
+The user also emphasized using standard modules and avoiding any attributes not explicitly retrieved or initialized. So I have to make sure everything is properly initialized from the parameters via prm.get().
+
+Looking at the example output, there's a JSON tag for hyperparameters. I should include things like dropout rate, bottleneck dimension, and maybe the number of attention heads.
+
+Now, how should the CrossModalBridge look? The input is visual_features, and the output should be the embeddings. So, first, I can project the input into a lower dimension, apply some transformations, and then expand back to the desired output.
+
+I think adding a residual bottleneck with GELU activation could be beneficial. Then, applying a multi-head attention layer after projection can capture better representations. After that, another linear projection will get the embeddings.
+
+Putting it all together, I need to define the __init__ method where I get the parameters, apply the dropout, define the bottleneck using a linear layer, add the multi-head attention, and project to the output embeddings.
+
+Wait, the user mentioned a small transformer adapter block as an innovation. But if I include that, it might complicate things because I can't use any custom classes unless defined. Hmm, maybe the residual bottleneck and GatedFusion would be sufficient.
+
+I also need to ensure that the code is clean and doesn't include any custom classes outside the allowed ones. The forward method should take visual_features and optional captions, but in this case, captions aren't used as input, so maybe it's just for other tasks like providing conditioning.
+
+I should structure the code with layers in sequence: projection, bnneck, attention, and final projection. This should handle the transformation from [B, 197, 768] to [B, T_bridge, 768]. 
+
+Testing the dimensions: if T_bridge is, say, 197, then the output shape matches input, but if it's longer or shorter, the cross attention would handle it. I'll need to make sure that the transformations handle any T_bridge by processing each element through the same attention and projection layers.
+
+Finally, add the dropout after each layer to prevent overfitting and control the model's complexity based on the hyperparameters from prm.get().
+
+Putting it all together, the CrossModalBridge class should have an __init__ that initializes all necessary modules using the parameters and a forward method that applies these modules in sequence, handling both input and optional captions if any, but in this case, the main job is transformation without using the captions as input data.
+</think>
+
+<hp>{"dropout": 0.0, "bottleneck_dim": 768, "num_heads": 12}</hp>
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim") or 768
+        self.num_heads = prm.get("num_heads") or 12
+        self.dropout = nn.Dropout(prm.get("dropout"))
+
+        # Initialize projection layers
+        selfproj_input = nn.Linear(768, self.bottleneck_dim, bias=False)
+        selfproj_bias = nn.Parameter(torch.zeros(self.bottleneck_dim))
+        
+        # Add a small transformer adapter block
+        self.transformer = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                nn.Linear(768, self.bottleneck_dim),
+                dim=768,
+                nhead=self.num_heads,
+                dropout=self.dropout,
+                bias=False
+            ),
+            num_layers=2
+        )
+        
+        # Final projection
+        self.output_proj = nn.Linear(self.bottleneck_dim, 768)
+        
+    def forward(self, visual_features, captions=None):
+        B = visual_features.size(0)  # Batch size
+        
+        # Project input features
+        x = visual_features + selfproj_input(visual_features)
+        x = x + selfproj_bias
+        
+        # Pass through transformer adapter
+        x = self.transformer(x)
+        
+        # Project to output embeddings
+        visual_embeds = self.output_proj(x)
+        
+        return visual_embeds
+</nn_head>

@@ -1,0 +1,77 @@
+Okay, I need to create a PyTorch class called CrossModalBridge that transforms visual features into decoder-compatible embeddings. The input features are from a frozen GIT-Large model with a shape of [B, 197, 768], and the target output should be [B, T_bridge, 768]. Let's think about how to approach this.
+
+First, the class must implement __init__ and forward methods. It should use prm.get() for dropout, bottleneck_dim, and num_heads. That means in the __init__ method, I'll retrieve these parameters from the given parameters. I should make sure not to add any extra attributes outside of what's provided.
+
+The requirements mention adding innovative ideas like a residual bottleneck, gated fusion, or a small transformer adapter block. Since I want to add something new, perhaps a residual bottleneck with a gated fusion would be a good idea. That could help in efficiently combining the features without losing information.
+
+I should also avoid using custom classes unless I define them myself. So, instead of using a custom Bottleneck class, I'll create a small transformer adapter block. I can define this inside the nn_head block as a nested class.
+
+For the forward pass, the process might be as follows: first, pass the visual_features through a linear layer to reduce the dimension if necessary, then apply a residual bottleneck with attention or another mechanism. Then, perhaps use a small transformer block for further processing. Finally, apply a linear layer to get the target embeddings.
+
+I'll need to use standard PyTorch modules like nn.Linear, nn.TransformerEncoderLayer, and others. Also, LayerNorm and dropout as specified.
+
+In the __init__ method, I'll set up layers such as self.adjacency_matrix and self.attention based on the hyperparameters. Maybe use MultiheadAttention for the attention block.
+
+Wait, the output should be of the same dimension as the input, 768. So after processing, I should ensure that the final embedding has this shape. Using a linear layer at the end with in_features as the input size and out_features as 768 should work.
+
+I should make sure that the dropout is applied consistently to prevent overfitting. Using the dropout value from prm.get() makes sense.
+
+Putting it all together, the CrossModalBridge class will take the visual_features, process them through a series of layers including a residual bottleneck, attention, and a final linear projection to get the output embeddings.
+
+I should test if the dimensions match up after each step to avoid any shape issues. Maybe during training, the residual connections and attention layers will help maintain the embedding size.
+
+Finally, ensure that all attributes are initialized in __init__ and retrieved via prm.get() without any extra attributes. Also, use standard modules only as specified.
+
+So, the code structure will have an __init__ method that defines all necessary layers using the hyperparameters, and the forward method that applies these layers in sequence to transform the visual features into the desired embeddings.
+</think>
+
+<hp>{"dropout": 0.05, "bottleneck_dim": 512, "num_heads": 8}</hp>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self.num_heads = prm.get("num_heads")
+        self.dropout = nn.Dropout(prm.get("dropout"))
+        self.slf_attn = nn.MultiheadAttention(self.bottleneck_dim, self.num_heads)
+        self.slf_attn.proj = nn.Linear(self.bottleneck_dim, self.bottleneck_dim)
+        self.slf_attn dropout = self.dropout
+
+    def forward(self, visual_features, captions=None):
+        B, N, D = visual_features.size()
+        visual_features = visual_features.permute(1, 0, 2)
+        visual_features = visual_features.reshape(-1, D)
+        visual_features = self.slf_attn(visual_features)[0]
+        visual_features = visual_features.reshape(B, N, self.bottleneck_dim)
+        visual_features = visual_features.permute(0, 2, 1)
+        visual_features = self.slf_attn(visual_features)[0]
+        visual_features = visual_features.reshape(B, D, N).permute(0, 2, 1)
+        visual_features = visual_features.contiguous()
+        visual_features = self.slf_attn(visual_features)[0]
+        visual_features = visual_features.reshape(B, D, N).permute(0, 2, 1)
+        visual_features = visual_features.contiguous()
+
+        visual_features = visual_features + visual_features
+        visual_features = visual_features * 0.5
+
+        visual_embeds = self.slf_attn(visual_features)[0]
+        visual_embeds = visual_embeds.reshape(B, D, N).permute(0, 2, 1)
+        visual_embeds = visual_embeds.contiguous()
+        visual_embeds = self.slf_attn(visual_embeds)[0]
+        visual_embeds = visual_embeds.reshape(B, D, N).permute(0, 2, 1)
+        visual_embeds = visual_embeds.contiguous()
+
+        visual_embeds = visual_embeds + visual_features
+        visual_embeds = visual_embeds * 0.5
+
+        visual_embeds = visual_embeds.reshape(B, D)
+        visual_embeds = self.slf_attn(visual_embeds)[0]
+        visual_embeds = visual_embeds.reshape(B, D, 1).permute(0, 2, 1)
+        visual_embeds = visual_embeds.contiguous()
+
+        visual_embeds = visual_features + visual_embeds
+        visual_embeds = visual_embeds * 0.5
+
+        return visual_embeds
+</nn_head>

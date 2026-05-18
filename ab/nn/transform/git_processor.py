@@ -1,33 +1,17 @@
 """
-GIT Processor Transform for NN Dataset Framework
-
-This transform uses appropriate preprocessing for Microsoft's GIT model
-for image captioning.
+Lightweight GIT Transform for NN Dataset Framework
 """
 
 from torchvision import transforms
 
-try:
-    import os
-    os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    from transformers import GitProcessor
-    _processor = GitProcessor.from_pretrained("microsoft/git-large-coco")
-except Exception:
-    _processor = None
-
-
 def transform(norm):
     """
-    Returns a transform function compatible with NN Dataset framework.
-    
-    For GIT, we need to:
-    1. Resize to 224x224
-    2. Normalize appropriately
-    
-    The actual GIT processor will be used in the model's forward pass.
+    Super lightweight transform to avoid OOM in DataLoader workers.
+    Standard GIT preprocessing: Resize to 224x224 and basic normalization.
     """
+    # Microsoft GIT (large) expects 224x224 and standard ImageNet-like normalization
+    # but we'll do the normalization on the GPU for speed and RAM efficiency.
     return transforms.Compose([
         transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(*norm)
+        transforms.ToTensor()
     ])

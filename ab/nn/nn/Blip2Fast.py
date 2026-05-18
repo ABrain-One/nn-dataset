@@ -156,28 +156,52 @@ class CaptionDecoder(nn.Module):
             return outputs.loss
         else:
             # Inference: generate caption autoregressively
-            outputs_embeds = visual_embeds
+            # Start with EOS/BOS token for GPT2
+            batch_size = visual_features.size(0)
+            start_token = torch.full((batch_size, 1), self.tokenizer.eos_token_id, dtype=torch.long, device=self.device)
+            start_embed = self.gpt2.transformer.wte(start_token)
+            outputs_embeds = torch.cat([visual_embeds, start_embed], dim=1)
+
             generated = []
-
-            # Simple greedy decoding
             past_key_values = None
-            for _ in range(40):  # max 40 tokens
-                out = self.gpt2(
-                    inputs_embeds=outputs_embeds,
-                    past_key_values=past_key_values,
-                    use_cache=True,
-                )
-                next_token_logits = out.logits[:, -1, :]
-                next_token = next_token_logits.argmax(dim=-1, keepdim=True)  # (B, 1)
-                generated.append(next_token)
-                past_key_values = out.past_key_values
-                outputs_embeds = self.gpt2.transformer.wte(next_token)  # (B, 1, 768)
+            finished = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
+            
+            # Robust generation hyperparameters
+            max_new_tokens = int(self.prm.get("max_length", 30)) if isinstance(self.prm, dict) else 30
+            max_new_tokens = max(8, min(max_new_tokens, 40))
+            repetition_penalty = 1.15
 
-                # Stop if EOS generated for all items
-                if (next_token == self.tokenizer.eos_token_id).all():
+            for step in range(max_new_tokens):
+                out = self.gpt2(inputs_embeds=outputs_embeds, past_key_values=past_key_values, use_cache=True)
+                logits = out.logits[:, -1, :]
+
+                # Apply repetition penalty
+                if generated:
+                    prev_tokens = torch.cat(generated, dim=1)
+                    for b in range(batch_size):
+                        for tok in set(prev_tokens[b].tolist()):
+                            if 0 <= tok < logits.size(-1):
+                                if logits[b, tok] > 0:
+                                    logits[b, tok] /= repetition_penalty
+                                else:
+                                    logits[b, tok] *= repetition_penalty
+
+                next_token = logits.argmax(dim=-1, keepdim=True)
+                
+                # Mask out tokens for finished sequences
+                next_token[finished] = self.tokenizer.eos_token_id
+                generated.append(next_token)
+                
+                # Update finished status
+                finished |= next_token.squeeze(-1).eq(self.tokenizer.eos_token_id)
+                
+                if finished.all():
                     break
 
-            return torch.cat(generated, dim=1)  # (B, generated_len)
+                past_key_values = out.past_key_values
+                outputs_embeds = self.gpt2.transformer.wte(next_token)
+
+            return torch.cat(generated, dim=1) if generated else torch.empty((batch_size, 0), dtype=torch.long, device=self.device)
 
 
 # ============================================================
@@ -268,7 +292,9 @@ class Net(nn.Module):
         num_batches = 0
 
         for images, captions in train_data:
+            if isinstance(images, list): images = torch.stack(images)
             images = images.to(self.device)
+            if isinstance(captions, list): captions = torch.stack(captions)
             captions = captions.to(self.device)
             if captions.dim() == 3:
                 captions = captions[:, 0, :]

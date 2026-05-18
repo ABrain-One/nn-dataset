@@ -1,0 +1,59 @@
+Okay, I need to design a PyTorch class called CrossModalBridge that transforms frozen vision features into decoder-compatible embeddings. The input is visual_features with shape [B, 197, 768], and the output should be [B, T_bridge, 768]. 
+
+First, I should structure the class with __init__ and forward methods. In the __init__ method, I'll use prm.get() to get hyperparameters like dropout, bottleneck_dim, and num_heads. 
+
+The user mentioned innovation ideas, so maybe adding a residual bottleneck would help. That means I'll project the input features down to the bottleneck dimension and then back up, adding the original input to this projection for some regularization.
+
+Next, a small transformer adapter block could be added. This would allow for more complex transformations while keeping things manageable. The encoder layer with self-attention and layer norm sounds good. Also, a linear projection for token embedding is needed.
+
+I should include dropout to prevent overfitting. Using the dropout value from the parameters makes sense. After processing through the layers, applying dropout where needed.
+
+Finally, the output should be passed through a linear projection to maintain the same dimensionality (768), ensuring it fits the desired output shape.
+
+I have to make sure all layers are initialized using the provided parameters and not adding any unnecessary components. Using standard PyTorch modules like nn.Linear, nn.LayerNorm, and nn.TransformerEncoderLayer is required.
+
+Putting it all together, the CrossModalBridge class should handle the input through a bottleneck, a transformer block, and then project it back. I'll include residual connections to maintain the input features' information. This should result in the desired output shape and improve accuracy.
+</think>
+
+```python
+<hp>{"dropout": 0.1, "bottleneck_dim": 512, "num_heads": 8}</hp>
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self.num_heads = prm.get("num_heads")
+        self.dropout = nn.Dropout(prm.get("dropout"))
+        
+        # Initialize layers
+        self.slf_attn = nn.TransformerEncoderLayer(
+            d_model=768,
+            nhead=prm.get("num_heads"),
+            dropout=prm.get("dropout")
+        )
+        
+        # Bottleneck
+        self.bottleneck = nn.Linear(768, self.bottleneck_dim)
+        
+        # Initialization
+        self.slf_attn = nn.init.transformer_init(self.slf_attn)
+        
+    def forward(self, visual_features, captions=None):
+        B = visual_features.size(0)
+        
+        # Pass through the same dimension
+        if visual_features.dim() == 3:
+            x = visual_features.squeeze(1)
+        # Token embeddings
+        x = self.bottleneck(x)
+        x = x.view(B, 1, self.bottleneck_dim)
+        
+        # Residual connection and attention
+        x = x + self.slf_attn(x)
+        x = self.dropout(x)
+        x = x.squeeze(1)
+        
+        # Ensure output dimension matches
+        visual_embeds = self projects to maintain same size [B, 197, 768]
+        return visual_embeds
+```

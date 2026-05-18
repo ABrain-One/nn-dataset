@@ -1,0 +1,58 @@
+Okay, I need to create a PyTorch class called CrossModalBridge that transforms visual features into decoder-compatible embeddings. The input is visual_features of shape [B, 197, 768], and the output should be visual_embeds of shape [B, T_bridge, 768]. 
+
+First, looking at the requirements, the class must have __init__ and forward methods. It should use prm.get() for dropout, bottleneck_dim, and num_heads. Also, I need to add an innovation idea: maybe a residual bottleneck, gated fusion, or a small transformer adapter block. 
+
+Let's start with the __init__ method. I'll need to initialize some layers. The user mentioned not to use custom classes unless defined myself, so I should stick to standard modules. Maybe adding a small transformer block inside the module.
+
+For the innovation idea, a residual bottleneck sounds good. That means I can add a bottleneck layer with residual connections. Also, perhaps a small transformer adapter block after the bottleneck to enhance the features.
+
+The code structure will include a TransformerBlock (which I need to define) and maybe use nn.Linear layers. The forward method will process the visual_features, apply the transformer block, pass through some layers, and then project the embeddings.
+
+I need to ensure that the output has the same embedding dimension as the input, which is 768. So, after all transformations, the final layer should project to 768 dimensions.
+
+In the __init__, I'll get the necessary parameters from the prm object. Maybe 32 for dim, 2 for hidden_dim, 4 for num_heads, 0.1 for dropout, and 512 for bottleneck_dim.
+
+In the forward pass, I'll apply the layers in sequence: first the transformer block, then a layer norm, and finally a linear projection.
+
+I should make sure to handle the sequence correctly and that all dimensions match up. Also, adding dropout as specified to prevent overfitting.
+
+I might have missed some layers or connections, so I should double-check the shapes. The residual connection ensures that the output dimension is maintained. Also, I'll make sure that the layers are compatible in the forward function.
+
+Finally, testing the code is essential, but since I'm generating the code, I have to write it carefully to meet all requirements.
+</think>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.dim = prm.get("dim")
+        self.hidden_dim = prm.get("hidden_dim")
+        self.num_heads = prm.get("num_heads")
+        self.dropout = prm.get("dropout")
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        
+        self.transformer_block = TransformerBlock(
+            d_model=self.dim,
+            nhead=self.num_heads,
+            dim=prm.get("dim"),
+            dropout=prm.get("dropout")
+        )
+        
+        self.adapter = nn.Linear(self.dim, self.bottleneck_dim)
+        self.output_layer = nn.Linear(self.bottleneck_dim, self.dim)
+        
+        self.adapter2 = nn.Linear(self.dim, self.dim)
+        
+    def forward(self, visual_features, captions=None):
+        x = visual_features
+        x = self.transformer_block(x)
+        x = self.adapter(x)
+        x = F.relu(x)
+        x = self.adapter2(x)
+        x = x + visual_features # residual connection
+        x = x * 0.5  # scaling to prevent blowing up
+        x = self.output_layer(x)
+        
+        return x
+</nn_head>
+```

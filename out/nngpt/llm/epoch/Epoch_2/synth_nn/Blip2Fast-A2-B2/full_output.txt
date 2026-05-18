@@ -1,0 +1,74 @@
+Okay, I need to figure out how to design a CrossModalBridge class for transforming frozen vision features into decoder-compatible embeddings using PyTorch. Let me start by understanding the task and the requirements.
+
+First, the input features are visual_features with shape [B, 197, 768]. The target output is visual_embeds of shape [B, T_bridge, 768]. So, the model needs to transform the visual features into a new set of embeddings that are compatible with the decoder.
+
+Looking at the requirements, the CrossModalBridge must implement __init__ and forward methods. It should use prm.get() for dropout, bottleneck_dim, and num_heads. Also, I can add innovation ideas like a residual bottleneck, gated fusion, or a small transformer adapter block. However, I must avoid using custom classes unless I define them myself inside the nn_head block. Importantly, I shouldn't use any attributes not explicitly retrieved from prm or initialized in __init__.
+
+The example output shows a hyperparameter configuration, so I should include similar ones. Let's say dropout is 0.1, bottleneck_dim is 512, and num_heads is 8.
+
+In the __init__ method, I'll initialize the necessary layers. Maybe a Linear layer to project the visual features to the bottleneck dimension, followed by a LayerNorm, then a multi-head self-attention layer using num_heads. Also, a feed-forward network with the same dimensions, another LayerNorm, and a residual connection with dropout.
+
+In the forward method, I'll project the input features through the layers. I'll need to add a residual term if there's a residual connection. Then, pass the output through a LayerNorm and return the embeddings with shape [B, T_bridge, 768].
+
+Wait, the original target output is [B, T_bridge, 768], but my current approach would project to the same 768 dimensions. So that's fine, but maybe I need to ensure the encoder's output matches the transformer's expectations.
+
+I should structure the code without any extra classes unless necessary, as per the requirements. So, everything should be built using standard PyTorch modules without any custom classes like Bottleneck or GatedFusion unless I define them inside the nn_head, but I think I can manage without.
+
+Putting it all together, I'll create a CrossModalBridge class that projects the features through a series of layers, incorporating the optional gates and residual connections, and output the required embeddings. This should help the decoder in the SOTA model to better process the visual information.
+</think>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.prime = prm
+        self.dropout = nn.Dropout(prm.get('dropout'))
+        self.bottleneck_dim = prm.get('bottleneck_dim')
+        self.num_heads = prm.get('num_heads')
+
+        # Build transformer blocks
+        self.attn_proj = nn.Linear(768, self.bottleneck_dim)
+        self.attn_in = nn.LayerNorm(768)
+        
+        # Add innovation: small transformer adapter block
+        self.Adapter = nn.Sequential(
+            nn.Linear(768, self.bottleneck_dim),
+            nn.LayerNorm(self.bottleneck_dim),
+            nn.Linear(self.bottleneck_dim, 768)
+        )
+        
+        self.slf_attn = nn.MultiheadAttention(768, self.num_heads)
+        self.slf_attn2 = nn.MultiheadAttention(768, self.num_heads)
+        self.slf_attn3 = nn.MultiheadAttention(768, self.num_heads)
+        self.slf_attn3[0].weight.data.copy_(self.slf_attn[0].weight.data)
+        self.slf_attn3[0].bias.data.copy_(self.slf_attn[0].bias.data)
+        
+        # Build decoder
+        self.reducer = nn.Linear(768, 768)
+        self.reducer_in = nn.LayerNorm(768)
+        
+        # Optional: add residual connection
+        self.residual = nn.Sequential(
+            self.reducer, self.reducer_in, self.slf_attn2, self.slf_attn3
+        )
+
+    def forward(self, visual_features, captions=None):
+        B = visual_features.size(0)
+        
+        if captions is not None:
+            captions = captions.unsqueeze(1)
+            x = torch.cat([visual_features, captions], dim=1)
+        else:
+            x = visual_features
+            
+        x = self.attn_in(x)
+        x = self.residual(x)
+        x = self.slf_attn(x, x, x)[0][0].transpose(1, 2)
+        x = x.reshape(B, -1, 768)
+        x = self.reducer_in(x)
+        x = self.reducer(x)
+        x = self.slf_attn2(x, x, x)[0][0].transpose(1, 2)
+        x = x.reshape(B, -1, 768)
+        
+        return self.slf_attn3(x, x, x)[0]
+<hp>{"dropout": 0.1, "bottleneck_dim": 512, "num_heads": 8}</hp>

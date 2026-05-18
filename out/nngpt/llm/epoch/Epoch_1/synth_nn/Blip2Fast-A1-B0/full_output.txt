@@ -1,0 +1,72 @@
+Alright, I need to create a PyTorch class called CrossModalBridge that transforms frozen vision features into decoder-compatible embeddings. Let's break down the problem.
+
+First, the input is visual_features of shape [B, 197, 768], where B is the batch size. The target is visual_embeds of shape [B, T_bridge, 768]. So, the class needs to process these 197 features into embeddings of the same dimension but a different temporal length.
+
+Looking at the requirements: I must implement __init__ and forward methods. I need to use prm.get() for dropout, bottleneck_dim, and num_heads. Also, I need to add an innovation idea: a residual bottleneck, gated fusion, or small transformer adapter.
+
+Hmm, considering a residual bottleneck makes sense for stability. It helps in training deep models by preventing gradient vanishing. So, in the __init__ method, I'll include a Linear layer from visual_features to a bottleneck_dim, apply dropout, and add a residual connection.
+
+For the fusion part, I think a multi-head attention layer would be effective since it can capture different attention patterns, which is better than simple concatenation. I'll use nn.MultiheadAttention in the forward method, passing the features and captions (if available) to produce the attention output.
+
+The output embedding needs to project back to the same dimension, 768, so another Linear layer at the end. Also, after the small transformer block, applying a LayerNorm will help stabilize training.
+
+In the forward method, I'll handle the case where captions are None by only applying the transformer adapter if they are present. If captions are provided, I'll project the captions to the desired embedding dimension and concatenate them with the processed visual_features before applying the attention.
+
+I need to make sure I don't add any custom classes unless necessary and use standard modules. So, Bottleneck, GatedFusion, or TransformerAdapter can't be used unless defined within the module, but in this case, it's better to use built-in layers.
+
+Also, the code shouldn't have any attributes outside of what's defined in __init__, so everything related to the bottleneck, attention, and projection should be defined within the class methods.
+
+Putting it all together, the CrossModalBridge class will first process the visual features with a linear layer, add a residual connection, then apply a multi-head attention layer for fusion, especially if captions are available. Finally, it projects back to the 768 dimension and returns the embeddings.
+</think>
+
+```
+<hp>{"dropout": 0.1, "bottleneck_dim": 512, "num_heads": 8}</hp>
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self.num_heads = prm.get("num_heads")
+        self.dropout = prm.get("dropout")
+        
+        self2self_attn = nn.MultiheadAttention(
+            embed_dim=768,
+            num_heads=self.num_heads,
+            dropout=self.dropout
+        )
+        
+        self.visual_proj = nn.Linear(768, self.bottleneck_dim)
+        self.residual = nn.Linear(self.bottleneck_dim, 768)
+        self.captions_proj = nn.Linear(768, 768)
+        self.transformer = nn.ModuleList([
+            nn.TransformerEncoderLayer(
+                d_model=768,
+                nhead=self.num_heads,
+                dim_FEEDFORWARD=4 * 768,
+                dropout=self.dropout,
+                activation="gelu"
+            )
+        ])
+        
+        self.gated_attn = nn.Linear(768, 768 * 768 * 2, bias=False)
+    
+    def forward(self, visual_features, captions=None):
+        x = visual_features
+        x = self.visual_proj(x)
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x += self.residual(x)
+        
+        if captions is not None:
+            cap = self.captions_proj(captions)
+            cap = cap.permute(1,0,2)
+            x = torch.cat([x, cap], dim=1)
+            x = x.permute(1,0,2)
+            x = self.transformer(x).squeeze(1)
+            x = x.permute(0,2,1).contiguous()
+        
+        x = self.transformer(x)
+        x = x.mean(dim=1)
+        x = x.view(-1, self.bottleneck_dim)
+        return x
+</nn_head>
+```

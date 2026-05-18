@@ -1,0 +1,226 @@
+Okay, I need to design a CrossModalBridge class in PyTorch that transforms frozen vision features into decoder-compatible embeddings. The input is visual_features of shape [B, 197, 768], and the output should be [B, T_bridge, 768]. 
+
+First, the class must have __init__ and forward methods. The requirements mention using prm for dropout, bottleneck_dim, and num_heads. So, I'll get these parameters from the pruning manager.
+
+Next, innovation ideas include adding a residual bottleneck, a gated fusion layer, or a small transformer adapter block. Residual bottlenecks can help with gradient flow. Gated fusion can introduce non-linearity. For simplicity, maybe start with a residual bottleneck.
+
+I'll need layers like Linear for projecting the features, LayerNorm for normalization, a Dropout layer based on the parameter, and maybe another Linear layer to project back to the desired dimension.
+
+Wait, no need for custom classes like Bottleneck, TransformerBlock, or GatedFusion unless I define them. Since the instructions say to avoid those unless defining inside nn_head, but I'm instructed to define them inside <nn_head> only if needed.
+
+So, for the code, I can use standard nn modules. No need for custom classes beyond what's necessary.
+
+The architecture: Start with projecting the input visual_features using a linear layer, then apply LayerNorm, add a residual connection, project again, apply dropout, and use another LayerNorm. Maybe a small layer to get to the target dimension. Alternatively, could have multiple layers but considering T_bridge, perhaps a single adapter layer.
+
+Wait, the user's output example didn't include a small transformer adapter. Hmm, maybe I can stick with the residual bottleneck as the innovation here.
+
+So, code steps:
+
+In __init__, get bottleneck_dim and dropout from prm. Then project the input visual_features using self.bottleneck, apply LayerNorm, then apply dropout, project again, LayerNorm, and add a residual connection. 
+
+In forward, take visual_features, pass through the layers, ensuring the output shape matches.
+
+I need to make sure that the output size remains 768 as per the requirements. So, the projection layers will adjust accordingly.
+
+Let me sketch the layers:
+
+- self.bottleneck = nn.Linear(in_features=768, out_features=self.bottleneck_dim, bias=False)
+- self Projects after LayerNorm, applies dropout, and projects back.
+
+Wait, the original features are [B,197,768], but the output needs to be [B,T_bridge,768]. Hmm, but the target embedding is 768 dimensional. So the projection after the layers should be to 768.
+
+So, maybe in the forward method, after processing, take the B*T_bridge features and reshape to [B, T_bridge, 768]?
+
+Or perhaps the projection is done before the final reshape.
+
+I'll include a Linear layer with out_features=768, followed by LayerNorm.
+
+Putting it all together, here's the code.
+
+I should check if all parameters are retrieved from prm, like dropout, bottleneck_dim, etc. Also, make sure not to use any custom classes outside of what's allowed.
+
+Wait, what about the small transformer adapter block? The instruction suggested it as an innovation. Maybe I can add a multi-head attention layer?
+
+Wait, but attention layers might require more parameters. Considering the code, perhaps I can add a simple transformer block with self-attention and feed-forward.
+
+But the code needs to be efficient, and since the user prefers to use standard modules without custom classes, maybe a multi-head attention block is too heavy. Alternatively, stick with the residual bottleneck for simplicity.
+
+Given the constraints, I'll implement the residual bottleneck with a multi-head attention block in the forward pass. Alternatively, perhaps keep it simple with a few layers.
+
+I think adding a transformer block could help in capturing more complex relationships. So, perhaps in the __init__, define the adapter, a Linear layer, and some attention layers.
+
+Wait, but using the standard MultiheadAttention can be resource-heavy, but for the purpose of this task, perhaps it's acceptable.
+
+So, the class would have:
+
+- self.attacker: MultiheadAttention for processing the features
+
+Then, in forward:
+
+Project the visual features, apply the attacker, then project again with LayerNorm and Dropout.
+
+Hmm, but considering time and computational resources, it's probably better to use a simplified version, like a single self-attention head. But perhaps the code will include a basic multi-head attention.
+
+Another thought: perhaps the class can have a small transformer block. So, define a layer in __init__ that includes self.adapter, which is a small transformer adapter. That would fulfill the innovation requirement.
+
+So, in code:
+
+class CrossModalBridge(nn.Module):
+
+    def __init__(self, prm):
+
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+
+        self.n_heads = prm.get("num_heads") or 1
+
+        self.dropout_rate = prm.get("dropout")
+
+        self.adapter = nn.ModuleDict()
+
+        self.adapter['proj_in'] = nn.Linear(768, self.bottleneck_dim, bias=False)
+
+        self.adapter['norm1'] = nn.LayerNorm(self.bottleneck_dim)
+
+        self.adapter['proj_after_attn'] = nn.Linear(self.bottleneck_dim, 768, bias=False)
+
+        self.adapter['norm2'] = nn.LayerNorm(768)
+
+        self.slf_attn = nn.MultiheadAttention(self.bottleneck_dim, self.n_heads)
+
+    def forward(self, visual_features, captions=None):
+
+        B = visual_features.size(0)
+
+        x = visual_features  # [B,197,768]
+
+        # Residual connection and projection
+
+        x = x.permute(0,2,1)  # [B,768,197]
+
+        x = self.adapter['proj_in'](x)  # [B, bottleneck_dim,197]
+
+        x = self.adapter['norm1'](x)
+
+        # Apply self-attention with residual
+
+        x = x + self.slf_attn(x)[0]  # [B, bottleneck_dim,197]
+
+        x = F.dropout(x, p=self.dropout_rate, training=self.training)  # [B, bottlensek_dim,197]
+
+        x = self.adapter['norm2'](x)  # [B, 768,197]
+
+        x = x.permute(0,2,1)  # [B,197,768]
+
+        x = self.adapter['proj_after_attn'](x)  # [B,197,768]
+
+        # Or maybe, alternatively, do x = x.permute(... etc.)
+
+        # Alternatively, project x without permuting
+
+        x = x.permute(0,2,1)  # [B,768,197]
+
+        x = self.adapter['proj_in'](x)  # [B,bottleneck_dim, 197]
+
+        x = self.adapter['norm1'](x)
+
+        x = x + self.slf_attn(x)[0]
+
+        x = F.dropout(x, p=self.dropout_rate, training=self.training)
+
+        x = self.adapter['norm2'](x)
+
+        x = x.permute(0,2,1)  # back to [B,197,bottleneck_dim]
+
+        x = self.adapter['proj_after_attn'](x)  # [B,197,768]
+
+        x = x.permute(0,2,1)  # [B,768,197]
+
+        x = x.squeeze(1)  # Not sure if needed, since the input was 197 length.
+
+Wait, no, visual_features have 197 tokens, so projecting back to 768 doesn't require squeezing. So, perhaps in the end, just reshape to [B, T_bridge, 768]. So maybe after processing, the output is [B,197,768], which is the same as the input. Hmm, that's not useful. Oh wait, the input has T=197, but the target output is T_bridge, which can be something else, like maybe 1 for inference.
+
+Wait, but in the code, the forward function doesn't accept captions, which is used elsewhere. So, perhaps the adapter is only applying the same processing regardless of captions.
+
+Alternatively, perhaps captions here are for attention, but in this code, I don't use the captions.
+
+So, perhaps after processing through the adapter, the shape remains [B,197,768], but the original input was [B,197,768], so why do this?
+
+Wait, perhaps the target T_bridge is something different. Maybe in the example above, it's unclear, but perhaps I made a miscalculation.
+
+But perhaps the main point is that the output is projected into [B, T_bridge, 768]. So, I need to think of the final projection layers.
+
+Maybe instead, the projection after the self-attention should project into the 768 dimension.
+
+So, the output from the adapter would be [B, T_bridge, 768].
+
+But since the current input is [B,197,768], perhaps T_bridge is 197.
+
+But the user requires output [B, T_bridge, 768], so perhaps the forward is just a pass-through. But that can't be; perhaps I need a better approach.
+
+Alternatively, perhaps the initial code is just to apply a linear layer in the forward method, but that's too simplistic.
+
+Wait, perhaps the class should have learned parameters for the transformation. So, I should ensure that the code includes learned projections.
+
+Hmm, but with all these layers, the code may capture the necessary features.
+
+Another consideration: After processing through the self-attention, do I need another projection?
+
+Alternatively, perhaps the T_bridge is the same as the input's temporal dimension, so no change is needed.
+
+Alternatively, perhaps I should design it to handle any T_bridge.
+
+Hmm, perhaps the T_bridge comes from the captions. But in the forward function, the code doesn't take captions as input. The initial setup says captions=None, so perhaps the code uses other mechanisms.
+
+Wait, no, perhaps the captions are used in another part of the model for attention. But in this bridge, perhaps it's separate.
+
+I think I'm overcomplicating. The core idea is to project the features, apply a residual bottleneck, maybe with some non-linear layers, and return the output.
+
+So, back to the code. Maybe the key is to have a residual connection and perhaps a small multi-head attention block.
+
+So, overall, the code should include:
+
+- Project from 768 to bottleneck_dim, apply LayerNorm.
+- Add self-attention with residual connection.
+- Apply dropout.
+- Project back to 768 with LayerNorm.
+
+But also, T_bridge is part of the output shape, so perhaps the code is simply projecting and reshaping, but I'm not entirely sure. However, the code should satisfy the required shape.
+
+Finalizing the code with a transformer adapter block, since it's an innovation idea.
+</think>
+
+<hp>{"dropout": 0.1, "bottleneck_dim": 512, "num_heads": 8}</hp>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self.num_heads = prm.get("num_heads")
+        self.dropout = prm.get("dropout")
+        
+        # Define layers
+        self.slf_attn = nn.MultiheadAttention(self.bottleneck_dim, self.num_heads)
+        selfproj_in = nn.Linear(768, self.bottleneck_dim, bias=False)
+        selfnorm_in = nn.LayerNorm(self.bottleneck_dim)
+        selfproj_after_attn = nn.Linear(self.bottleneck_dim, 768, bias=False)
+        selfnorm_after = nn.LayerNorm(768)
+        
+    def forward(self, visual_features, captions=None):
+        x = visual_features
+        B = x.size(0)
+        
+        # Project and normalize input features
+        x = selfproj_in(x)
+        x = selfnorm_in(x)
+        
+        # Apply self-attention with residual connection
+        x = x + self.slf_attn(x)[0]
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = selfnorm_after(x)
+        
+        # Project back to original dimension
+        x = selfproj_after_attn(x)
+        
+        return x
+</nn_head>

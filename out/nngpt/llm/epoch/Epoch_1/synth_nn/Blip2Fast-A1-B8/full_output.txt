@@ -1,0 +1,77 @@
+Okay, so I need to design a PyTorch class called CrossModalBridge that transforms frozen vision features into decoder-compatible embeddings. The user provided some context about the input and target outputs, and there are specific requirements to meet. Let me go through this step by step.
+
+First, the input is visual_features with shape [B, 197, 768], where B is the batch size. The target is visual_embeds of shape [B, T_bridge, 768]. So, the idea is to process the visual features and output embeddings that are compatible with a decoder, maybe like a transformer decoder.
+
+The requirements say I need to implement __init__ and forward methods. I must use prm.get() for dropout, bottleneck_dim, and num_heads. Also, I can add a residual bottleneck, a gated fusion layer, or a small transformer adapter block. But I shouldn't use custom classes unless I define them inside the head block. The output should only be the class, and I should avoid using any unexplicitly retrieved attributes.
+
+So, thinking about the structure: maybe a cross-modal bridge needs to project the visual features into a lower-dimensional space and then somehow fuse it with the captions if available. But in this case, the captions are optional, right? Looking at the context, the target output is the bridge's embeddings, so perhaps captions aren't directly used here unless for cross-attention.
+
+Wait, but in the function forward, the input is visual_features and captions=None. So maybe if captions are provided, we need to fuse them with the visual features. But perhaps for the base case, we can handle both scenarios.
+
+I remember that in some models, like those using a Vision Transformer (ViT) features, you can project them into a latent space, then use a cross-attention layer with text embeddings. So, maybe we can create a cross-attention module that takes both visual and text embeddings.
+
+The user mentioned using a residual bottleneck, which implies using a lower-dimensional projection with some residual connections. So, let me include a separate projection from 768 to bottleneck_dim and then back to 768. Using residual connections would help with gradient flow in the training process.
+
+Additionally, a small transformer adapter block could enhance the model's capability. So, perhaps in the adapter, we can process the projected features further with a couple of attention layers or multi-head attention.
+
+Gated fusion is another option. That might help in modulating how the visual and text features are combined. So, maybe a linear projection followed by a gating mechanism that allows the fusion to vary based on some condition.
+
+Given that, I need to decide which approach to take. Since the user mentioned innovation ideas, but the output must only be the class, perhaps the best approach is to combine both a residual bottleneck and a transformer adapter for increased flexibility.
+
+Now, the __init__ method needs to set up the necessary layers. Let's outline the steps:
+
+1. Project the visual features from 768 to bottleneck_dim.
+2. Maybe apply a layer norm and a dropout layer here.
+3. Create a transformer adapter block for further processing in the bottleneck space.
+4. Project back to 768 dimensions.
+5. Include an optional cross-attention mechanism that takes in captions.
+6. Another optional layer norm and dropout for regularization.
+
+Let me structure the class with these layers. I'll use nn.Linear for projections, nn.LayerNorm for normalization, and nn.TransformerEncoderLayer for the adapter block. Since the user prefers standard modules, I should avoid creating any custom classes unless necessary.
+
+Wait, the innovation ideas mention adding a residual bottleneck, so that's covered. The transformer adapter would add a new layer, enhancing the model's capacity. Adding a cross-attention if captions are provided is an idea, but maybe the base implementation can handle this with an optional input.
+
+So, putting it all together, the __init__ method will take in the parameters and set up the layers. Then, the forward method will first project the visual features, process them through the transformer adapter, project back, and optionally perform cross-attention with the captions.
+
+I think that's a solid approach. Now, I'll write the code accordingly, making sure to include all the required layers and to use the hyperparameters retrieved via prm.get().
+</think>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim", 512)
+        self.dropout = prm.get("dropout", 0.1)
+        self.num attends = prm.get("num_attends", 4)
+        
+        self.adapter = nn.Sequential(
+            nn.Linear(768, self.bottleneck_dim, bias=False),
+            nn.LayerNorm(self.bottleneck_dim),
+            nn.Dropout(self.dropout),
+            TransformerAdapter(self.bottleneck_dim, self.num_attends),
+            nn.Linear(self.bottleneck_dim, 768, bias=False)
+        )
+
+        selfcrossattn = nn.Linear(768, 768)
+        
+    def forward(self, visual_features, captions=None):
+        x = visual_features
+        x = self.adapter(x)
+        
+        if captions is not None and captions.size(1) > 0:
+            crossattn = F.softmax(torch.bmm(captions, x.transpose(1,2)), dim=1)
+            x = (crossattn @ x) * captions
+        
+        x = x.mean(dim=1)
+        return x
+
+class TransformerAdapter(nn.Module):
+    def __init__(self, in_dim, nheads):
+        super(TransformerAdapter, self).__init__()
+        self.slf_attn = nn.MultiheadAttention(in_dim, nheads)
+        
+    def forward(self, x):
+        x = x + self.slf_attn(x)[0]
+        return x
+</nn_head>
+<hp>{"bottleneck_dim": 512, "num attends": 4, "num heads": 1, "layer norm eps": 1e-5}</hp>

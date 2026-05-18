@@ -1,0 +1,68 @@
+Okay, I'm trying to solve this problem where I need to create a PyTorch class called CrossModalBridge. The goal is to transform frozen vision features into decoder-compatible embeddings. Let me break down the requirements and think through each step.
+
+First, the input is visual_features of shape [B, 197, 768], which comes from a frozen GIT-Large model. The target output is visual_embeds of shape [B, T_bridge, 768]. So, the model needs to process the 197 visual tokens and output embeddings of the same dimensionality but with a different number of tokens, which I guess comes from the captions.
+
+Looking at the requirements, the class must implement __init__ and forward methods. I'll need to define those. I should use prm.get() for dropout, bottleneck_dim, and num_heads. So in the __init__ method, I'll retrieve these parameters from the passed prm.
+
+Next, there's the requirement for innovation. I can add a residual bottleneck, a gated fusion layer, or a small transformer adapter block. Maybe a transformer adapter would be a good choice as it can introduce more flexibility. But I should remember not to use any custom classes unless I define them myself inside an nn_head block, as per requirement 5.
+
+Also, I should use standard nn modules like Linear, TransformerEncoderLayer, MultiheadAttention, etc. So, I'll avoid using custom classes unless necessary.
+
+In the __init__ method, I'll initialize the necessary layers. Let's think about the structure. The bottleneck should reduce the dimensions, perhaps using a linear layer, and then a transformer adapter block. The adapter can handle the sequence to sequence transformation.
+
+In the forward method, the input visual_features will go through a reshape to handle sequences, then apply the bottleneck, and then the transformer adapter. I need to ensure that the output maintains the batch size and the new token count, which is why it's reshaped to [B, -1, bottleneck_dim] first.
+
+Wait, in the current best accuracy section, they mention 0.0605, which is pretty low. Hmm, maybe the model isn't performing well, but that's more about the dataset or model performance rather than the architecture.
+
+Let me structure the code. In the __init__:
+
+- I'll get the dropout rate, bottleneck_dim, and num_heads from prm.
+- Then, apply dropout to the visual_features to prevent overfitting.
+- Add a linear layer to reduce the dimension from 768 to bottleneck_dim.
+- Then, use a transformer adapter block, which includes cross-attention between the encoder and decoder sequences.
+
+In the forward method:
+
+- Reshape the visual_features into [B, -1, bottleneck_dim], because the input is [B, 197, 768], and 197 is the same as T_bridge if no resizing is needed.
+- Pass through the adapter which processes the sequence with cross-attention.
+- Reshape back if necessary, but the output should be [B, T_bridge, 768], so maybe the adapter handles it properly.
+
+Wait, but the target is [B, T_bridge, 768]. The current code's output is shape [B, t, dim], but in the problem, the input and output have the same embedding dimension (768) but different sequence lengths. So, as long as the adapter handles the sequence, it's fine.
+
+Putting it all together, the CrossModalBridge class uses a transformer adapter to bridge the modality gap, applies dropout during training, and maintains the dimensionality with a bottleneck.
+
+I should also make sure not to initialize any extra layers or attributes outside of what's defined. So, no new classes unless for the adapter, but I need to define the adapter as a new submodule inside the class.
+
+Let me write the code accordingly.
+</think>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.bottleneck_dim = prm.get('bottleneck_dim')
+        self.dropout = prm.get('dropout')
+        self.num_heads = prm.get('num_heads')
+
+        # Initialize submodules
+        self.adapter_layer = Adapter(self.bottleneck_dim, self.num_heads)
+        
+        # Bottle neck layer with dropout
+        self.bottleneck = nn.Linear(768, self.bottleneck_dim)
+        self.dropout = nn.Dropout(self.dropout)
+    
+    def forward(self, visual_features, captions=None):
+        # Apply dropout
+        x = self.dropout(visual_features)
+        
+        # Apply bottleneck
+        x = x.reshape(-1, 768)
+        x = self.bottleneck(x)
+        x = x.reshape(-1, self.bottleneck_dim)
+        
+        # Adapter layer
+        x, _ = self.adapter_layer(x, x, captions)  # Assuming cross-attention
+
+        return x
+</nn_head>
+```

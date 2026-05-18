@@ -1,0 +1,83 @@
+Alright, I need to design a PyTorch class called CrossModalBridge that transforms frozen vision features into decoder-compatible embeddings. Let's start by understanding the problem.
+
+The input is visual_features with shape [B, 197, 768], and the output should be [B, T_bridge, 768]. The model uses a ContextMLP for vision-to-language modeling. The user wants me to optimize this by adding features like a residual bottleneck, gated fusion, or a small transformer adapter block.
+
+First, the class must implement __init__ and forward methods. I'll need to retrieve parameters using prm.get(). The requirements mention dropout, bottleneck_dim, and num_heads, so I should include those in the __init__.
+
+I'll add a configuration for a small transformer adapter. Let's say 2 layers, with 4 heads each and an expansion factor of 2x. The embedding dimension should come from the context, which is 768.
+
+In the forward method, start by extracting features and get the necessary parameters: dropout, adapter_dim, num_layers, nhead, and embdim. I'll use nn.Linear layers to project the visual features down to the bottleneck dimension, adding a ReLU activation.
+
+A key part is adding a residual connection before applying the classifier. I'll apply the projection, then a layernorm with dropout, then add the original features via residual connection. This introduces a residual bottleneck as per the innovation idea.
+
+For the decoder compatibility, use a transformer decoder structure. Implement a transformer decoder layer with multi-head attention and feed-forward layers. Each layer should use layer norm, dropout, and attention modules from the parameters. Use the adapter if specified to pass features through, else just pass them as inputs.
+
+Skip connection to concatenate features and adapted embeddings, then pass through the decoder layers. Finally, layernorm and dropout to get the output embeddings.
+
+Now, considering the critical points, I must not use any custom classes unless I define them inside the nn_head block. So, I'll define a SmallTransformerAdapter class inside nn_head that uses Linear and MultiheadAttention layers.
+
+Testing with T_bridge steps, the output should be [B, T_bridge, 768]. The configuration for hyperparameters like dropout, bottleneck_dim, and num_heads should be in the hp tags.
+
+I think that's the plan. Let me outline the code accordingly, ensuring everything is in the right structure and adheres to the requirements.
+</think>
+
+<hp>{"dropout": 0.1, "bottleneck_dim": 512, "adapter": {"num_layers": 2, "num_heads":4, "emb_factor":2}}}</hp>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self.adapter = SmallTransformerAdapter(
+            nlayer=prm.get("adapter_num_layers"),
+            nhead=prm.get("adapter_num_heads"),
+            embedding_dimension=prm.get("adapter_emb_factor") * prm.get("bottleneck_dim")
+        )
+        
+        self.transformer project = nn.Linear(in_features=768, out_features=self.bottleneck_dim)
+        self ProjectLayerNorm = nn.LayerNorm(self.bottleneck_dim)
+        self.dropout = nn.Dropout(prm.get("dropout"))
+        
+    def forward(self, visual_features, captions=None):
+        B, _, _ = visual_features.size()
+        x = self.transformer_project(visual_features)
+        x = selfProjectLayerNorm(x)
+        x = self.dropout(x)
+        
+        # Residual connection with the original features
+        x = x + visual_features
+        
+        # Passing through the transformer decoder layers
+        x = self.transformer_decoder(x)
+        
+        # Final layer norm and dropout
+        x = selfProjectLayerNorm(x)
+        x = self.dropout(x)
+        
+        return x
+
+class SmallTransformerAdapter(nn.Module):
+    def __init__(self, nlayer, nhead, embedding_dimension):
+        super(SmallTransformerAdapter, self).__init__()
+        self.transformer_layers = nn.ModuleList()
+        for _ in range(nlayer):
+            self.transformer_layers.append(
+                TransformerDecoderLayer(
+                    d_model=embedding_dimension,
+                    nhead= nhead,
+                    dim=embedding_dimension,
+                    dropout=0
+                )
+            )
+
+    def forward(self, x):
+        for layer in self.transformer_layers:
+            x = layer(x)
+        return x
+
+class TransformerDecoderLayer(nn.Module):
+    def __init__(self, d_model, nhead, dim, dropout):
+        super(TransformerDecoderLayer, self).__init__()
+        self.slf_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.dim = dim
+        self

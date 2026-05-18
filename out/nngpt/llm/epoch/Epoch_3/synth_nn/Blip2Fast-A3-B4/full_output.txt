@@ -1,0 +1,149 @@
+Alright, I need to tackle this task as an expert NAS engineer, so I want to come up with the best possible solution. The user has given me specific requirements for the `CrossModalBridge` class, and I need to make sure I address each one carefully.
+
+First, the class must implement `__init__` and `forward` methods. That's straightforward. I'll need to initialize any necessary parameters in the constructor and define the forward pass in the `forward` method.
+
+The input features are of shape [B, 197, 768], where B is the batch size. The target is to output [B, T_bridge, 768]. So, the model needs to transform the visual features into embeddings of the same size but possibly different in the middle dimension.
+
+Next, I have to use `prm.get()` for dropout, bottleneck_dim, and num_heads. That means all these hyperparameters must be retrieved from the provided parameters, not hard-coded. I'll declare them in the class, probably with default values in case they're not provided.
+
+Innovation ideas are important. The user suggests adding a residual bottleneck, a gated fusion layer, or a small transformer adapter block. I think combining a residual connection with a transformer block might provide a good balance between computational efficiency and performance. Transformers are great at capturing dependencies, and a residual connection can help with training deeper models.
+
+I should use standard PyTorch modules: `nn.Linear`, `nn.TransformerEncoderLayer`, `nn.MultiheadAttention`, `nn.LayerNorm`, etc. Avoiding custom classes unless necessary, which in this case, since they want the adapter defined inside the head, it's okay.
+
+So, for the residual connection, I'll split the input visual features into two parts. Each part will go through a linear layer to project into a lower dimension, say the bottleneck_dim. Then, apply a transformer block to each, maybe with self-attention and a feed-forward network. After processing, concatenate the outputs and apply a final linear projection back to the original embedding size.
+
+In the constructor, I'll get the hyperparameters from prm. Let's default to some typical values unless specified otherwise. Then, in the `forward` method, I'll take the visual_features. I'll split them into `x1` and `x2` by size. Each goes through a linear layer, then apply the `TransformerEncoderLayer` twice. After that, concatenate x1 and x2, pass through another linear layer to project back, add a residual connection, apply dropout, and return the embeddings.
+
+Wait, the user didn't specify T_bridge, but looking at the example, maybe I should project the entire sequence to the target dimension. Alternatively, the residual connection can handle the output. But perhaps it's better to process each frame through the transformer independently. Hmm, but using a transformer on each frame might not be optimal, but for simplicity, maybe it's okay. Alternatively, I can flatten the visual_features and then pass through a multi-head attention layer, but that's memory intensive. The user's example in the code splits into x1 and x2 and processes them separately with the same transformer.
+
+Alternatively, another approach is to reshape the visual_features into (B, T_bridge, 768), but that's not the case here. Since the input is already of size [B, 197, 768], and the target is [B, T_bridge, 768], I need to project the visual features into the same embedding dimension but change the sequence length. But perhaps the current design does a cross-attention between x1 and x2 within each frame.
+
+Wait, in the code example provided, the forward method splits `visual_features` into x1 and x2 based on the first dimension, which is the frame size. Then each goes through a projection, a transformation, and then concatenated. Hmm, but that approach would combine the frames, which might not capture the temporal dependencies well. Maybe it's better to process each frame individually.
+
+Alternatively, perhaps each frame is processed individually through the transformer. Maybe I should reshape `visual_features` into (B * 197, n_head, d_k) where d_k is the dimension per head, but that might complicate things.
+
+Wait, another approach: Split the visual_features into multiple parts, project each into a lower dimension, apply a transformer, concatenate, and then project back. This way, the dimension stays the same (since 768 is preserved), but the sequence length is not changed. So the target would still be [B, T_bridge, 768], but T_bridge would need to be something else, perhaps 197*T× some factor. Wait, but in the code, after processing, the output shape is [B, T_bridge, 768]. So perhaps I'm misunderstanding the transformation. Maybe T_bridge is the same as 197 but with some expansion.
+
+Alternatively, perhaps the model should project the entire sequence into a different embedding length. But without knowing the target T_bridge, maybe it's better to design the model to handle variable-length sequences.
+
+Wait, the code example splits `visual_features` into x1 and x2, both of size [B, 98, 768] each if T is split into two equal parts. Then each is projected to `bottleneck_dim`, which is given. Then each is processed through `TransformerEncoderLayer`, which applies self-attention and feed-forward. So x1 and x2 are of size [B, 98, bottleneck_dim]. After that, they are concatenated, and then projected back to 768, making the output x12 of size [B, 98, 768].
+
+Wait, but the output is [B, T_bridge, 768], which suggests that T_bridge is the same as 98, which is half of 197. So the model is halving the number of frames. Alternatively, maybe the model should be more general.
+
+But to keep it simple, perhaps it's better to make the output embedding size the same as the input, with the number of tokens halved, which might not be optimal but works for the example. Alternatively, perhaps instead of splitting, we can project each token through a small transformer.
+
+But the user's code splits the visual_features into x1 and x2, so I'll proceed with that. Then each undergoes a linear projection, a transformer layer, and then concatenated. Then project back to 768. So the overall output has the same embedding size but potentially a different number of tokens.
+
+Wait, but in the forward method, after getting x1 and x2, they are passed through the same transformer layers, and then concatenated. The code in the example also includes dropout. So after both x1 and x2 are processed, they are concatenated, then multiplied by drop_prob and added to the identity for residual connection. Then, in the end, are they adding the dropout on x12 or just within each branch?
+
+In the code, after both branches (x1p and x2p), the sum x12 is computed. Then x12 is multiplied by drop and added to x12, producing x_bridge. So the final output is x_bridge. This structure is similar to dropout applied to a residual connection in a VAE.
+
+So the overall model is combining the original features with the transformed ones via a residual connection with dropout. That should help prevent overfitting since dropout is applied during the forward pass, but not during training if I'm correct.
+
+Putting it all together, I'll structure the class as follows:
+
+- In __init__, define the hyperparameters: `bottleneck_dim` and `num_heads` from prm. Also, set `d_model=768` for the target embedding size. Then, define layers:
+
+    - For each branch, a linear layer projecting to `bottleneck_dim`.
+    - A dropout layer with `dropout_rate`.
+    - A transformer layer using `MultiheadAttention` for attention and `Linear` layers for feed-forward.
+    - Another dropout after the transformer.
+    - Then, concatenate x1 and x2, project back to 768 with a linear layer.
+    - Apply residual connection with dropout.
+
+In the forward method:
+
+- Split `visual_features` into x1 and x2 based on a split ratio, perhaps split into two equal parts.
+- Project each through linear layers into `bottleneck_dim`.
+- Process each through `TransformerEncoderLayer`.
+- Concatenate x1p and x2p, project with linear layer back to 768.
+- Compute x12 = x12 + drop(x12)
+- Return x_bridge.
+
+I'll need to make sure all modules are correctly defined, especially attention layers. Also, the dimension should match correctly, i.e., after projection, both x1p and x2p should be of size [B, 98, bottleneck_dim]. Then after processing, they are concatenated to [B, 98, 2*bottleneck_dim], then project back to 768.
+
+Also, I need to make sure that `TransformerEncoderLayer` is correctly initialized with `d_model` equal to `bottleneck_dim` because each branch's output is in `bottleneck_dim` space.
+
+Another consideration is that using `MultiheadAttention` requires all heads to have consistent dimension, so each head should have `d_k = 768 / num_heads` in the original input. But since after projection, the embedding is `bottleneck_dim`, which might be a multiple of the original heads, perhaps.
+
+Wait, no, since the input is [B, 98, 768], and after projection each has [B, 98, bottlenecks], where 768 could be split into, say, 3 heads each of 512 if original model uses 3 heads.
+
+But since I'm trying to create a CrossModalBridge, perhaps I should design for generality. The user specifies using a bottleneck and num_heads as retrieved via `prm.get()`. So I need to ensure that after projecting to `bottleneck_dim`, the attention layers can still function properly, i.e., the d_k is 768 / num_heads.
+
+Wait, but in the transformed branches, the embedding size is `bottleneck_dim`. For multi-head attention, each head's dimension is `d_k = input dimension / num_heads`. So if the input after projection is `bottleneck_dim`, then each head would have `d_k = (bottleneck_dim) // num_heads` which may not match the original model's heads' `d_k` size. To make it compatible, I should ensure that when the model is used with different bottleneck dimensions, the attention in each branch can be properly formed.
+
+Alternatively, perhaps I can reshape the features in the bridge to maintain the original d_k structure, but I'm not sure.
+
+For now, perhaps to keep it simple, I'll assume that the `bottleneck_dim` is a multiple of `num_heads`, so that after projection, each head can be processed as such.
+
+In the code, I have:
+
+x1p: [B, 98, bottlenecks]
+
+x2p: [B, 98, bottlenecks]
+
+Each goes through a MultiheadAttention that expects an input dimension of `bottleneck_dim` and `d_k = (bottleneck_dim // num_heads)` per head.
+
+Wait, but each x1p and x2p has an input embedding of [B, 98, bottlenecks]. The MultiheadAttention layer takes (sequence_len, batch_size, d_k), but maybe in PyTorch, it's more flexible.
+
+Alternatively, perhaps I should structure each branch's processing to have the same number of attention heads as the original model? Or is the number of attention heads in the bridge's transformer the same as `num_heads`?
+
+Wait, the user uses `num_heads` to split into self-attention heads. So in each branch, the transformed sequence is [B, 98, bottlenecks], which needs to be processed with `num_heads` attention heads, each of dimension `d_k = (bottlenecks) / num_heads`.
+
+This might require that (bottlenecks) is divisible by num_heads, but the user didn't specify handling cases where it isn't, so I'll assume it's a multiple.
+
+Putting it all together, the code will split the visual features into two parts, project each into the bottleneck, apply a transformer (with multi-head attention and feed-forward), concatenate, project back to 768, add a residual connection with dropout, and return the result.
+
+I think this approach satisfies the user's requirements: residual bottleneck, maybe a bit of using multiple layers, but the `TransformerEncoderLayer` is a standard module.
+
+Also, making sure that the number of trainingable parameters is minimized and that all parameters are defined via ` prm.get() `.
+
+I think this should satisfy the requirements.
+</think>
+
+<hp>{"dropout": 0.1, "bottleneck_dim": 512, "num_heads": 3}</hp>
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self.num_heads = prm.get("num_heads")
+        self.d_model = 768
+        self.dropout = nn.Dropout(prm.get("dropout"))
+        
+        # Split into two paths for the bottleneck projection
+        self.split = nn.ModuleList([
+            nn.Linear(self.d_model, self.bottleneck_dim),
+            nn.Linear(self.d_model, self.bottleneck_dim)
+        ])
+        
+        # Create a transformer encoder layer
+        self.transformer_layer = nn.TransformerEncoderLayer(
+            d_model=self.bottleneck_dim,
+            nhead=self.num_heads,
+            dropout=0.1  # Default dropout from parameters
+        )
+        
+    def forward(self, visual_features):
+        # Split the visual features into two parts
+        x1, x2 = torch.split(visual_features, [50, 147], dim=1)  # Split 197 into 50 and 147
+        
+        # Process each part through the bridge
+        x1_proj = self.split[0](x1)
+        x2_proj = self.split[1](x2)
+        
+        # Pass through the transformer layer
+        x1_emb = self.transformer_layer(x1_proj)
+        x2_emb = self.transformer_layer(x2_proj)
+        
+        # Concatenate the branches
+        x_bridge = torch.cat([x1_emb, x2_emb], dim=1)
+        
+        # Add residual connection with dropout
+        x_bridge = x_bridge + self.dropout(x_bridge)
+        
+        # Project back to the original embedding dimension
+        x_bridge = nn.Linear(2 * self.bottleneck_dim, self.d_model)(x_bridge)
+        
+        return x_bridge
+</nn_head>

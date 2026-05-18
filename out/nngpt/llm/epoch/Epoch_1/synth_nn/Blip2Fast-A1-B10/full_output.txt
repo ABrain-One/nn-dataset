@@ -1,0 +1,116 @@
+Alright, so I've got this problem where I need to design a PyTorch class called CrossModalBridge. The goal is to transform frozen vision features into decoder-compatible embeddings. Let me break down what's required and think through how to approach it.
+
+First, the input is visual_features with a shape of [B, 197, 768]. B is the batch size, 197 is the number of visual tokens, and 768 is the feature dimension. The target output is visual_embeds of shape [B, T_bridge, 768]. So, the bridge should take the visual features and output embeddings that are compatible with the decoder.
+
+The task specifies that the class must implement __init__ and forward methods. The init should use prm.get() for dropout, bottleneck_dim, and num_heads. That means those parameters are accessible via some configuration or module parameters.
+
+I need to include some innovation ideas. The examples given are a residual bottleneck, a gated fusion layer, or a small transformer adapter block. Residual bottlenecks help with gradient flow and can prevent vanishing gradients, which is a common issue in deep networks. Gated fusion might introduce non-linearity and help in combining the features effectively. Using a small transformer adapter adds flexibility and could allow for more complex transformations while keeping things lightweight.
+
+The class shouldn't use custom classes like Bottleneck, GatedFusion, or TransformerBlock unless defined inside the nn_head. So, I should define any necessary layers using standard nn modules. Also, I must not add any attributes not explicitly retrieved or initialized, so everything must come from the prm dict.
+
+Looking at the user's instructions, the example output uses dropout: 0.1, bottleneck_dim: 512, etc. So, those are hyperparameters I might need to tune, but since the user didn't specify, I can set them as per best practices.
+
+Let me think about the architecture. The bridge takes visual_features and needs to produce embeddings. So, maybe first, pass each feature token through some dense layers if needed, but since the output needs to be the same dimension (768), perhaps it doesn't require expansion. But if the features come in at a different dimension, maybe a projection is needed. However, since the input is [B, 197, 768], the last dimension is already 768, so maybe no expansion is necessary.
+
+Alternatively, using a transformer encoder block could help in capturing dependencies between the tokens. Using layers in a small architecture would be better to keep the computation efficient. So, perhaps a few attention layers with some residual connections.
+
+Implementing a residual bottleneck: Maybe split the input into two parts, pass each through a bottleneck layer (say, 512), and then concatenate them after applying ReLU or another activation. This could help in stabilizing the gradients.
+
+Then, fusing the two streams: perhaps using a learnable gate or attention mechanism to combine the two bottleneck features. This could introduce non-linearity and add more flexibility to the transformation.
+
+Alternatively, an encoder-decoder attention might be useful, allowing the decoder to attend to the embeddings as they are being generated.
+
+Let me sketch a possible architecture:
+
+1. In the __init__ method, define the necessary modules:
+   - A dropout layer using the given dropout from prm.
+   - The encoder layers: perhaps two layers, each with a Linear projection, ReLU, and LayerNorm.
+   - An adapter: small transformer blocks if using.
+   - Output projections if needed.
+
+2. In the forward method:
+   - Process each token or pass through the encoder layers.
+   - Apply fusion with the target outputs for the decoder.
+
+But I need to make sure the outputs have the shape [B, T_bridge, 768]. If the visual features are being projected into the same embedding space as the decoder, then the bridge might only involve some post-processing.
+
+Wait, another thought: Could the bridge simply project the visual features directly into the target embedding space? Since the input and output have the same dimension (768), maybe a simple projection using a linear layer with dropout could work. However, that might be too simplistic. To add more structure, perhaps a small sequential model with attention or feed-forward layers would help.
+
+Considering all this, a possible structure is to use a two-layer transformer encoder with residual connections and a projection layer at the end. This would take the input features, pass through the transformer, and output the final embeddings compatible with the decoder.
+
+Putting it all together, here's how I can structure the code:
+
+In __init__, I'll get the necessary parameters from prm: num_heads, hidden_dim, and layers. I'll create transformer layers using nn.TransformerEncoderLayer for each layer. I'll also include a residual dropout if needed.
+
+In forward, I'll process the visual features through each transformer layer and then project them to the final embeddings.
+
+I must make sure that each part is properly initialized and that the layers are added dynamically based on the parameters from prm. For example, layers can be stacked according to the specified number of layers.
+
+Also, I should ensure that the adapter layers are added only if necessary, such as if the innovation includes using a small transformer block within the bridge.
+
+Wait, according to the requirements, innovation ideas include using a small transformer adapter block. So, perhaps the bridge can consist of a main part using a few layers, followed by an adapter that performs some additional processing.
+
+Another point: the class shouldn't have any custom layers except the necessary ones, like using nn.Linear, nn.MultiheadAttention, etc.
+
+I'll need to structure the code so that all the components are self-contained within CrossModalBridge, with all layers initialized in the __init__.
+
+I think I've covered the necessary parts. Now, I should write the code, ensuring that all layers are properly initialized and the forward pass correctly processes the input through the bridge.
+</think>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super(CrossModalBridge, self).__init__()
+        self.prime = prm
+        
+        self.drop = nn.Dropout(prm.get("dropout", 0.1))
+        self.bottleneck_dim = prm.get("bottleneck_dim", 512)
+        self.num_heads = prm.get("num_heads", 8)
+        self.hidden_dim = prm.get("hidden_dim", 512)
+        self.n_layer = prm.get("n_layer", 2)
+        self.adapter_dim = prm.get("adapter_dim", 128)
+
+        self.transformer_layers = nn.ModuleList()
+        for _ in range(self.n_layer):
+            self.transformer_layers.append(
+                nn.TransformerEncoderLayer(
+                    d_model=self.hidden_dim,
+                    nhead=self.num_heads,
+                    dim_feedforward=self.hidden_dim,
+                    dropout=self.prime.get("dropout", 0.1),
+                    activation="gelu",
+                    batch_first=True,
+                )
+            )
+
+        self.adapter_layers = nn.ModuleList()
+        for _ in range(2):
+            adapter_layer = nn.Sequential(
+                nn.Linear(self.hidden_dim, self.adapter_dim),
+                nn.ReLU(),
+                nn.Linear(self.adapter_dim, self.hidden_dim),
+            )
+            self.adapter_layers.append(adapter_layer)
+
+        self.conv_adapter = nn.Conv2d(3, 3, kernel_size=1, padding=0)
+        
+    def forward(self, visual_features, captions=None):
+        if not captions is None:
+            visual_features = visual_features.unsqueeze(1)  # [B, 1, 197, 768]
+            x, _ = self.adapter_layers[0](visual_features)  # [B, 3, 197, 768] -> [B, 3, H, W]
+            x = self.conv_adapter(x)  # [B, 3, H, W] -> [B, 3, H, W]
+            x = x.mean(dim=1, keepdim=True)  # [B, 1, H, W]
+            x = x.squeeze(dim=1)  # [B, H, W]
+            x = x.permute(0, 2, 1)  # [B, W, H]
+            
+        x = visual_features.permute(0, 2, 1)  # [B, 768, 197]
+        for layer in self.transformer_layers:
+            x, _ = layer(x)
+        x = x.permute(0, 2, 1)  # [B, 197, 768]
+        x = self.drop(x)
+        
+        visual_embeds = x
+        return visual_embeds
+</nn_head>
+
+<hp>{"dropout": 0.1, "bottleneck_dim": 512, "num_heads": 8, "hidden_dim": 512, "n_layer": 2, "adapter_dim": 128}</hp>

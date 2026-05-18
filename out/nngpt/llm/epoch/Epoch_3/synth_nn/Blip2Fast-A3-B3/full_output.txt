@@ -1,0 +1,79 @@
+Alright, let's tackle this problem. So, the task is to create a PyTorch class called CrossModalBridge that transforms visual features into decoder-compatible embeddings. The input is visual_features of shape [B, 197, 768], and the output should be [B, T_bridge, 768]. 
+
+First, I need to understand the requirements. The class must have __init__ and forward methods. It should use prm.get() for dropout, bottleneck_dim, and num_heads. Innovation ideas include adding a residual bottleneck, a gated fusion layer, or a small transformer adapter block. Also, I can't use custom classes unless I define them myself inside an nn_head block. So, I need to stick to standard nn modules like Linear, TransformerEncoderLayer, MultiheadAttention, LayerNorm, etc.
+
+Looking at the input shape [B, 197, 768], I think B is the batch size, 197 is the number of visual tokens, and 768 is the embedding dimension. The output is [B, T_bridge, 768], so T_bridge is the number of tokens in the embedding. Since the input and output have the same embedding dimension, the bridge doesn't change the dimension but processes the features.
+
+I remember that in some models, a cross-modal transformer bridge is used to fuse visual and language features. Maybe I can implement something similar here. Let's think about the architecture.
+
+In the forward method, I take visual_features and captions (which might be optional, as in this case, it's not used since the output is just embeddings). So, the input visual_features are passed through some layers to produce the output.
+
+I should consider adding a bottleneck. The user suggests a residual bottleneck, which sounds like a common technique. A residual block involves projecting the input into a lower-dimensional space, applying a transformation, then adding the residual connection. This can help with training stability.
+
+Since the output needs to have the same dimension as the input, after the residual block, I can apply a linear projection from the bottleneck dimension back to 768. This would maintain the embedding size.
+
+Alternatively, using a transformer adapter block could also work. An adapter adds an extra layer that transforms the features without changing the original embeddings much. It often uses a multi-head attention layer followed by a layer norm and a linear projection.
+
+Another idea is to add a small transformer encoder to process the visual features. This might help in capturing more complex relationships between the tokens.
+
+Gated fusion is another option, but since it's a more complex approach, maybe it's better to start with a simpler solution. So perhaps the residual bottleneck with a linear projection is the way to go.
+
+I also need to ensure that all parameters are retrieved via prm.get(). So, I'll declare variables like self.bottleneck_dim, self.dropout, etc., in the __init__ method.
+
+In the forward pass, I'll process the visual features by flattening them if necessary, apply the residual transformation, project back to the original dimension, and return them as the output.
+
+Wait, but visual_features is [B, 197, 768], so each element in the second dimension represents a token. I can treat these tokens as sequences and process them with a transformer encoder. So, maybe I should reshape them into [B, -1, 768] to get [B, 197, 768], then pass through a transformer layer, then apply the projection.
+
+But the user didn't mention using a full transformer, just an innovation idea. So, perhaps a small transformer block with a few layers and attention heads would be enough.
+
+Hmm, I think I'll proceed with a residual bottleneck followed by a linear projection. Let's sketch the code.
+
+In __init__, I'll get self.dropout = prm.get('dropout'), self.bottleneck_dim = prm.get('bottleneck_dim'), and maybe the number of attention heads from self.nheads = prm.get('nheads'). Then, I'll define the layers: a linear projection from 768 to bottleneck_dim, another linear projection from bottleneck_dim to 768, and create a dropout layer.
+
+In the forward method, I'll take the visual_features, project them to the bottleneck dimension, apply ReLU, then project back. I'll add the residual connection, apply dropout, and that's it.
+
+Wait, but the residual connection is only added if the dimensions match. So, if the input and output dimensions are the same, I can directly add them with dropout. That makes sense here since both are 768.
+
+Alternatively, I can add a residual connection after applying some transformations. For example, after projecting to the bottleneck, and then projecting back, add the original features scaled by some factor, then apply dropout. That could be a more stable approach.
+
+Putting it all together, the CrossModalBridge class would look something like:
+
+- __init__ with the parameters and layers.
+- forward method taking visual_features, applying the projection, adding residual, and returning.
+
+Alternatively, if I want to use a small transformer block, I'll create a transformer layer with multi-head attention and add a residual connection through that.
+
+But considering the requirements, adding a residual bottleneck is simpler and meets the critical points of not using custom classes and sticking to standard modules.
+
+So, implementing the residual bottleneck with the steps as discussed should satisfy the conditions.
+
+Also, the hyperparameters like dropout, bottleneck_dim, and num_heads are set via prm.get(), so the code doesn't hardcode them.
+
+I think that's a solid plan. Now, I'll write the code accordingly.
+</think>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.bottleneck_dim = prm.get('bottleneck_dim')
+        self.dropout = nn.Dropout(prm.get('dropout'))
+        
+        # Create a small residual bottleneck
+        self.encoder = nn.Sequential(
+            nn.Linear(768, self.bottleneck_dim, bias=False),
+            nn.ReLU(),
+            nn.Linear(self.bottleneck_dim, 768),
+        )
+        
+    def forward(self, visual_features, captions=None):
+        # Residual connection
+        residual = visual_features
+        x = self.encoder(visual_features)
+        
+        # The residual is added with scaling
+        x = self.dropout(x + residual)
+        
+        return x
+</nn_head>
+<hp>{"bottleneck_dim": 512, "dropout": 0.1}</hp>

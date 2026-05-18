@@ -1,0 +1,41 @@
+Alright, let's tackle this problem. I need to create a PyTorch class called CrossModalBridge that transforms frozen vision features into decoder-compatible embeddings. 
+
+First, I'll review the requirements. The input is visual_features of shape [B, 197, 768], and the target output should be visual_embeds of shape [B, T_bridge, 768]. So, the transformation should maintain the same embedding dimension but possibly modify the sequence length. 
+
+The CrossModalBridge class must implement __init__ and forward methods. I'll need to use prm.get() for dropout, bottleneck_dim, and num_heads. That makes sense because these parameters control the model's depth and dimensionality.
+
+In the forward method, I'll have to process the visual_features. I should add some layers for transformation. The innovation ideas suggest using a residual bottleneck, a gated fusion layer, or a small transformer adapter block. Residual bottlenecks can help with stability during training, so that's a good idea. Gated fusion introduces non-linearity and could improve feature mixing. A transformer adapter block would add flexibility by allowing attention operations on the features.
+
+Looking at the structure, the residual bottleneck can reduce the dimensionality temporarily. Then, a transformer encoder layer with multi-head attention and layer norm would capture the necessary dependencies. A final linear projection from the bottleneck back to the original embedding dimension would give the output shape [B, T_bridge, 768]. I should make sure that each step uses standard nn modules.
+
+For the __init__ method, I'll set up the layers. The linear projection to the bottleneck dimension, then a layernorm. The transformer layer with the specified heads and attention. Another linear projection from bottleneck back to 768 dimensions. And a dropout layer in between to prevent overfitting. 
+
+In the forward pass, I'll run the visual_features through the transformer layer, extract the bottleneck features, and project them back. If captions are provided, maybe I need to integrate them, but the current code doesn't do that, so I'll follow the given structure.
+
+I should ensure that all layers are correctly initialized with the parameters from prm. Also, since I can't use any extra classes unless I define them, I'll make sure to use standard layers without introducing bottlenecks beyond what's allowed.
+
+Now, putting it all together, I'll write the code accordingly.
+</think>
+
+<gp> {"dropout": 0.1, "bottleneck_dim": 512, "num_heads": 8}</gp>
+
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self.num_heads = prm.get("num_heads")
+        self.dropout = nn.Dropout(p=prm.get("dropout"))
+
+        self transfomer = nn.Sequential(
+            nn.Linear(768, self.bottleneck_dim, bias=False),
+            nn.LayerNorm(self.bottleneck_dim),
+            nn.Linear(self.bottleneck_dim, 768, bias=False),
+        )
+
+    def forward(self, visual_features, captions=None):
+        x = visual_features
+        x = self.transformer(x)
+        x = x.mean(dim=1)  # [B, T_bridge, 768]
+        return x
+</nn_head>

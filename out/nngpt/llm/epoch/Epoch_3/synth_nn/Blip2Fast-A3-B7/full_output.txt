@@ -1,0 +1,65 @@
+Okay, I need to create a PyTorch class called CrossModalBridge that transforms visual features into decoder-compatible embeddings. Let me break down the requirements step by step.
+
+First, the input features are visual_features with shape [B, 197, 768]. The target output is visual_embeds of shape [B, T_bridge, 768]. So, the class needs to process these features and adjust the sequence length to T_bridge.
+
+Looking at the requirements, the class must implement __init__ and forward methods. It should use prm.get() for dropout, bottleneck_dim, and num_heads. I also need to consider innovation ideas like adding a residual bottleneck, gated fusion, or a small transformer adapter block.
+
+I should avoid using custom classes unless I define them within the nn_head block. It's crucial to use standard nn modules like Linear, TransformerEncoderLayer, etc., and not add any unrecognized attributes.
+
+Let me think about the architecture. Maybe a transformer-based bridge would work well since it can handle sequence transformations. I'll include a positional embedding to add sequence information. The transformer decoder layer can help in getting different temporal granularities.
+
+I'll add a dropout layer based on prm.get("dropout") and use LayerNorm for normalization. After processing, I'll pass through a FinalLinear layer to ensure the output dimension matches 768.
+
+I need to ensure that any multi-head attention layers use the number of heads from prm.get("num attends"). Also, add a residual connection and use activation functions like GELU for better performance.
+
+Putting it all together, the CrossModalBridge class will have these components in the forward pass: positional embeddings, transformer decoder layers, layer normalization, dropout, and a final linear layer. This should transform the input features into the desired output shape while incorporating the necessary innovations.
+</think>
+
+<hp>{"dropout": 0.1, "bottleneck_dim": 512, "num_attends": 8}</hp>
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self.bottleneck_dim = prm.get("bottleneck_dim")
+        self.num attends = prm.get("num_attends")
+        
+        self.positional_embedding = nn.Embedding(197, 768)
+        self.dropout = nn.Dropout(prm.get("dropout"))
+        self.ln_final = LayerNorm(768)
+        
+        self.transformer = nn.TransformerDecoder(
+            nn.TransformerDecoderLayer(
+                nn.MultiheadAttention(
+                    Linear(768, 768, bias=False),
+                    self.num_attends,
+                    dropout=prm.get("dropout")
+                ),
+                768
+            ),
+            2
+        )
+        
+        self.residual = Linear(768, self.bottleneck_dim)
+        self.gated融合 = GatedFusion()
+        self.final_linear = Linear(self.bottleneck_dim, 768)
+        
+    def forward(self, visual_features, captions=None):
+        B = visual_features.size(0)
+        
+        if captions is not None and captions.size(0) != B:
+            raise ValueError("batch sizes of visual_features and captions must match")
+            
+        x = visual_features
+        x = x + self.positional_embedding(torch.arange(0, 197, device=x.device).repeat(B, 1).long())
+        x = self.transformer(x)
+        
+        x = self.ln_final(x)
+        x = x.permute(0, 2, 1)
+        x = x.mean(dim=-1)
+        x = self.dropout(x)
+        x = self.residual(x)
+        x = self.gated_fusion(x)
+        x = self.final_linear(x)
+        
+        return x
+</nn_head>

@@ -1,0 +1,45 @@
+Okay, I need to create a PyTorch class called CrossModalBridge. The task is to transform frozen vision features into decoder-compatible embeddings. Let me think through the requirements step by step.
+
+First, the input is visual_features with shape [B, 197, 768], and the output should be visual_embeds of shape [B, T_bridge, 768]. The class must implement __init__ and forward methods. Also, it should use prm.get() for dropout, bottleneck_dim, and num_heads.
+
+I should consider innovation ideas like adding a residual bottleneck, a gated fusion layer, or a small transformer adapter block. The output should be the class only, so I shouldn't include any extra code outside the class.
+
+Critical points: No custom classes unless defined. So, I can't use Bottleneck, TransformerBlock, or GatedFusion. I should prefer standard nn modules.
+
+Let me start by outlining the structure. The cross-modal bridge should process the visual_features and produce the embeddings. Maybe a small transformer block would be efficient. Using multi-head attention could capture different relations between the tokens.
+
+In the __init__ method, I'll retrieve the necessary parameters: embedding_dim, which is 768. Then, using those parameters, I'll define a transformer block. I'll use nn.TransformerEncoderLayer for the attention layers and a feed-forward network.
+
+For the forward method, I'll project the visual_features into the embedding dimension, apply the transformer blocks, layer normalization, and residual connections as needed. Adding a residual bottleneck might help with learning, so I'll scale the input by a factor (like 0.1) and add it to the output after some layers.
+
+Putting it together, I'll define the class with a transformer block, ensuring all necessary layers are initialized properly. I'll make sure to use only standard modules and not any custom classes.
+</think>
+
+<hp>{"dropout": 0.1, "bottleneck_dim": 512}</hp>
+<nn_head>
+class CrossModalBridge(nn.Module):
+    def __init__(self, prm):
+        super().__init__()
+        self HP = prm
+        
+        # Get hyperparameters
+        self.embedding_dim = self.HP.embedding_dim  # 768
+        self.bottleneck_dim = self.HP.bottleneck_dim  # 512
+        self.num_heads = self.HP.num_heads  # default 8
+        self.dropout = self.HP.dropout  # 0.1
+        
+        # Initialize multi-head attention
+        self.mha = nn.MultiheadAttention(embed_dim=self.embedding_dim, numheads=self.num_heads, dropout=self.dropout)
+        
+    def forward(self, visual_features, captions=None):
+        B, V, D = visual_features.size()  # V=197
+        
+        # Process visual features through transformer
+        x = visual_features.permute(1,0,2)  # [B, D, V]
+        x = self.mha(x)[0]  # Apply attention
+        
+        # Project back to embedding dimension
+        x = x.permute(1,0,2)  # [B, D, V]
+        
+        return x
+</nn_head>
