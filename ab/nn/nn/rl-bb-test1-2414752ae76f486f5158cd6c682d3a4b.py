@@ -50,7 +50,7 @@ def make_scaler(enabled=True):
     return GradScaler("cuda", enabled=enabled)
 
 def supported_hyperparameters():
-    return { 'lr', 'dropout', 'momentum' }
+    return { 'lr', 'momentum' }
 
 # ==========================================
 # 2. DYNAMIC COMPONENTS (TO BE IMPLEMENTED)
