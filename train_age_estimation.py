@@ -2,6 +2,9 @@
 
 import multiprocessing
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()
@@ -62,6 +65,28 @@ def choose_transforms():
     print(f"Selected {len(face_transforms)} transforms for search.")
     print(f"Transforms: {face_transforms}\n")
     return face_transforms
+
+
+def maybe_upload_age_artifacts() -> None:
+    """Optionally upload newly generated age artifacts to Hugging Face."""
+    if os.environ.get("AGE_AUTO_UPLOAD_HF", "0") != "1":
+        return
+
+    hf_token = os.environ.get("HF_TOKEN", "").strip()
+    if not hf_token:
+        print("[WARN] AGE_AUTO_UPLOAD_HF=1 but HF_TOKEN is empty; skipping upload.")
+        return
+
+    script_path = Path(__file__).resolve().parent / "scripts" / "upload_age_artifacts_to_hf.py"
+    if not script_path.exists():
+        print(f"[WARN] Upload script not found: {script_path}")
+        return
+
+    cmd = [sys.executable, str(script_path), "--hf-token", hf_token]
+    print("[INFO] Uploading age ONNX/TFLite artifacts to Hugging Face...")
+    result = subprocess.run(cmd, check=False)
+    if result.returncode != 0:
+        print(f"[WARN] Artifact upload exited with code {result.returncode}")
 
 
 if __name__ == '__main__':
@@ -130,3 +155,5 @@ if __name__ == '__main__':
     print("Inspect DB, logs, TensorBoard, and saved weights for the best trial.")
     print("Then lock the best LR / batch / dropout / transform in train_final.py.")
     print("=" * 60)
+
+    maybe_upload_age_artifacts()

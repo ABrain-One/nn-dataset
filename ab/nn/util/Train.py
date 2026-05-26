@@ -277,16 +277,14 @@ class Train:
 
         self.system_info = get_system_info()
         
-        # Centralized visualization directory for age estimation
-        # Everything goes to age-estimation-visualization/ for easy transfer
-        from ab.nn.util.Const import ab_root_path
-        age_viz_root = _ensure_dir(os.path.join(str(ab_root_path), 'age-estimation-visualization'))
-        
-        # Subdirectories for organization
-        self.viz_dir = _ensure_dir(os.path.join(age_viz_root, 'plots'))
-        self.tb_log_dir = _ensure_dir(os.path.join(age_viz_root, 'tensorboard', tb_log_dir.replace('runs/', '')))
-        self.metrics_dir = _ensure_dir(os.path.join(age_viz_root, 'metrics'))
-        self.models_dir = _ensure_dir(os.path.join(age_viz_root, 'models'))
+        from ab.nn.util.Const import stat_train_dir
+        self.train_stat_root = _ensure_dir(os.path.join(str(stat_train_dir), '_'.join(self.config)))
+
+        # Keep train artifacts together under the per-run stat folder.
+        self.viz_dir = _ensure_dir(os.path.join(self.train_stat_root, 'plots'))
+        self.tb_log_dir = _ensure_dir(os.path.join(self.train_stat_root, 'tensorboard', tb_log_dir.replace('runs/', '')))
+        self.metrics_dir = _ensure_dir(self.train_stat_root)
+        self.models_dir = _ensure_dir(os.path.join(self.train_stat_root, 'models'))
 
     def _get_loss_function(self):
         """Get loss function for metric tracking."""
@@ -372,7 +370,7 @@ class Train:
         """Training and evaluation with comprehensive metrics tracking."""
 
         if save_path is None and not self.is_code:
-            # Save model stats to centralized age-estimation-visualization folder
+            # Save model stats to the per-run stat folder.
             save_path = self.metrics_dir
         self.save_path = save_path
 
@@ -738,7 +736,7 @@ class Train:
         except Exception:
             pass
 
-        summary_path = out_dir / 'training_summary.json'
+        summary_path = Path(self.train_stat_root) / 'training_summary.json'
         try:
             with open(summary_path, 'w') as f:
                 json.dump(summary, f, indent=2)
