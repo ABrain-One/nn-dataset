@@ -211,10 +211,18 @@ class Train:
         self.device = torch_device()
 
         # Load model
+        # Load model
         model_net = get_attr(nn_module, 'Net')
         self.model_name = nn_module
         self.model = model_net(self.in_shape, out_shape, prm, self.device)
         self.model.to(self.device)
+
+        # Optionally load pretrained weights from a previous run's best
+        # checkpoint. Triggered when prm['pretrained'] == 1, which is set
+        # either by the --pretrained CLI flag (see train.py) or by Optuna's
+        # categorical search over [0, 1] in optuna_objective.
+        if int(prm.get('pretrained', 0)) == 1:
+            load_pretrained_weights(self.model, self.model_name)
 
         # Initialize loss function for tracking
         self.loss_fn = self._get_loss_function()
