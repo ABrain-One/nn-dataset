@@ -5,9 +5,12 @@ from pathlib import Path
 from ab.nn.util.Const import param_tables, db_file, db_dir, main_tables, code_tables, dependent_tables, all_tables, index_colum, run_table, nn_stat_table, tflite_table, prun_table
 from ab.nn.util.db.build_nn_similarity import jaccard_blobs
 
+SQLITE_BUSY_TIMEOUT_MS = 300_000
+
 
 def sql_conn():
-    conn = sqlite3.connect(db_file)
+    conn = sqlite3.connect(db_file, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
+    conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
     conn.row_factory = sqlite3.Row  # Enable row access
     conn.create_function("jaccard_blobs", 2, jaccard_blobs) #Register Scalar UDF onto connection
     return conn, conn.cursor()

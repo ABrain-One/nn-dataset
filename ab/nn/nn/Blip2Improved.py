@@ -2,9 +2,9 @@
 Blip2Improved - LLM-Optimized Image Captioning Model
 Base: Blip2Fast
 Improvements: 
-  - Doubled projection layer capacity (hidden_size * 2)
-  - ReLU activation for faster non-linearity
-  - Dropout(0.5) for better regularization
+  - Advanced Bottleneck Projection (768 -> 1536 -> 768)
+  - LayerNorm and GELU for improved stability and non-linearity
+  - Strictly follows [FROZEN] and [TRAINABLE] markers
 """
 
 import torch
@@ -20,8 +20,10 @@ import os
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+
 def supported_hyperparameters():
     return {'lr', 'batch'}
+
 
 class FrozenBlip2Encoder(nn.Module):
     def __init__(self, device):
@@ -33,21 +35,23 @@ class FrozenBlip2Encoder(nn.Module):
             low_cpu_mem_usage=True,
             device_map={"": device}
         )
+        # [FROZEN] Freeze ALL parameters in the backbone
         for param in self.blip2.parameters():
             param.requires_grad = False
+
+        # [FROZEN] Set to eval() mode immediately (freezes BatchNorm stats)
         self.blip2.eval()
+        self.eval() 
         self.hidden_size = self.blip2.config.qformer_config.hidden_size 
 
-    def forward(self, pixel_values):
+    def forward(self, pixel_values): 
         self.blip2.eval()
         with torch.no_grad():
             outputs = self.blip2.get_qformer_features(pixel_values=pixel_values)
         return outputs.last_hidden_state 
 
+
 class CaptionDecoder(nn.Module):
-    """
-    [TRAINABLE/LLM_MODIFIED] Improved decoder head based on LLM Delta output.
-    """
     def __init__(self, q_former_hidden: int, device):
         super().__init__()
         self.device = device
@@ -55,16 +59,20 @@ class CaptionDecoder(nn.Module):
         self.tokenizer = GPT2Tokenizer.from_pretrained(gpt2_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
         config = GPT2Config.from_pretrained(gpt2_id)
-        self.gpt2 = GPT2LMHeadModel.from_pretrained(gpt2_id, config=config).to(device)
+        self.gpt2 = GPT2LMHeadModel.from_pretrained(gpt2_id, config=config)
+        self.gpt2 = self.gpt2.to(device)
+        # self.gpt2.gradient_checkpointing_enable() # Enable memory saving
         self.gpt2_hidden = config.n_embd 
 
-        # [LLM_IMPROVED_SECTION]
-        # Changes: hidden_size*2, ReLU, Dropout(0.5)
+        # [TRAINABLE/LLM_IMPROVED] Bottleneck expansion for better feature mapping
         self.visual_projection = nn.Sequential(
-            nn.Linear(q_former_hidden, q_former_hidden * 2),
-            nn.ReLU(),
-            nn.Linear(q_former_hidden * 2, self.gpt2_hidden),
-            nn.Dropout(0.5)
+            nn.Linear(q_former_hidden, self.gpt2_hidden * 2),
+            nn.LayerNorm(self.gpt2_hidden * 2),
+            nn.GELU(),
+            nn.Linear(self.gpt2_hidden * 2, self.gpt2_hidden),
+            nn.LayerNorm(self.gpt2_hidden),
+            # GELU at the output helps keep values normalized for GPT2 input space
+            nn.GELU(),
         ).to(device)
         
         self.num_visual_tokens = 32
@@ -93,6 +101,7 @@ class CaptionDecoder(nn.Module):
                 if (next_token == self.tokenizer.eos_token_id).all(): break
             return torch.cat(generated, dim=1)
 
+
 class Net(nn.Module):
     def __init__(self, in_shape, out_shape, prm, device):
         super().__init__()
@@ -106,7 +115,7 @@ class Net(nn.Module):
     def _print_param_stats(self):
         total = sum(p.numel() for p in self.parameters())
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        print(f"✅ Blip2Improved: {total:,} params | {trainable:,} trainable")
+        print(f"✅ Blip2Improved (GELU/LN): {total:,} params | {trainable:,} trainable")
 
     def _ensure_vocab(self):
         if self.idx2word is not None: return
@@ -128,7 +137,9 @@ class Net(nn.Module):
         self.optimizer = torch.optim.AdamW(trainable_params, lr=prm.get('lr', 1e-4))
 
     def learn(self, train_data):
+        # [FROZEN] Keep encoder in eval mode always
         self.encoder.eval()
+        # [TRAINABLE] Only decoder learns
         self.decoder.train()
         self._ensure_vocab()
         total_loss, num_batches = 0.0, 0
