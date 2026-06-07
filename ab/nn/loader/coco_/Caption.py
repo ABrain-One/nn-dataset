@@ -71,6 +71,7 @@ class COCOCaptionDataset(Dataset):
                 with Image.open(file_path) as img_file:
                     image = img_file.convert('RGB')
                     image = image.copy()
+                    image.filename = file_path # Preserve filename for cached transforms
                 break
             except Exception as e:
                 if attempt == 0:
@@ -151,10 +152,56 @@ def build_vocab(dataset, threshold=5):
     idx2word = {idx: word for idx, word in enumerate(vocab)}
     return word2idx, idx2word
 
+def gpt2_collate_fn(batch):
+    """Surgical Fix: Tokenize captions using GPT2 tokenizer for decoder compatibility."""
+    import torch
+    from transformers import GPT2TokenizerFast
+    tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+    tokenizer.pad_token = tokenizer.eos_token
+
+    images = torch.stack([item[0] for item in batch], dim=0)
+    # COCO items[1] is a list of captions. Use the first one for training.
+    raw_captions = [item[1][0] if isinstance(item[1], list) and len(item[1]) > 0 else str(item[1]) for item in batch]
+
+    tokens = tokenizer(
+        raw_captions,
+        padding=True,
+        truncation=True,
+        max_length=40,
+        return_tensors="pt",
+    )
+    # Shape: (B, seq_len) -> (B, 1, seq_len) to match existing pipeline expectations if needed, 
+    # but Blip2Fast usually handles (B, seq_len) after unsqueeze.
+    return images, tokens.input_ids
+
 def loader(transform_fn, task):
     if task != 'img-captioning':
         raise Exception(f"The task '{task}' is not implemented in this file.")
-    transform = transform_fn((__norm_mean, __norm_dev))
+
+    # --- Cached Feature Mode ---
+    probe = transform_fn((__norm_mean, __norm_dev))
+    if probe is None:
+        import importlib
+        mod_name = f"ab.nn.transform.{transform_fn.__module__.split('.')[-1]}"
+        transform_module = importlib.import_module(mod_name)
+        
+        if hasattr(transform_module, 'get_dataset'):
+            train_dataset = transform_module.get_dataset(split='train')
+            try:
+                val_dataset = transform_module.get_dataset(split='val')
+            except Exception:
+                val_dataset = transform_module.get_dataset(split='train')
+            
+            # Use GPT2 collate for transformer compatibility
+            train_dataset.collate_fn = gpt2_collate_fn
+            val_dataset.collate_fn = gpt2_collate_fn
+            
+            return (50257,), MINIMUM_ACCURACY, train_dataset, val_dataset
+        else:
+            raise ImportError(f"get_dataset() missing in {mod_name}")
+
+    # --- Standard Raw Image Mode (unchanged) ---
+    transform = probe
     path = join(data_dir, 'coco')
     train_dataset = COCOCaptionDataset(transform=transform, root=path, split='train')
     val_dataset = COCOCaptionDataset(transform=transform, root=path, split='val')
