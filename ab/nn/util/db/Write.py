@@ -13,7 +13,7 @@ from tqdm import tqdm
 from ab.nn.util.Util import *
 from ab.nn.util.db.Init import init_db, sql_conn, close_conn
 from ab.nn.util.hf.DB_from_HF import db_from_hf
-from ab.nn.util.Const import nn_stat_table, stat_run_tflite_fp32_dir, stat_run_tflite_int8_dir, run_table, tflite_table, prun_table, stat_run_pt_dir
+from ab.nn.util.Const import nn_stat_table, stat_run_tflite_fp32_dir, stat_run_tflite_int8_dir, run_table, tflite_table, prun_table, stat_run_pt_dir, train_stat_table
 from ab.nn.util.db.build_nn_similarity import upsert_minhash, upsert_minhash_batch
 
 
@@ -129,18 +129,80 @@ def populate_prm_table(table_name, cursor, prm, uid):
         )
 
 
+TRAIN_STAT_DB_FIELDS = (
+    'train_loss',
+    'test_loss',
+    'train_accuracy',
+    'gradient_norm',
+    'samples_per_second',
+    'epoch_max',
+
+    'cpu_count',
+    'cpu_type',
+    'cpu_usage_percent',
+
+    'total_ram_kb',
+    'occupied_ram_kb',
+    'ram_usage_percent',
+
+    'gpu_type',
+    'gpu_memory_kb',
+    'gpu_total_memory_kb',
+    'occupied_gpu_memory_kb',
+    'gpu_memory_usage_percent',
+)
+
+
+def save_train_stat(cursor, stat_id: str, train_stat: dict):
+    """
+    Save grouped per-epoch training statistics into train_stat table.
+
+    best_accuracy and best_epoch may exist in JSON, but are intentionally
+    not stored in the train_stat database table.
+    """
+    if not train_stat:
+        return
+
+    columns = ('stat_id',) + TRAIN_STAT_DB_FIELDS
+    placeholders = ', '.join(['?'] * len(columns))
+
+    values = [stat_id] + [train_stat.get(field) for field in TRAIN_STAT_DB_FIELDS]
+
+    cursor.execute(
+        f"""
+        INSERT OR REPLACE INTO {train_stat_table}
+        ({', '.join(columns)})
+        VALUES ({placeholders})
+        """,
+        values,
+    )
+
+
 def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
     # Insert each trial into the database with epoch
+    prm = dict(prm)
+
+    # Extract grouped training diagnostics before prm-table insert
+    train_stat = prm.pop('train_stat', {})
+
     transform = prm['transform']
     uid = prm.pop('uid')
     extra_main_column_values = [prm.pop(nm, None) for nm in extra_main_columns]
+
+    # Only normal hyperparameters go into prm table
     for nm in param_tables:
         populate_prm_table(nm, cursor, prm, uid)
+
     all_values = [transform, uid, *config_ext, *extra_main_column_values]
+    stat_id = uuid4(all_values)
+
     cursor.execute(f"""
     INSERT INTO stat (id, transform, prm, {', '.join(main_columns_ext + extra_main_columns)}) 
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (uuid4(all_values), *all_values))
+    """, (stat_id, *all_values))
+
+    # Save train_stat row linked 1:1 to stat.id
+    save_train_stat(cursor, stat_id, train_stat)
 
 
 @_serialized_db_write
