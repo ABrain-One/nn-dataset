@@ -156,10 +156,15 @@ main_columns_ext = main_columns + ('epoch',)
 code_tables = ('nn', 'transform', 'metric')
 param_tables = ('prm',)
 dependent_tables = code_tables + param_tables
-all_tables = main_tables + dependent_tables
 index_colum = ('task', 'dataset') + dependent_tables
 extra_main_columns = ('duration', 'accuracy')
 nn_code_minhash_table = "nn_minhash" #New
+
+# Training statistics table (define before all_tables)
+train_stat_table = 'train_stat'
+
+# All tables including training stats
+all_tables = main_tables + dependent_tables + (train_stat_table,)
 
 # Mobile analytics (runtime) table
 run_table = 'run'
@@ -176,6 +181,7 @@ stat_run_pt_dir = stat_dir / 'run' / 'pt'
 
 # NN statistics table
 nn_stat_table = 'nn_stat'
+
 HF_NN = 'NN-Dataset'
 tmp_data = "tmp_data"
 STAT_TABLE = "stat"

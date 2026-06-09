@@ -790,6 +790,93 @@ def nn_stat_data(
     finally:
         close_conn(conn)
 
+def train_stat_data(
+        task: str | None = None,
+        dataset: str | None = None,
+        metric: str | None = None,
+        nn: str | None = None,
+        epoch: int | None = None,
+        max_rows: int | None = None,
+):
+    """
+    Query per-epoch training diagnostics from train_stat joined with stat.
+
+    Returns experiment metadata from stat together with training diagnostics
+    from train_stat.
+    """
+    params = []
+    filters = []
+
+    if task is not None:
+        filters.append("s.task = ?")
+        params.append(task)
+    if dataset is not None:
+        filters.append("s.dataset = ?")
+        params.append(dataset)
+    if metric is not None:
+        filters.append("s.metric = ?")
+        params.append(metric)
+    if nn is not None:
+        filters.append("s.nn = ?")
+        params.append(nn)
+    if epoch is not None:
+        filters.append("s.epoch = ?")
+        params.append(epoch)
+
+    where_clause = " WHERE " + " AND ".join(filters) if filters else ""
+    limit_clause = " LIMIT " + str(max_rows) if max_rows else ""
+
+    conn, cur = sql_conn()
+    try:
+        cur.execute(
+            f"""
+            SELECT
+                s.id AS stat_id,
+                s.task,
+                s.dataset,
+                s.metric,
+                s.nn,
+                s.epoch,
+                s.transform,
+                s.prm AS prm_id,
+                s.accuracy,
+                s.duration,
+
+                ts.train_loss,
+                ts.test_loss,
+                ts.train_accuracy,
+                ts.gradient_norm,
+                ts.samples_per_second,
+                ts.epoch_max,
+
+                ts.cpu_count,
+                ts.cpu_type,
+                ts.cpu_usage_percent,
+
+                ts.total_ram_kb,
+                ts.occupied_ram_kb,
+                ts.ram_usage_percent,
+
+                ts.gpu_type,
+                ts.gpu_memory_kb,
+                ts.gpu_total_memory_kb,
+                ts.occupied_gpu_memory_kb,
+                ts.gpu_memory_usage_percent
+            FROM stat s
+            JOIN {train_stat_table} ts
+                ON ts.stat_id = s.id
+            {where_clause}
+            ORDER BY s.task, s.dataset, s.metric, s.nn, s.epoch
+            {limit_clause}
+            """,
+            params,
+        )
+
+        rows = cur.fetchall()
+        columns = [c[0] for c in cur.description]
+        return tuple(dict(zip(columns, r)) for r in rows)
+    finally:
+        close_conn(conn)
 
 def supported_transformers() -> list[str]:
     """

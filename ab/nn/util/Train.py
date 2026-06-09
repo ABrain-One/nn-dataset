@@ -394,29 +394,36 @@ class Train:
             # Collect current resource usage
             resource_usage = get_current_resource_usage()
             
+            # Create train_stat group with new parameters
+            train_stat_group = {
+                'train_loss': train_loss,
+                'test_loss': test_loss,
+                'train_accuracy': train_accuracy,
+                'gradient_norm': grad_norm,
+                'samples_per_second': samples_per_second,
+                'best_accuracy': self.best_accuracy,
+                'best_epoch': self.best_epoch,
+                'epoch_max': epoch_max,
+                'cpu_count': self.system_info.get('cpu_count'),
+                'cpu_type': self.system_info.get('cpu_type'),
+                'cpu_usage_percent': resource_usage.get('cpu_usage_percent'),
+                'total_ram_kb': self.system_info.get('total_ram_kb'),
+                'occupied_ram_kb': resource_usage.get('occupied_ram_kb'),
+                'ram_usage_percent': resource_usage.get('ram_usage_percent'),
+                'gpu_type': self.system_info.get('gpu_type'),
+                'gpu_memory_kb': get_gpu_memory_kb(),
+                'gpu_total_memory_kb': self.system_info.get('gpu_total_memory_kb'),
+                'occupied_gpu_memory_kb': resource_usage.get('occupied_gpu_memory_kb'),
+                'gpu_memory_usage_percent': resource_usage.get('gpu_memory_usage_percent'),
+            }
+            
             prm = merge_prm(self.prm, {
                                           'uid': uuid4(only_prm),
                                           'duration': duration,
                                           'accuracy': accuracy,
-                                          # Loss metrics
-                                          'train_loss': train_loss,
-                                          'test_loss': test_loss,
-                                          # Accuracy metrics
-                                          'train_accuracy': train_accuracy,
-                                          # Training dynamics
-                                          'gradient_norm': grad_norm,
-                                          # Timing metrics
-                                          'samples_per_second': samples_per_second,
-                                          # Best tracking
-                                          'best_accuracy': self.best_accuracy,
-                                          'best_epoch': self.best_epoch,
+                                          # New: grouped training statistics (only place they appear)
+                                          'train_stat': train_stat_group,
                                       } 
-                                      # System information
-                                      | self.system_info
-                                      # Current resource usage
-                                      | resource_usage
-                                      # GPU memory (if available)
-                                      | ({'gpu_memory_kb': get_gpu_memory_kb()} if get_gpu_memory_kb() is not None else {})
                                       # Multi-metrics implementations
                                       | {f'metric_{k}': v for k, v in all_metric_results.items()})
 
