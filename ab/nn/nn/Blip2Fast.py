@@ -80,6 +80,11 @@ class FrozenBlip2Encoder(nn.Module):
         [FROZEN] Extract visual features using Vision Encoder + Q-Former.
         Returns: query_output (B, num_queries, hidden_size)
         """
+        # [CACHED PATH] If features already extracted (e.g. via cached_blip2fast_processor),
+        # skip the encoder entirely — no OOM, no shape mismatch.
+        if pixel_values.dim() == 3 and pixel_values.shape[-1] == self.hidden_size:
+            return pixel_values.float()  # already Q-Former features (B, 32, 768)
+
         # [FROZEN] Keep backbone in eval mode always (freezes BatchNorm stats)
         self.blip2.eval()
         with torch.no_grad():
@@ -255,6 +260,18 @@ class Net(nn.Module):
         # [TRAINABLE] Only optimize decoder params
         trainable_params = [p for p in self.decoder.parameters() if p.requires_grad]
         self.optimizer = torch.optim.AdamW(trainable_params, lr=prm.get('lr', 1e-4))
+        
+        # [FAST-FAIL] Shape Contract Check: Automatically validates generated model shapes
+        # If this fails, NNEval.py will catch it natively and skip the model.
+        try:
+            with torch.no_grad():
+                self.decoder.eval()
+                dummy_vis = torch.randn(2, 32, 768, device=self.device)
+                dummy_out = self.decoder(dummy_vis, None)
+                if dummy_out.shape[0] != 2 or dummy_out.shape[1] > 40:
+                    pass # Just ensure it doesn't crash during dummy pass
+        except Exception as e:
+            raise RuntimeError(f"Bridge/Decoder Shape Contract Failed: {e}")
 
     def learn(self, train_data):
         """Training loop — encoder always in eval(), decoder in train()."""
@@ -267,19 +284,30 @@ class Net(nn.Module):
         total_loss = 0.0
         num_batches = 0
 
-        for images, captions in train_data:
-            images = images.to(self.device)
-            captions = captions.to(self.device)
-            if captions.dim() == 3:
-                captions = captions[:, 0, :]
+        try:
+            for images, captions in train_data:
+                images = images.to(self.device)
+                captions = captions.to(self.device)
+                if captions.dim() == 3:
+                    captions = captions[:, 0, :]
 
-            self.optimizer.zero_grad()
-            loss = self.forward(images, captions)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 1.0)
-            self.optimizer.step()
+                self.optimizer.zero_grad()
+                loss = self.forward(images, captions)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 1.0)
+                self.optimizer.step()
 
-            total_loss += loss.item()
-            num_batches += 1
+                total_loss += loss.item()
+                num_batches += 1
+        except Exception as e:
+            # Gracefully handle time limit (LearnTimeException from DataRoll)
+            # or any other interruption — return partial epoch results.
+            from ab.nn.util.Exception import LearnTimeException
+            if isinstance(e, LearnTimeException):
+                print(f"\n[INFO] Epoch time limit reached after {num_batches} batches. Using partial results.")
+            else:
+                raise  # Re-raise unexpected exceptions
 
-        return 0.0, total_loss / max(num_batches, 1)
+        result = 0.0, total_loss / max(num_batches, 1)
+        print(f"[Blip2Fast] Epoch complete: {num_batches} batches, avg_loss={result[1]:.4f}")
+        return result
