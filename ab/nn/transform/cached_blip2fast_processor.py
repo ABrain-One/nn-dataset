@@ -17,17 +17,78 @@ import os
 import torch
 from torch.utils.data import Dataset
 
-_DEFAULT_CACHE_DIR = os.environ.get(
-    "BLIP2_CACHE_DIR",
-    "/home/ghaffar/nn-gpt/out/nngpt/cache",
-)
+def _get_default_cache_dir():
+    if "BLIP2_CACHE_DIR" in os.environ:
+        return os.environ["BLIP2_CACHE_DIR"]
+    legacy_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../nn-gpt/out/nngpt/cache"))
+    if os.path.exists(legacy_path):
+        return legacy_path
+    nn_dataset_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+    return os.path.join(nn_dataset_root, "out", "blip2_cache")
+
+_DEFAULT_CACHE_DIR = _get_default_cache_dir()
 
 _SHARED_CACHE = {}
 
-def _discover_shards(cache_dir: str, split: str):
+def _auto_extract_features(cache_dir: str, split: str):
+    import torch
+    from tqdm import tqdm
+    from torch.utils.data import DataLoader
+    from transformers import Blip2Model
+    from ab.nn.util.Loader import load_dataset
+    
+    print(f"\n[CACHE-AUTO] Missing cache for '{split}'. Starting automatic extraction to {cache_dir}...")
+    os.makedirs(cache_dir, exist_ok=True)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    print("[CACHE-AUTO] Loading BLIP-2 Encoder in 4-bit...")
+    model = Blip2Model.from_pretrained(
+        "Salesforce/blip2-opt-2.7b",
+        load_in_4bit=True,
+        torch_dtype=torch.float16,
+        device_map="auto"
+    )
+    model.eval()
+    
+    print("[CACHE-AUTO] Loading underlying dataset via 'blip2_processor'...")
+    out_shape, min_acc, train_dataset, test_dataset = load_dataset("img-captioning", "coco", "blip2_processor")
+    
+    target_dataset = train_dataset if split == "train" else test_dataset
+    
+    def _collate(batch):
+        images = torch.stack([item[0] for item in batch])
+        labels = [item[1] for item in batch]
+        return images, labels
+        
+    loader = DataLoader(target_dataset, batch_size=32, num_workers=4, shuffle=False, collate_fn=_collate)
+    features_list = []
+    labels_list = []
+    
+    print(f"[CACHE-AUTO] Extracting features for {split}...")
+    with torch.no_grad():
+        for i, (images, labels) in enumerate(tqdm(loader)):
+            images = images.to(device)
+            feats = model.get_qformer_features(pixel_values=images).last_hidden_state
+            # CRITICAL: Must save as float16 CPU — _load_shared_cache strictly validates this
+            features_list.append(feats.cpu().to(torch.float16))
+            labels_list.extend(labels)
+            
+            if (i + 1) % 500 == 0:
+                temp_feats = torch.cat(features_list, dim=0)  # already float16
+                torch.save({'features': temp_feats, 'labels': labels_list, 'split': split}, f"{cache_dir}/coco_{split}_{i}.pt")
+                features_list = []
+                labels_list = []
+                
+    if features_list:
+        temp_feats = torch.cat(features_list, dim=0)  # already float16
+        torch.save({'features': temp_feats, 'labels': labels_list, 'split': split}, f"{cache_dir}/coco_{split}_final.pt")
+        
+    print(f"[CACHE-AUTO] Extraction complete for {split}.\n")
+
+def _discover_shards(cache_dir: str, split: str, auto_extracted: bool = False):
     """
     Strictly discovers shards for the given split.
-    Fails loudly if none are found. No fallback to train!
+    If none are found, automatically extracts them once.
     """
     prefix = f"coco_{split}_"
     if os.path.isdir(cache_dir):
@@ -37,8 +98,12 @@ def _discover_shards(cache_dir: str, split: str):
         )
         if files:
             return files
+            
+    if not auto_extracted:
+        _auto_extract_features(cache_dir, split)
+        return _discover_shards(cache_dir, split, auto_extracted=True)
 
-    raise FileNotFoundError(f"[FATAL] Missing strictly required '{split}' cache shards in {cache_dir}. No fallback permitted.")
+    raise FileNotFoundError(f"[FATAL] Missing strictly required '{split}' cache shards in {cache_dir}. Auto-extraction failed.")
 
 
 def _load_shared_cache(cache_dir: str, split: str):
