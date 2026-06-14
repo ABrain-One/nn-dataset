@@ -229,6 +229,23 @@ def nn_stat_data(nn_name=None, prm_id=None, max_rows=None) -> DataFrame:
     dt: tuple[dict, ...] = DB_Read.nn_stat_data(nn_name=nn_name, prm_id=prm_id, max_rows=max_rows)
     return DataFrame.from_records(dt)
 
+@functools.lru_cache(maxsize=10)
+def layer_stat_data(nn=None, max_rows=None) -> DataFrame:
+    """Table 1 — layer registry, optionally filtered by model name."""
+    dt = DB_Read.layer_stat_data(nn=nn, max_rows=max_rows)
+    return DataFrame.from_records(dt)
+
+@functools.lru_cache(maxsize=10)
+def per_layer_stat_data(layer_stat_id: str, max_rows=None) -> DataFrame:
+    """Table 2 — all epoch metrics for a layer joined with stat."""
+    dt = DB_Read.per_layer_stat_data(layer_stat_id=layer_stat_id, max_rows=max_rows)
+    return DataFrame.from_records(dt)
+
+@functools.lru_cache(maxsize=10)
+def layer_run_stat_data(layer_stat_id: str) -> DataFrame:
+    """Table 3 — full stat context for a layer."""
+    dt = DB_Read.layer_run_stat_data(layer_stat_id=layer_stat_id)
+    return DataFrame.from_records(dt)
 
 def check_nn(nn_code: str, task: str, dataset: str, metric: str, prm: dict, save_to_db=True, prefix=None, save_path=None, export_onnx=False,
              epoch_limit_minutes=default_epoch_limit_minutes, transform_dir=None) -> tuple[str, float, float, float]:

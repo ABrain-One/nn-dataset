@@ -39,8 +39,10 @@ def query_cols_rows(q) -> tuple[list, list]:
 def code(table: str, nm: str) -> str:
     return query_rows(f'SELECT code FROM {table} where name = ?', [nm])[0][0]
 
+
 def nn_code(nm: str) -> str:
     return code('nn', nm)
+
 
 def data(only_best_accuracy: bool = False,
          task: Optional[str] = None,
@@ -685,16 +687,16 @@ def sql_where(value_list):
 def remaining_trials(config_ext, n_optuna_trials) -> tuple[int, int]:
     """
     Calculate the number of remaining Optuna trials for a given model configuration by querying the database.
-    
+
     Instead of reading trial counts from a file, we query the database to count all trial records
     for the specified model (identified by model_name). The trial_file parameter is retained for
     interface compatibility but is not used.
-    
+
     If n_optuna_trials is negative, its absolute value is taken as the required number of additional trials.
     Otherwise, the function computes:
-    
+
         remaining_trials = max(0, n_optuna_trials - n_passed_trials)
-    
+
     :param config_ext: Tuple of names (Task, Dataset, Metric, Model, Epoch).
     :param n_optuna_trials: Target number of trials. If negative, its absolute value specifies the additional trials required.
     :return: A tuple (n_remaining_trials, n_passed_trials) where:
@@ -881,7 +883,7 @@ def train_stat_data(
 def supported_transformers() -> list[str]:
     """
     Returns a list of all transformer names available in the database.
-    
+
     The function queries the 'transform' table for all records and extracts the 'name'
     field from each row.
     """
@@ -891,10 +893,10 @@ def supported_transformers() -> list[str]:
 def unique_configs(patterns: list[tuple[str, ...]]) -> list[list[str]]:
     """
     Returns a list of unique configuration strings from the database that match at least one of the input patterns.
-    
+
     A configuration string is constructed by concatenating the 'task', 'dataset', 'metric', and 'nn'
     fields from the 'stat' table using the configuration splitter defined in your constants.
-    
+
     :param patterns: A tuple of configuration prefix patterns.
     :return: A list of unique configuration strings that start with any of the provided patterns.
     """
@@ -908,3 +910,94 @@ def unique_configs(patterns: list[tuple[str, ...]]) -> list[list[str]]:
             rows = [tuple(pattern)]
         matched_configs = matched_configs + rows
     return list(set(matched_configs))
+
+
+def layer_stat_data(
+        nn: str | None = None,
+        max_rows: int | None = None,
+) -> tuple:
+    params = []
+    where_clause = ''
+    if nn is not None:
+        where_clause = """
+            WHERE ls.id IN (
+                SELECT ls2.id FROM layer_stat ls2
+                JOIN stat s ON s.id = ls2.stat_id
+                WHERE s.nn = ? 
+            )
+        """
+        params.append(nn)
+
+    limit_clause = ('LIMIT ' + str(max_rows)) if max_rows else ''
+
+    conn, cur = sql_conn()
+    try:
+        cur.execute(
+            f"""
+            SELECT id, stat_id, layer_name, layer_type
+            FROM layer_stat ls
+            {where_clause}
+            ORDER BY layer_name
+            {limit_clause}
+            """,
+            params
+        )
+        rows = cur.fetchall()
+        columns = [c[0] for c in cur.description]
+        return tuple(dict(zip(columns, r)) for r in rows)
+    finally:
+        close_conn(conn)
+
+
+def per_layer_stat_data(
+        layer_stat_id: str,
+        max_rows: int | None = None,
+) -> tuple:
+    limit_clause = ('LIMIT ' + str(max_rows)) if max_rows else ''
+
+    conn, cur = sql_conn()
+    try:
+        cur.execute(
+            f"""
+            SELECT
+                pls.*,
+                s.nn,
+                s.task,
+                s.dataset,
+                s.metric
+            FROM stat s
+            JOIN layer_stat ls ON ls.stat_id = s.id
+            JOIN per_layer_stat pls ON pls.id = ls.id
+            WHERE ls.id = ?
+            ORDER BY s.epoch
+            {limit_clause}
+            """,
+            (layer_stat_id,)
+        )
+        rows = cur.fetchall()
+        columns = [c[0] for c in cur.description]
+        return tuple(dict(zip(columns, r)) for r in rows)
+    finally:
+        close_conn(conn)
+
+
+def layer_run_stat_data(
+        layer_stat_id: str,
+) -> tuple:
+    conn, cur = sql_conn()
+    try:
+        cur.execute(
+            """
+            SELECT s.nn, s.task, s.dataset, s.metric
+            FROM stat s
+            JOIN layer_stat ls ON ls.stat_id = s.id
+            WHERE ls.id = ?
+            LIMIT 1
+            """,
+            (layer_stat_id,)
+        )
+        rows = cur.fetchall()
+        columns = [c[0] for c in cur.description]
+        return tuple(dict(zip(columns, r)) for r in rows)
+    finally:
+        close_conn(conn)

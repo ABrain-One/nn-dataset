@@ -281,6 +281,36 @@ def init_db():
     #cursor.execute("CREATE INDEX IF NOT EXISTS idx_nn_similarity_a_j ON nn_similarity(nn_a, jaccard);")
     #cursor.execute("CREATE INDEX IF NOT EXISTS idx_nn_similarity_b ON nn_similarity(nn_b);")
 
+    # layer_stat — one row per (run, layer)
+    cursor.execute("""
+            CREATE TABLE IF NOT EXISTS layer_stat (
+                id          TEXT PRIMARY KEY,
+                layer_name  TEXT,
+                layer_type  TEXT,
+                stat_id     TEXT
+            )
+        """)
+
+    # per_layer_stat — one row per (layer, epoch)
+    cursor.execute("""
+            CREATE TABLE IF NOT EXISTS per_layer_stat (
+                id          TEXT,
+                stat_id     TEXT,
+                layer_type  TEXT,
+                ww_alpha    REAL,
+                grad_norm   REAL,
+                dead_frac   REAL,
+                taylor_imp  REAL,
+                cka_redund  REAL,
+                eff_rank    REAL,
+                rank_ratio  REAL,
+                sensitivity REAL,
+                PRIMARY KEY (id, stat_id)
+            )
+        """)
+
+
+
     close_conn(conn)
     print(f"Database initialized at {db_file}")
 
