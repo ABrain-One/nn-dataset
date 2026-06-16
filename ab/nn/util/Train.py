@@ -225,9 +225,17 @@ class Train:
         self.best_accuracy = 0.0
         self.best_epoch = 0
         self.save_path = None
-        
-        # System information (collected once at initialization)
+
         self.system_info = get_system_info()
+        
+        from ab.nn.util.Const import stat_train_dir
+        self.train_stat_root = _ensure_dir(os.path.join(str(stat_train_dir), '_'.join(self.config)))
+
+        # Keep train artifacts together under the per-run stat folder.
+        self.viz_dir = _ensure_dir(os.path.join(self.train_stat_root, 'plots'))
+        self.tb_log_dir = _ensure_dir(os.path.join(self.train_stat_root, 'tensorboard', tb_log_dir.replace('runs/', '')))
+        self.metrics_dir = _ensure_dir(self.train_stat_root)
+        self.models_dir = _ensure_dir(os.path.join(self.train_stat_root, 'models'))
 
     def _get_loss_function(self):
         """Build loss function based on the task or use model's custom criterion."""
@@ -306,7 +314,8 @@ class Train:
 
         # Set save_path if not provided (for non-code training)
         if save_path is None and not self.is_code:
-            save_path = model_stat_dir(self.config)
+            # Save model stats to the per-run stat folder.
+            save_path = self.metrics_dir
         self.save_path = save_path
 
         start_time = time.time_ns()
@@ -491,7 +500,18 @@ class Train:
             'epoch_details': [asdict(e) for e in self.epoch_history]
         }
 
-        summary_path = out_dir / 'training_summary.json'
+        # Add model parameter count and approximate model size
+        try:
+            param_count = sum(p.numel() for p in self.model.parameters())
+            param_bytes = sum(p.numel() * p.element_size() for p in self.model.parameters())
+            model_size_mb = param_bytes / 1024.0 / 1024.0
+            summary['model_info']['param_count'] = int(param_count)
+            summary['model_info']['model_size_mb'] = float(model_size_mb)
+            summary['visualization_dir'] = str(self.viz_dir)
+        except Exception:
+            pass
+
+        summary_path = Path(self.train_stat_root) / 'training_summary.json'
         try:
             with open(summary_path, 'w') as f:
                 json.dump(summary, f, indent=2)

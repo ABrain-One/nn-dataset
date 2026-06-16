@@ -4,6 +4,9 @@ Phase 2: Final MobileAgeNet training with locked best hyperparameters.
 
 import multiprocessing
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()
@@ -26,6 +29,28 @@ BEST_MIN_AGE = 0.0
 BEST_MAX_AGE = 116.0
 BEST_TRAIN_MIN_AGE = 1.0
 BEST_TRAIN_MAX_AGE = 95.0
+
+
+def maybe_upload_age_artifacts() -> None:
+    """Optionally upload newly generated age artifacts to Hugging Face."""
+    if os.environ.get("AGE_AUTO_UPLOAD_HF", "0") != "1":
+        return
+
+    hf_token = os.environ.get("HF_TOKEN", "").strip()
+    if not hf_token:
+        print("[WARN] AGE_AUTO_UPLOAD_HF=1 but HF_TOKEN is empty; skipping upload.")
+        return
+
+    script_path = Path(__file__).resolve().parent / "scripts" / "upload_age_artifacts_to_hf.py"
+    if not script_path.exists():
+        print(f"[WARN] Upload script not found: {script_path}")
+        return
+
+    cmd = [sys.executable, str(script_path), "--hf-token", hf_token]
+    print("[INFO] Uploading age ONNX/TFLite artifacts to Hugging Face...")
+    result = subprocess.run(cmd, check=False)
+    if result.returncode != 0:
+        print(f"[WARN] Artifact upload exited with code {result.returncode}")
 
 
 def main_phase2():
@@ -101,6 +126,8 @@ def main_phase2():
     print("PHASE 2 FINAL TRAINING COMPLETE")
     print("Review validation and held-out test MAE in the logs above.")
     print("=" * 60)
+
+    maybe_upload_age_artifacts()
 
 
 if __name__ == '__main__':
