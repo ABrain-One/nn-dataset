@@ -140,6 +140,7 @@ ab_root_path = __project_root_path()
 print(f"LEMUR root {ab_root_path}")
 out = 'out'
 out_dir = ab_root_path / out
+cache_dir = out_dir / 'cache'
 ckpt_dir = out_dir / 'ckpt'
 data_dir = ab_root_path / 'data'
 db_dir = ab_root_path / 'db'

@@ -16,21 +16,12 @@ Important rules enforced:
 import os
 import torch
 from torch.utils.data import Dataset
+from ab.nn.util.Const import cache_dir
 
-def _get_default_cache_dir():
-    if "BLIP2_CACHE_DIR" in os.environ:
-        return os.environ["BLIP2_CACHE_DIR"]
-    legacy_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../nn-gpt/out/nngpt/cache"))
-    if os.path.exists(legacy_path):
-        return legacy_path
-    nn_dataset_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
-    return os.path.join(nn_dataset_root, "out", "blip2_cache")
-
-_DEFAULT_CACHE_DIR = _get_default_cache_dir()
 
 _SHARED_CACHE = {}
 
-def _auto_extract_features(cache_dir: str, split: str):
+def _auto_extract_features(split: str):
     import torch
     from tqdm import tqdm
     from torch.utils.data import DataLoader
@@ -85,7 +76,7 @@ def _auto_extract_features(cache_dir: str, split: str):
         
     print(f"[CACHE-AUTO] Extraction complete for {split}.\n")
 
-def _discover_shards(cache_dir: str, split: str, auto_extracted: bool = False):
+def _discover_shards(split: str, auto_extracted: bool = False):
     """
     Strictly discovers shards for the given split.
     If none are found, automatically extracts them once.
@@ -100,13 +91,13 @@ def _discover_shards(cache_dir: str, split: str, auto_extracted: bool = False):
             return files
             
     if not auto_extracted:
-        _auto_extract_features(cache_dir, split)
-        return _discover_shards(cache_dir, split, auto_extracted=True)
+        _auto_extract_features(split)
+        return _discover_shards(split, auto_extracted=True)
 
     raise FileNotFoundError(f"[FATAL] Missing strictly required '{split}' cache shards in {cache_dir}. Auto-extraction failed.")
 
 
-def _load_shared_cache(cache_dir: str, split: str):
+def _load_shared_cache(split: str):
     """
     Load BLIP-2 feature shards once per Python process per split.
     """
@@ -116,7 +107,7 @@ def _load_shared_cache(cache_dir: str, split: str):
     if cache_key in _SHARED_CACHE:
         return _SHARED_CACHE[cache_key]
 
-    shard_files = _discover_shards(real_dir, split=split)
+    shard_files = _discover_shards(split=split)
 
     print(f"\n[CACHE] Pre-loading BLIP-2 float16 CPU cache for split: '{split}'")
     
@@ -171,12 +162,11 @@ def _load_shared_cache(cache_dir: str, split: str):
 
 
 class CachedBlip2Dataset(Dataset):
-    def __init__(self, cache_dir: str, split: str = "train"):
-        self.cache_dir = os.path.realpath(cache_dir)
+    def __init__(self, split: str = "train"):
         self.split = split
 
         # STRICTLY pass the requested split down to prevent data leakage
-        cache = _load_shared_cache(self.cache_dir, split=self.split)
+        cache = _load_shared_cache(split=self.split)
         self._all_features = cache["features"]  # List of Tensors
         self._all_labels = cache["labels"]
         self._offsets = cache["offsets"]
@@ -247,8 +237,7 @@ def transform(norm):
     # So returning `None` here is ALREADY the correct upstream behavior.
     return None
 
-def get_dataset(cache_dir: str = None, split: str = "train") -> CachedBlip2Dataset:
-    resolved = os.path.realpath(cache_dir or _DEFAULT_CACHE_DIR)
-    dataset = CachedBlip2Dataset(resolved, split)
+def get_dataset(split: str = "train") -> CachedBlip2Dataset:
+    dataset = CachedBlip2Dataset(split)
     dataset.collate_fn = get_collate_fn()
     return dataset
