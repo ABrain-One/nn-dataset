@@ -191,6 +191,9 @@ def save_if_best(model, model_name, current_score, save_pth_weights, save_onnx_w
                  save_path=None):
     """
     Called by the training framework to save weights if performance improves.
+    Also persists the achieved best_score in a sidecar JSON so subsequent
+    runs (when started with --pretrained 1) only overwrite the checkpoint
+    if they exceed it.
     """
     checkpoint_dir = ckpt_dir / model_name.split('.')[-1]
     makedirs(checkpoint_dir, exist_ok=True)
@@ -199,11 +202,77 @@ def save_if_best(model, model_name, current_score, save_pth_weights, save_onnx_w
         setattr(model, 'best_score', current_score)
         best_checkpoint_path = join(checkpoint_dir, "best_model.pth")
         print(f"\n--- New best score: {current_score:.4f} Saving checkpoint... ---")
-        # Use the required function to save the PyTorch weights.
-        if save_pth_weights: export_torch_weights(model, best_checkpoint_path)
+        # Save the PyTorch weights.
+        if save_pth_weights:
+            export_torch_weights(model, best_checkpoint_path)
+            # Persist best_score alongside the .pth so future --pretrained
+            # runs can resume the monotonic-best behaviour.
+            try:
+                meta_path = join(checkpoint_dir, "best_model.json")
+                with open(meta_path, 'w') as f:
+                    json.dump({"best_score": float(current_score)}, f)
+            except Exception as e:
+                print(f"[save_if_best] Failed to write best_score sidecar: {e}")
         if save_onnx_weights:
             t = first_tensor(train_set, num_workers)
             export_model_to_onnx(model, t, join(checkpoint_dir, "best_model.onnx") if save_path else onnx_file)
+
+
+def load_pretrained_weights(model, model_name):
+    """
+    Load weights from the .pth checkpoint that was saved by save_if_best,
+    if one exists for this model. The path mirrors the save convention:
+        <ckpt_dir>/<ModelName>/best_model.pth
+
+    If a sidecar best_model.json is also present, the recorded best_score
+    is restored on the model so save_if_best only overwrites the
+    checkpoint when a strictly better score is reached in the new run.
+
+    Returns True if weights were loaded, False otherwise. Silently skips
+    loading when:
+      - no checkpoint file is present (first training run for this model)
+      - the architecture has changed since the checkpoint was saved
+        (state_dict key/shape mismatch)
+    In both cases training proceeds with the model's current (typically
+    randomly initialised) weights.
+    """
+    checkpoint_dir = ckpt_dir / model_name.split('.')[-1]
+    best_checkpoint_path = join(checkpoint_dir, "best_model.pth")
+
+    if not exists(best_checkpoint_path):
+        print(f"[pretrained] No checkpoint found at {best_checkpoint_path}; "
+              f"training from scratch.")
+        return False
+
+    print(f"[pretrained] Loading weights from {best_checkpoint_path}")
+    try:
+        device = next(model.parameters()).device
+        state_dict = torch.load(
+            best_checkpoint_path, map_location=device, weights_only=True
+        )
+        model.load_state_dict(state_dict, strict=True)
+        print(f"[pretrained] Weights loaded successfully.")
+    except (RuntimeError, KeyError) as e:
+        print(f"[pretrained] Failed to load checkpoint "
+              f"(likely architecture mismatch since save): {e}")
+        print(f"[pretrained] Continuing with current (random) weights.")
+        return False
+
+    # Restore the previous best_score so save_if_best doesn't overwrite
+    # the checkpoint with something worse.
+    meta_path = join(checkpoint_dir, "best_model.json")
+    if exists(meta_path):
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+            if 'best_score' in meta:
+                setattr(model, 'best_score', float(meta['best_score']))
+                print(f"[pretrained] Restored best_score = "
+                      f"{meta['best_score']:.6f} from sidecar.")
+        except Exception as e:
+            print(f"[pretrained] Could not read best_score sidecar: {e}")
+
+    return True
 
 
 def first_tensor(train_set, num_workers=default_num_workers) -> Any:
