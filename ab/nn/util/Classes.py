@@ -19,9 +19,7 @@ class DataRoll(tqdm):
     def __next__(self):
         if self.n > 5:
             duration = max(1e-1, time.time() - self.init_time)
-            estimated_time = self.total * duration  / self.n / 60
+            estimated_time = self.total * duration / self.n / 60
             if estimated_time > self.epoch_limit_minutes:
-                # Log a warning instead of raising exception to allow verification
-                print(f"\n[WARN] Estimated time {estimated_time:.2f}m exceeds limit {self.epoch_limit_minutes}m, but continuing for verification.")
-                # raise LearnTimeException(estimated_time, self.epoch_limit_minutes, duration)
+                raise LearnTimeException(estimated_time, self.epoch_limit_minutes, duration)
         return self.it.__next__()

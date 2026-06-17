@@ -67,6 +67,8 @@ def save_results(config_ext: tuple[str, str, str, str, int], model_stat_file: st
     if exists(model_stat_file):
         with open(model_stat_file, 'r') as f:
             previous_trials = _safe_json_load(f)
+            if isinstance(previous_trials, dict):
+                previous_trials = [previous_trials]
             trials_dict_all = previous_trials + trials_dict_all
 
     trials_dict_all = sorted(trials_dict_all, key=lambda x: x['accuracy'], reverse=True)
