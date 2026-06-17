@@ -2,7 +2,7 @@ import sqlite3
 from os import makedirs
 from pathlib import Path
 
-from ab.nn.util.Const import param_tables, db_file, db_dir, main_tables, code_tables, dependent_tables, all_tables, index_colum, run_table, nn_stat_table, tflite_table, prun_table
+from ab.nn.util.Const import param_tables, db_file, db_dir, main_tables, code_tables, dependent_tables, all_tables, index_colum, run_table, nn_stat_table, tflite_table, prun_table, train_stat_table
 from ab.nn.util.db.build_nn_similarity import jaccard_blobs
 
 SQLITE_BUSY_TIMEOUT_MS = 300_000
@@ -75,6 +75,48 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_accuracy_desc ON stat (accuracy DESC)")
     for nm in index_colum:
         cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{nm} ON stat ({nm})")
+
+    # Create training statistics table
+    # Stores per-epoch training diagnostics linked to the main stat table.
+    cursor.execute(f"""
+    CREATE TABLE IF NOT EXISTS {train_stat_table} (
+        stat_id TEXT PRIMARY KEY,
+
+        train_loss REAL,
+        test_loss REAL,
+        train_accuracy REAL,
+        gradient_norm REAL,
+        samples_per_second REAL,
+        epoch_max INTEGER,
+
+        cpu_count INTEGER,
+        cpu_type TEXT,
+        cpu_usage_percent REAL,
+
+        total_ram_kb REAL,
+        occupied_ram_kb REAL,
+        ram_usage_percent REAL,
+
+        gpu_type TEXT,
+        gpu_memory_kb REAL,
+        gpu_total_memory_kb REAL,
+        occupied_gpu_memory_kb REAL,
+        gpu_memory_usage_percent REAL,
+
+        FOREIGN KEY (stat_id) REFERENCES stat(id) ON DELETE CASCADE
+    )
+    """)
+
+    # Add indexes for training statistics
+    cursor.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{train_stat_table}_gradient_norm "
+        f"ON {train_stat_table} (gradient_norm);"
+    )
+
+    cursor.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{train_stat_table}_samples_per_second "
+        f"ON {train_stat_table} (samples_per_second);"
+    )
 
     # Create mobile analytics table (runtime stats)
     cursor.execute(f"""
