@@ -34,7 +34,9 @@ class MeteorMetric:
             # Try to fetch again if not available at init
             self.idx2word = GLOBAL_CAPTION_VOCAB.get('idx2word', None)
             if self.idx2word is None:
-                print("[MeteorMetric WARN] idx2word not found in GLOBAL_CAPTION_VOCAB. METEOR score will be 0.")
+                if not getattr(self, 'warned_missing_vocab', False):
+                    print("[MeteorMetric WARN] idx2word not found in GLOBAL_CAPTION_VOCAB. METEOR score will be 0.")
+                    self.warned_missing_vocab = True
                 return
 
         # Convert preds to indices if needed
