@@ -253,9 +253,9 @@ If you find the LEMUR Neural Network Dataset to be useful for your research, ple
 @InProceedings{ABrain.LEMUR2,
 	title={{LEMUR} 2: Unlocking Neural Network Diversity for {AI}},
 	 author={Uzun, Tolgay Atinc and Khalid, Waleed and Din, Saif U and Mulukuledu, Sai Revanth and Singh, Akashdeep and Vysyaraju, Chandini and Duvvuri, Raghuvir and Goyal, Avi and Lukhi, Yashkumar Rajeshbhai and Hussain, Ahsan and Jesani, Krunal and Shrestha, Usha and Mittal, Yash and Kochnev, Roman and Kadam, Pritam and Ikram, Mohsin and Moradiya, Harsh Rameshbhai and Arslanian, Alice and Ignatov, Dmitry and Timofte, Radu},
-	booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition Workshops},	
-	year={2026},
-    note={to appear}
+	booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition Workshops (CVPRW)},	
+	pages = {3291--3300},
+    year={2026}
 }
 ```
 
