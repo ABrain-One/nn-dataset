@@ -196,7 +196,7 @@ def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
     stat_id = uuid4(all_values)
 
     cursor.execute(f"""
-    INSERT INTO stat (id, transform, prm, {', '.join(main_columns_ext + extra_main_columns)})
+    INSERT OR IGNORE INTO stat (id, transform, prm, {', '.join(main_columns_ext + extra_main_columns)})
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (stat_id, *all_values))
 
@@ -237,7 +237,10 @@ def json_train_to_db():
 
                         if trial['transform']:
                             populate_code_table('transform', cursor, name=trial['transform'])
+                        extracted_train_stat = trial.get('train_stat') if isinstance(trial.get('train_stat'), dict) else {}
                         trial = {k: v for k, v in trial.items() if not isinstance(v, (dict, list))}
+                        if extracted_train_stat:
+                            trial['train_stat'] = extracted_train_stat
 
                         save_stat(sub_config + (epoch,), trial, cursor)
             except Exception as e:
