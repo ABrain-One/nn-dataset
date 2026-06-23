@@ -179,7 +179,6 @@ def save_train_stat(cursor, stat_id: str, train_stat: dict):
 
 
 def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
-    # Insert each trial into the database with epoch
     prm = dict(prm)
 
     # Extract grouped training diagnostics before prm-table insert
@@ -197,12 +196,14 @@ def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
     stat_id = uuid4(all_values)
 
     cursor.execute(f"""
-    INSERT INTO stat (id, transform, prm, {', '.join(main_columns_ext + extra_main_columns)}) 
+    INSERT OR IGNORE INTO stat (id, transform, prm, {', '.join(main_columns_ext + extra_main_columns)})
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (stat_id, *all_values))
 
     # Save train_stat row linked 1:1 to stat.id
     save_train_stat(cursor, stat_id, train_stat)
+
+    return stat_id
 
 
 @_serialized_db_write
@@ -220,7 +221,10 @@ def json_train_to_db():
 
         for epoch_file in Path(model_stat_dir).iterdir():
             model_stat_file = model_stat_dir / epoch_file
-            epoch = int(epoch_file.stem)
+            try:
+                epoch = int(epoch_file.stem)
+            except ValueError:
+                continue
 
             try:
                 with open(model_stat_file, 'r', encoding='utf-8', errors='replace') as f:
@@ -230,8 +234,14 @@ def json_train_to_db():
                         # Handle comma-separated metrics (e.g., "bleu,meteor,cider")
                         for single_metric in metric.split(','):
                             populate_code_table('metric', cursor, name=single_metric.strip())
+
                         if trial['transform']:
                             populate_code_table('transform', cursor, name=trial['transform'])
+                        extracted_train_stat = trial.get('train_stat') if isinstance(trial.get('train_stat'), dict) else {}
+                        trial = {k: v for k, v in trial.items() if not isinstance(v, (dict, list))}
+                        if extracted_train_stat:
+                            trial['train_stat'] = extracted_train_stat
+
                         save_stat(sub_config + (epoch,), trial, cursor)
             except Exception as e:
                 print(f"Warning: skipping JSON file {model_stat_file}: {e}", file=sys.stderr)
@@ -307,18 +317,20 @@ def json_nn_to_db():
 
 @_serialized_db_write
 def save_results(config_ext: tuple[str, str, str, str, int], prm: dict):
-    """
-    Save Optuna study results for a given model to SQLite DB
-    :param config_ext: Tuple of names (Task, Dataset, Metric, Model, Epoch).
-    :param prm: Dictionary of all saved parameters.
-    """
     conn, cursor = sql_conn()
+
     _, _, metric, nn = config_ext[:4]
+
     populate_code_table('nn', cursor, name=nn)
+
     for single_metric in metric.split(','):
         populate_code_table('metric', cursor, name=single_metric.strip())
-    save_stat(config_ext, prm, cursor)
+
+    stat_id = save_stat(config_ext, prm, cursor)
+
     close_conn(conn)
+
+    return stat_id
 
 
 @_serialized_db_write
@@ -496,6 +508,74 @@ def save_nn_stat(nn_name: str, prm_id: str, stats: dict):
         print(f"Error saving NN statistics to database: {e}")
         return False
 
+def save_layer_stat(epoch: int, table: dict, stat_id: str, metric: str = None):
+    """Save per-layer analysis into layer_stat and per_layer_stat."""
+    conn, cursor = sql_conn()
+    try:
+        cursor.execute("""
+                       CREATE TABLE IF NOT EXISTS layer_stat
+                       (
+                           id TEXT PRIMARY KEY,
+                           layer_name TEXT,
+                           layer_type TEXT,
+                           stat_id TEXT
+                       )
+                       """)
+        cursor.execute("""
+                       CREATE TABLE IF NOT EXISTS per_layer_stat
+                       (
+                           id TEXT,
+                           stat_id TEXT,
+                           layer_type TEXT,
+                           ww_alpha REAL,
+                           grad_norm REAL,
+                           dead_frac REAL,
+                           taylor_imp REAL,
+                           cka_redund REAL,
+                           eff_rank REAL,
+                           rank_ratio REAL,
+                           sensitivity REAL,
+                           PRIMARY KEY (id, stat_id)
+                       )
+                       """)
+
+        for layer_name, row in table.items():
+            layer_stat_id = uuid4([stat_id, layer_name])
+
+            cursor.execute("""
+                INSERT OR IGNORE INTO layer_stat (id, layer_name, layer_type, stat_id)
+                VALUES (?, ?, ?, ?)
+            """, (
+                layer_stat_id,
+                layer_name,
+                row.get('layer_type'),
+                stat_id,
+            ))
+
+            cursor.execute("""
+                INSERT OR REPLACE INTO per_layer_stat (
+                    id, stat_id, layer_type,
+                    ww_alpha, grad_norm, dead_frac,
+                    taylor_imp, cka_redund, eff_rank, rank_ratio, sensitivity
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                layer_stat_id,
+                stat_id,
+                row.get('layer_type'),
+                row.get('ww_alpha'),
+                row.get('grad_norm'),
+                row.get('dead_frac'),
+                row.get('taylor_imp'),
+                row.get('cka_redund'),
+                row.get('eff_rank'),
+                row.get('rank_ratio'),
+                row.get('sensitivity'),
+            ))
+
+        conn.commit()
+    finally:
+        conn.close()
+
 
 @_serialized_db_write
 def json_run_tflite_to_db():
@@ -504,20 +584,18 @@ def json_run_tflite_to_db():
     Adds precision_type column to indicate whether the data is from fp32 or int8.
     """
     conn, cursor = sql_conn()
-    
+
     tflite_dirs = [
         (stat_run_tflite_fp32_dir, 'fp32'),
         (stat_run_tflite_int8_dir, 'int8')
     ]
-    
+
     total_files = 0
-    # load mapping from all_models.json for each precision
     accuracy_maps: dict[str, dict] = {}
     for tflite_dir, precision_type in tflite_dirs:
         if not tflite_dir.exists():
             continue
 
-        # attempt to read accuracy/transform mapping
         map_path = tflite_dir / 'all_models.json'
         if map_path.exists():
             try:
@@ -529,30 +607,27 @@ def json_run_tflite_to_db():
         else:
             accuracy_maps[precision_type] = {}
 
-        # Count total JSON files for progress bar
         json_files = list(tflite_dir.rglob('*.json'))
         total_files += len(json_files)
-    
+
     if total_files == 0:
         close_conn(conn)
         return
-    
+
     print(f"Importing runtime analytics from {total_files} tflite JSON files...")
-    
+
     processed = 0
     with tqdm(total=total_files, desc="Importing tflite runtime data") as pbar:
         for tflite_dir, precision_type in tflite_dirs:
             if not tflite_dir.exists():
                 continue
-            
-            # Recursively find all JSON files
+
             for json_file in tflite_dir.rglob('*.json'):
-                # Skip all_models.json - it's a mapping, not a runtime record
                 if json_file.name == 'all_models.json':
                     pbar.update(1)
                     processed += 1
                     continue
-                
+
                 try:
                     with open(json_file, 'r', encoding='utf-8', errors='replace') as f:
                         data = json.load(f)
@@ -561,10 +636,8 @@ def json_run_tflite_to_db():
                     pbar.update(1)
                     processed += 1
                     continue
-                
-                # Extract data
+
                 model_name = data.get('model_name')
-                # lookup accuracy/transform
                 acc_info = accuracy_maps.get(precision_type, {}).get(model_name, {})
                 accuracy = acc_info.get('accuracy')
                 transform_code = acc_info.get('transform')
@@ -576,8 +649,7 @@ def json_run_tflite_to_db():
                 duration = data.get('duration')
                 device_analytics = data.get('device_analytics')
                 analytics_json = json.dumps(device_analytics) if device_analytics is not None else None
-                
-                # Extract extra fields
+
                 extra_vals = {f: data.get(f) for f in [
                     'iterations', 'unit',
                     'cpu_duration', 'cpu_min_duration', 'cpu_max_duration', 'cpu_std_dev', 'cpu_error',
@@ -586,11 +658,9 @@ def json_run_tflite_to_db():
                     'total_ram_kb', 'free_ram_kb', 'available_ram_kb', 'cached_kb',
                     'in_dim_0', 'in_dim_1', 'in_dim_2', 'in_dim_3'
                 ]}
-                
-                # Generate unique ID
+
                 id_val = uuid4([json_file.name, model_name, device_type, os_version, duration, precision_type])
-                
-                # Prepare columns and values (no accuracy/transform in run table)
+
                 columns = [
                     'id', 'model_name', 'device_type', 'os_version', 'valid', 'emulator', 'error_message', 'duration',
                     'iterations', 'unit', 'cpu_duration', 'cpu_min_duration', 'cpu_max_duration', 'cpu_std_dev', 'cpu_error',
@@ -600,13 +670,13 @@ def json_run_tflite_to_db():
                     'in_dim_0', 'in_dim_1', 'in_dim_2', 'in_dim_3',
                     'device_analytics_json', 'precision_type'
                 ]
-                
+
                 placeholders = ', '.join(['?'] * len(columns))
                 col_names = ', '.join(columns)
-                
+
                 values = [
                     id_val, model_name, device_type, os_version, valid, emulator, error_message, duration,
-                    extra_vals['iterations'], extra_vals['unit'], 
+                    extra_vals['iterations'], extra_vals['unit'],
                     extra_vals['cpu_duration'], extra_vals['cpu_min_duration'], extra_vals['cpu_max_duration'], extra_vals['cpu_std_dev'], extra_vals['cpu_error'],
                     extra_vals['gpu_duration'], extra_vals['gpu_min_duration'], extra_vals['gpu_max_duration'], extra_vals['gpu_std_dev'], extra_vals['gpu_error'],
                     extra_vals['npu_duration'], extra_vals['npu_min_duration'], extra_vals['npu_max_duration'], extra_vals['npu_std_dev'], extra_vals['npu_error'],
@@ -614,7 +684,7 @@ def json_run_tflite_to_db():
                     extra_vals['in_dim_0'], extra_vals['in_dim_1'], extra_vals['in_dim_2'], extra_vals['in_dim_3'],
                     analytics_json, precision_type
                 ]
-                
+
                 try:
                     cursor.execute(
                         f"""
@@ -626,8 +696,7 @@ def json_run_tflite_to_db():
                     )
                 except Exception as e:
                     print(f"Warning: failed to insert tflite data from {json_file}: {e}", file=sys.stderr)
-                
-                # Insert into tflite table if accuracy/transform data exists
+
                 if accuracy is not None or transform_code is not None:
                     try:
                         tflite_id = uuid4([json_file.name, model_name, accuracy, transform_code, precision_type])
@@ -641,10 +710,10 @@ def json_run_tflite_to_db():
                         )
                     except Exception as e:
                         print(f"Warning: failed to insert tflite metadata for {model_name}: {e}", file=sys.stderr)
-                
+
                 pbar.update(1)
                 processed += 1
-    
+
     close_conn(conn)
 
 
@@ -656,10 +725,9 @@ def json_prun_to_db():
     """
     if not stat_run_pt_dir.exists():
         return
-    
+
     conn, cursor = sql_conn()
-    
-    # Count total files
+
     total_files = 0
     for pruning_dir in stat_run_pt_dir.iterdir():
         if pruning_dir.is_dir():
@@ -668,32 +736,32 @@ def json_prun_to_db():
                     all_models_path = config_dir / 'all_models.json'
                     if all_models_path.exists():
                         total_files += 1
-    
+
     if total_files == 0:
         close_conn(conn)
         return
-    
+
     print(f"Importing pruning analytics from {total_files} configuration(s)...")
     processed = 0
     with tqdm(total=total_files, desc="Importing pruning data") as pbar:
         for pruning_method_dir in stat_run_pt_dir.iterdir():
             if not pruning_method_dir.is_dir():
                 continue
-            
+
             pruning_method = pruning_method_dir.name
-            
+
             for config_dir in pruning_method_dir.iterdir():
                 if not config_dir.is_dir():
                     continue
-                
+
                 task_dataset = config_dir.name
                 all_models_path = config_dir / 'all_models.json'
-                
+
                 if not all_models_path.exists():
                     pbar.update(1)
                     processed += 1
                     continue
-                
+
                 try:
                     with open(all_models_path, 'r', encoding='utf-8') as f:
                         models = json.load(f)
@@ -702,13 +770,12 @@ def json_prun_to_db():
                     pbar.update(1)
                     processed += 1
                     continue
-                
-                # Insert each model's pruning data
+
                 for model_name, model_data in models.items():
                     try:
                         if not isinstance(model_data, dict):
                             continue
-                        
+
                         status = model_data.get('status')
                         accuracy = model_data.get('accuracy')
                         duration = model_data.get('duration')
@@ -718,13 +785,13 @@ def json_prun_to_db():
                         params_removed = model_data.get('params_removed')
                         model_size_before_kb = model_data.get('model_size_before_kb')
                         model_size_after_kb = model_data.get('model_size_after_kb')
-                        
+
                         prun_id = uuid4([model_name, pruning_method, task_dataset])
-                        
+
                         cursor.execute(
                             f"""
                             INSERT OR REPLACE INTO {prun_table}
-                            (id, model_name, pruning_method, task_dataset, status, accuracy, duration, pruning_ratio, 
+                            (id, model_name, pruning_method, task_dataset, status, accuracy, duration, pruning_ratio,
                              params_before, params_after, params_removed, model_size_before_kb, model_size_after_kb)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
@@ -733,10 +800,10 @@ def json_prun_to_db():
                         )
                     except Exception as e:
                         print(f"Warning: failed to insert pruning data for {model_name}/{pruning_method}/{task_dataset}: {e}", file=sys.stderr)
-                
+
                 pbar.update(1)
                 processed += 1
-    
+
     close_conn(conn)
 
 

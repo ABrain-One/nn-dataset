@@ -16,18 +16,70 @@ Important rules enforced:
 import os
 import torch
 from torch.utils.data import Dataset
+from ab.nn.util.Const import cache_dir
 
-_DEFAULT_CACHE_DIR = os.environ.get(
-    "BLIP2_CACHE_DIR",
-    "/home/ghaffar/nn-gpt/out/nngpt/cache",
-)
 
 _SHARED_CACHE = {}
 
-def _discover_shards(cache_dir: str, split: str):
+def _auto_extract_features(split: str):
+    import torch
+    from tqdm import tqdm
+    from torch.utils.data import DataLoader
+    from transformers import Blip2Model
+    from ab.nn.util.Loader import load_dataset
+    
+    print(f"\n[CACHE-AUTO] Missing cache for '{split}'. Starting automatic extraction to {cache_dir}...")
+    os.makedirs(cache_dir, exist_ok=True)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    print("[CACHE-AUTO] Loading BLIP-2 Encoder in 4-bit...")
+    model = Blip2Model.from_pretrained(
+        "Salesforce/blip2-opt-2.7b",
+        load_in_4bit=True,
+        torch_dtype=torch.float16,
+        device_map="auto"
+    )
+    model.eval()
+    
+    print("[CACHE-AUTO] Loading underlying dataset via 'blip2_processor'...")
+    out_shape, min_acc, train_dataset, test_dataset = load_dataset("img-captioning", "coco", "blip2_processor")
+    
+    target_dataset = train_dataset if split == "train" else test_dataset
+    
+    def _collate(batch):
+        images = torch.stack([item[0] for item in batch])
+        labels = [item[1] for item in batch]
+        return images, labels
+        
+    loader = DataLoader(target_dataset, batch_size=32, num_workers=4, shuffle=False, collate_fn=_collate)
+    features_list = []
+    labels_list = []
+    
+    print(f"[CACHE-AUTO] Extracting features for {split}...")
+    with torch.no_grad():
+        for i, (images, labels) in enumerate(tqdm(loader)):
+            images = images.to(device)
+            feats = model.get_qformer_features(pixel_values=images).last_hidden_state
+            # CRITICAL: Must save as float16 CPU — _load_shared_cache strictly validates this
+            features_list.append(feats.cpu().to(torch.float16))
+            labels_list.extend(labels)
+            
+            if (i + 1) % 500 == 0:
+                temp_feats = torch.cat(features_list, dim=0)  # already float16
+                torch.save({'features': temp_feats, 'labels': labels_list, 'split': split}, f"{cache_dir}/coco_{split}_{i}.pt")
+                features_list = []
+                labels_list = []
+                
+    if features_list:
+        temp_feats = torch.cat(features_list, dim=0)  # already float16
+        torch.save({'features': temp_feats, 'labels': labels_list, 'split': split}, f"{cache_dir}/coco_{split}_final.pt")
+        
+    print(f"[CACHE-AUTO] Extraction complete for {split}.\n")
+
+def _discover_shards(split: str, auto_extracted: bool = False):
     """
     Strictly discovers shards for the given split.
-    Fails loudly if none are found. No fallback to train!
+    If none are found, automatically extracts them once.
     """
     prefix = f"coco_{split}_"
     if os.path.isdir(cache_dir):
@@ -37,11 +89,15 @@ def _discover_shards(cache_dir: str, split: str):
         )
         if files:
             return files
+            
+    if not auto_extracted:
+        _auto_extract_features(split)
+        return _discover_shards(split, auto_extracted=True)
 
-    raise FileNotFoundError(f"[FATAL] Missing strictly required '{split}' cache shards in {cache_dir}. No fallback permitted.")
+    raise FileNotFoundError(f"[FATAL] Missing strictly required '{split}' cache shards in {cache_dir}. Auto-extraction failed.")
 
 
-def _load_shared_cache(cache_dir: str, split: str):
+def _load_shared_cache(split: str):
     """
     Load BLIP-2 feature shards once per Python process per split.
     """
@@ -51,7 +107,7 @@ def _load_shared_cache(cache_dir: str, split: str):
     if cache_key in _SHARED_CACHE:
         return _SHARED_CACHE[cache_key]
 
-    shard_files = _discover_shards(real_dir, split=split)
+    shard_files = _discover_shards(split=split)
 
     print(f"\n[CACHE] Pre-loading BLIP-2 float16 CPU cache for split: '{split}'")
     
@@ -106,12 +162,11 @@ def _load_shared_cache(cache_dir: str, split: str):
 
 
 class CachedBlip2Dataset(Dataset):
-    def __init__(self, cache_dir: str, split: str = "train"):
-        self.cache_dir = os.path.realpath(cache_dir)
+    def __init__(self, split: str = "train"):
         self.split = split
 
         # STRICTLY pass the requested split down to prevent data leakage
-        cache = _load_shared_cache(self.cache_dir, split=self.split)
+        cache = _load_shared_cache(split=self.split)
         self._all_features = cache["features"]  # List of Tensors
         self._all_labels = cache["labels"]
         self._offsets = cache["offsets"]
@@ -182,8 +237,7 @@ def transform(norm):
     # So returning `None` here is ALREADY the correct upstream behavior.
     return None
 
-def get_dataset(cache_dir: str = None, split: str = "train") -> CachedBlip2Dataset:
-    resolved = os.path.realpath(cache_dir or _DEFAULT_CACHE_DIR)
-    dataset = CachedBlip2Dataset(resolved, split)
+def get_dataset(split: str = "train") -> CachedBlip2Dataset:
+    dataset = CachedBlip2Dataset(split)
     dataset.collate_fn = get_collate_fn()
     return dataset

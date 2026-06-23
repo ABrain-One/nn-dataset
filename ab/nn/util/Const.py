@@ -67,6 +67,7 @@ default_num_workers = 2
 default_random_config_order = False
 default_save_pth_weights = False
 default_save_onnx_weights = False
+default_layer_analysis = False
 
 default_epoch_limit_minutes = 30  # minutes
 
@@ -140,6 +141,7 @@ ab_root_path = __project_root_path()
 print(f"LEMUR root {ab_root_path}")
 out = 'out'
 out_dir = ab_root_path / out
+cache_dir = out_dir / 'cache'
 ckpt_dir = out_dir / 'ckpt'
 data_dir = ab_root_path / 'data'
 db_dir = ab_root_path / 'db'

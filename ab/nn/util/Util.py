@@ -344,6 +344,8 @@ def args():
                         help=f'Enable saving of the best model weights in PyTorch checkpoints; default {default_save_pth_weights}')
     parser.add_argument('--save_onnx_weights', type=bool, default=default_save_onnx_weights,
                         help=f'Enable saving of the best model weights in ONNX format; default {default_save_onnx_weights}')
+    parser.add_argument('--layer_analysis', action='store_true', default=default_layer_analysis,
+                        help='Enable per-layer analysis (every epoch for first 5, then every 5 epochs)')
     return parser.parse_args()
 
 
