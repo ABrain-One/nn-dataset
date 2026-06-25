@@ -389,6 +389,7 @@ class Train:
                 # Layer-wise analysis (epochs 1-5, then every 5)
             layer_summary = {}
             layer_table = {}
+            layer_result = {}
             if self.layer_analysis and (epoch <= 5 or epoch % 5 == 0):
                 try:
                     from ab.nn.util.LayerAnalysis import LayerAnalyzer
@@ -408,10 +409,6 @@ class Train:
                         f"  Layer result keys/errors: { {k: v.get('error') if isinstance(v, dict) and 'error' in v else 'ok' for k, v in layer_result.items()} }"
                     )
 
-                    self._save_layer_analysis(epoch, layer_result)
-
-
-                    self._save_layer_table(epoch, layer_table)
 
 
                     print(f"  Layer analysis saved (epoch {epoch})")
@@ -475,38 +472,74 @@ class Train:
             }
                             | {f'metric_{k}': v for k, v in all_metric_results.items()})
 
+            # Build JSON export once
+            prm_json = dict(prm)
+
+            # Promote core experiment info for readability
+            prm_json["task"] = self.config[0]
+            prm_json["dataset"] = self.config[1]
+            prm_json["metric"] = self.config[2]
+            prm_json["model"] = self.config[3] if len(self.config) > 3 else self.model_name
+
+            # Make layer statistics human-readable without losing information
+            if layer_summary or layer_result or layer_table:
+                prm_json["layer_stat"] = {
+                    "summary": layer_summary,
+                    "layers": [
+                        {
+                            "name": name,
+                            **row,
+                        }
+                        for name, row in layer_table.items()
+                    ],
+                    "raw_analysis": layer_result,
+                }
+
             if self.save_to_db:
                 if self.is_code:
                     if self.save_path:
-                        prm_json = dict(prm)
-                        if layer_summary:
-                            prm_json["layer_stat"] = layer_summary
-                        save_results(self.config + (epoch,), join(self.save_path, f"{epoch}.json"), prm_json)
+                        save_results(
+                            self.config + (epoch,),
+                            join(self.save_path, f"{epoch}.json"),
+                            prm_json,
+                        )
+
                         stat_id = DB_Write.save_results(
                             self.config + (epoch,),
                             prm,
                             nn_code=getattr(self, 'nn_code', None)
                         )
+                        
                         if layer_table:
-                            DB_Write.save_layer_stat(epoch, layer_table,stat_id, self.config[2])
+                            DB_Write.save_layer_stat(
+                                epoch,
+                                layer_table,
+                                stat_id,
+                                self.config[2],
+                            )
                     else:
-                        print(f"[WARN]parameter `save_Path` set to null, the statics will not be saved into a file.")
-                else:  # Legacy save result codes in file
-                    prm_json = dict(prm)
-                    if layer_summary:
-                        prm_json["layer_stat"] = layer_summary
-                    save_results(self.config + (epoch,), join(self.save_path, f"{epoch}.json"), prm_json)
-                    stat_id = DB_Write.save_results(self.config + (epoch,), prm)  # Separated from Calc.save_results()
+                        print(
+                            "[WARN] parameter `save_path` set to null, the statistics will not be saved into a file."
+                        )
 
+                else:
+                    save_results(
+                        self.config + (epoch,),
+                        join(self.save_path, f"{epoch}.json"),
+                        prm_json,
+                    )
 
+                    stat_id = DB_Write.save_results(
+                        self.config + (epoch,),
+                        prm,
+                    )
 
                     if layer_table:
                         DB_Write.save_layer_stat(
                             epoch,
                             layer_table,
                             stat_id,
-                            self.config[2]
-
+                            self.config[2],
                         )
 
         # Save training summary at the end
@@ -565,28 +598,7 @@ class Train:
         except Exception as e:
             print(f"[WARN] Failed to save training summary: {e}")
 
-    def _save_layer_analysis(self, epoch, data):
-        """Save layer analysis for a single epoch."""
-        import json
-        save_dir = self.save_path or out_dir
-        makedirs(save_dir, exist_ok=True)
-        path = join(str(save_dir), f"{epoch}_layer_analysis.json") #save into a json
-        try:
-            with open(path, 'w') as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            print(f"[WARN] Failed to save layer analysis: {e}")
 
-    def _save_layer_table(self, epoch, data):
-        import json
-        save_dir = self.save_path or out_dir
-        makedirs(save_dir, exist_ok=True)
-        path = join(str(save_dir), f"{epoch}_layer_table.json") #layer_table
-        try:
-            with open(path, 'w') as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            print(f"[WARN] Failed to save layer table: {e}")
 
     def eval(self, test_loader):
         """Evaluation with standardized metric interface - supports multiple metrics"""
