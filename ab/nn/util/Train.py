@@ -504,8 +504,12 @@ class Train:
                             prm_json,
                         )
 
-                        stat_id = DB_Write.save_results(self.config + (epoch,), prm)
-
+                        stat_id = DB_Write.save_results(
+                            self.config + (epoch,),
+                            prm,
+                            nn_code=getattr(self, 'nn_code', None)
+                        )
+                        
                         if layer_table:
                             DB_Write.save_layer_stat(
                                 epoch,
@@ -678,6 +682,7 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             save_to_db=save_to_db,
             layer_analysis=layer_analysis,
             is_code=True)
+        trainer.nn_code = nn_code
         epoch = prm['epoch']
         accuracy, accuracy_to_time, duration = trainer.train_n_eval(epoch, epoch_limit_minutes, False, export_onnx, train_set, save_path=save_path)
         if save_to_db:
