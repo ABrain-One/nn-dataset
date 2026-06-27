@@ -302,7 +302,7 @@ def export_torch_weights(model, path):
 
 def args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-c', '--config', type=str, default=default_config,
+    parser.add_argument('-c', '--config', type=str, default=None, action='append',
                         help="Configuration specifying the model training pipelines. The default value for all configurations.")
     parser.add_argument('-p', '--nn_prm', type=json.loads, default=default_nn_hyperparameters,
                         help="JSON string with fixed hyperparameter values for neural network training, e.g. -p '{\"lr\": 0.0061, \"momentum\": 0.7549, \"batch\": 4}'")
@@ -346,7 +346,14 @@ def args():
                         help=f'Enable saving of the best model weights in ONNX format; default {default_save_onnx_weights}')
     parser.add_argument('--layer_analysis', action='store_true', default=default_layer_analysis,
                         help='Enable per-layer analysis (every epoch for first 5, then every 5 epochs)')
-    return parser.parse_args()
+    a = parser.parse_args()
+
+    if a.config is None:
+        a.config = default_config
+    elif len(a.config) == 1:
+        a.config = a.config[0]
+
+    return a
 
 
 def import_by_path(path: str):

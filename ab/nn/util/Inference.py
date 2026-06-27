@@ -1,130 +1,105 @@
-from __future__ import annotations
-
-import importlib
-import inspect
+import os
 import json
 import time
 import platform
-from datetime import datetime
-from typing import Any, List, Optional, Tuple
-
-import torch
-from torch import nn
+import argparse
+import statistics
 import psutil
+import torch
+import subprocess
+from datetime import datetime
 
-from ab.nn.util.Util import (
-    import_by_path,
-    extract_arch_name,
-    ensure_outdir,
-    get_device_type,
-    sample_system,
-    sample_nvidia_smi
-)
+from ab.nn.util.Util import sample_system, sample_nvidia_smi, get_in_shape, first_tensor
+from ab.nn import api
+from ab.nn.util.db.Util import get_attr
+from ab.nn.util.Loader import load_dataset
 
-
-def build_dataset_loader(dataset: str, batch_size: int, num_workers: int = 2):
-    from torch.utils.data import DataLoader
-    from torchvision import datasets, transforms
-
-    ds_name = (dataset or "").lower()
-    transform = transforms.Compose([transforms.ToTensor()])
-
-    if ds_name == "cifar10":
-        ds = datasets.CIFAR10(root="./data", train=False, download=True, transform=transform)
-        num_classes = 10
-    elif ds_name == "cifar100":
-        ds = datasets.CIFAR100(root="./data", train=False, download=True, transform=transform)
-        num_classes = 100
-    elif ds_name.startswith("cifar"):
-        ds = datasets.CIFAR10(root="./data", train=False, download=True, transform=transform)
-        num_classes = 10
-    else:
-        raise ValueError(f"Unsupported dataset '{dataset}' (only cifar10 / cifar100 supported).")
-
-    loader = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-    return loader, num_classes
-
-
-def build_model(model_class: str,
-                in_shape: torch.Size,
-                out_shape: Tuple[int, ...],
-                device: torch.device,
-                errors: List[str]) -> nn.Module:
-    cls = import_by_path(model_class)
-    model = None
-
+OUTPUT_BASE_PATH = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "ab", "nn", "stat", "run", "pt", "fp32"))
+def get_device_info():
+    os_name = platform.system()
     try:
-        prm = {"lr": 0.01, "momentum": 0.9}
-        model = cls(in_shape=in_shape, out_shape=out_shape, prm=prm, device=device)
-        return model
-    except TypeError as e:
-        errors.append(f"nn_style_ctor_failed: {repr(e)}")
-    except Exception as e:
-        errors.append(f"nn_style_ctor_other_error: {repr(e)}")
-
-    try:
-        model = cls()
-        return model
-    except TypeError:
-        pass
-    except Exception as e:
-        errors.append(f"default_ctor_failed: {repr(e)}")
-
-    try:
-        model = cls(num_classes=out_shape[0])
-        return model
-    except Exception as e:
-        errors.append(f"num_classes_ctor_failed: {repr(e)}")
-        raise RuntimeError(f"Failed to construct model for class '{model_class}'. Errors: {errors}")
-
-
-# ---------------- run_inference ----------------
-
-def run_inference(config: Optional[str],
-                  model_class: str,
-                  checkpoint: Optional[str],
-                  dataset: str,
-                  num_batches: int,
-                  batch_size: int,
-                  outpath: str,
-                  use_profiler: bool,
-                  debug: bool,
-                  force_cpu: bool):
-
-    start_dt = datetime.utcnow()
-    start_epoch = time.time()
-    errors: List[str] = []
-
-    model_name = extract_arch_name(model_class)
-
-    device = torch.device("cpu")
-    if torch.cuda.is_available() and not force_cpu:
-        device = torch.device("cuda")
-
-    test_loader, num_classes = build_dataset_loader(dataset, batch_size)
-
-    sample_inputs, _ = next(iter(test_loader))
-    in_shape = sample_inputs.shape
-    out_shape = (num_classes,)
-    in_dim_0 = 1
-    in_dim_1 = int(in_shape[2])
-    in_dim_2 = int(in_shape[3])
-    in_dim_3 = int(in_shape[1])
-    model = None
-    try:
-        model = build_model(model_class, in_shape, out_shape, device, errors)
+        if os_name == "Windows":
+            result = subprocess.run(
+                ["wmic", "computersystem", "get", "Model"],
+                capture_output=True, text=True
+            )
+            product = result.stdout.split("\n")[1].strip()
+            vendor = ""
+        elif os_name == "Darwin":
+            result = subprocess.run(
+                ["system_profiler", "SPHardwareDataType"],
+                capture_output=True, text=True
+            )
+            product = ""
+            vendor = ""
+            for line in result.stdout.splitlines():
+                if "Model Name" in line:
+                    product = line.split(":")[1].strip()
+        else:  # Linux
+            with open("/sys/class/dmi/id/sys_vendor") as f:
+                vendor = f.read().strip()
+            with open("/sys/class/dmi/id/product_name") as f:
+                product = f.read().strip()
+        return vendor, product
     except Exception:
-        model = None
+        return "", platform.node()
 
-    timeline: List[dict[str, Any]] = []
-    op_totals: dict[str, dict[str, Any]] = {}
-    prof_traces: List[str] = []
-    peak_cpu_rss = 0
-    peak_gpu_mb = 0.0
-    batches_run = 0
-    metric_result = None
-    eval_used = False
+def get_model_params_from_db(model_name, dataset=None):
+    try:
+        if dataset:
+            df_data = api.data(nn=model_name, dataset=dataset, only_best_accuracy=True)
+        else:
+            df_data = api.data(nn=model_name, only_best_accuracy=True)
+        row = df_data.sort_values('accuracy', ascending=False).iloc[0]
+        prm = row['prm']
+        print(f"  ✓ Loaded from DB: task={row['task']}, dataset={row['dataset']}, "
+              f"transform={prm['transform']}, accuracy={row['accuracy']:.4f}")
+        return {
+            "prm": prm,
+            "task": row['task'],
+            "dataset": row['dataset'],
+            "metric": row['metric']
+        }
+    except Exception as e:
+        print(f"  ✗ ERROR: {e}")
+        raise
 
+def run_test_drive(model_name, dataset=None):
+    print(f"\n{'='*80}")
+    print(f"Starting Inference: {model_name}")
+    print(f"{'='*80}")
+
+    gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
+
+    print("Step 1: Fetching model from database...")
+    model_data = get_model_params_from_db(model_name, dataset=dataset)
+    exact_prm = model_data["prm"]
+    task = model_data["task"]
+    dataset = model_data["dataset"]
+    metric = model_data["metric"]
+    num_workers = exact_prm.get('num_workers', 1)
+
+    print("Step 2: Loading dataset...")
+    try:
+        out_shape, _, train_set, _ = load_dataset(task, dataset, exact_prm['transform'])
+    except Exception as e:
+        print(f"✗ ERROR loading dataset: {e}")
+        raise
+
+    in_shape = get_in_shape(train_set, num_workers)
+    sample_tensor = first_tensor(train_set, num_workers)
+
+    print("Step 3: Loading model...")
+    try:
+        nn_module = f"ab.nn.nn.{model_name}"
+        model_net = get_attr(nn_module, 'Net')
+        print(f"  ✓ Model {model_name} loaded successfully.")
+    except Exception as e:
+        print(f"  ✗ FAILED to load model {model_name}. Error: {e}")
+        raise
+
+    print("Step 4: Taking system snapshot (before)...")
+    timeline = []
     timeline.append({
         "phase": "before_eval",
         "ts": datetime.utcnow().isoformat() + "Z",
@@ -132,60 +107,80 @@ def run_inference(config: Optional[str],
         "gpus": sample_nvidia_smi()
     })
 
-    # (existing Train.eval logic unchanged)
-    try:
-        train_mod = importlib.import_module("ab.nn.util.Train")
-        TrainClass = getattr(train_mod, "Train", None)
-        if TrainClass is not None:
-            trainer = None
-            try:
-                sig = inspect.signature(TrainClass.__init__)
-                ctor_kwargs = {}
-                if "model" in sig.parameters and model is not None:
-                    ctor_kwargs["model"] = model
-                if "device" in sig.parameters:
-                    ctor_kwargs["device"] = device
-                try:
-                    trainer = TrainClass(**ctor_kwargs)
-                except Exception:
-                    trainer = TrainClass()
-            except Exception:
-                try:
-                    trainer = TrainClass()
-                except Exception:
-                    trainer = None
+    cpu_model = model_net(
+        in_shape=in_shape,
+        out_shape=out_shape,
+        prm=exact_prm,
+        device=torch.device("cpu")
+    ).cpu()
+    cpu_model.eval()
+    cpu_inputs = sample_tensor.cpu()
 
-            if trainer is not None and hasattr(trainer, "eval"):
-                try:
-                    if device.type == "cuda":
-                        torch.cuda.synchronize()
-                        gpu_start_evt = torch.cuda.Event(enable_timing=True)
-                        gpu_end_evt = torch.cuda.Event(enable_timing=True)
-                        gpu_start_evt.record()
-                    metric_result = trainer.eval(test_loader)
-                    if device.type == "cuda":
-                        gpu_end_evt.record()
-                        torch.cuda.synchronize()
-                        gpu_duration_ns = int(gpu_start_evt.elapsed_time(gpu_end_evt) * 1_000_000)
-                    else:
-                        gpu_duration_ns = None
-                    eval_used = True
-                except Exception as e:
-                    errors.append(f"trainer_eval_exception: {repr(e)}")
-    except Exception:
-        pass
+    print("Step 5: CPU warmup (10 iterations)...")
+    with torch.no_grad():
+        for _ in range(10):
+            _ = cpu_model(cpu_inputs)
 
+    gpu_model = model_net(
+        in_shape=in_shape,
+        out_shape=out_shape,
+        prm=exact_prm,
+        device=torch.device("cuda")
+    ).cuda()
+    gpu_model.eval()
+    gpu_inputs = sample_tensor.cuda()
+
+    print("Step 6: GPU warmup (10 iterations)...")
+    with torch.no_grad():
+        for _ in range(10):
+            _ = gpu_model(gpu_inputs)
+    torch.cuda.synchronize()
+
+    iterations = 20
+
+    cpu_runs = []
+    for _ in range(iterations):
+        start_cpu = time.perf_counter()
+        with torch.no_grad():
+            _ = cpu_model(cpu_inputs)
+        end_cpu = time.perf_counter()
+        cpu_runs.append(((end_cpu - start_cpu) * 1_000_000_000))
+
+    cpu_duration_ns = int(sum(cpu_runs) / len(cpu_runs))
+    cpu_min_duration = int(min(cpu_runs))
+    cpu_max_duration = int(max(cpu_runs))
+    cpu_std_dev = float(statistics.stdev(cpu_runs)) if len(cpu_runs) > 1 else 0.0
+
+    gpu_runs = []
+    for _ in range(iterations):
+        starter = torch.cuda.Event(enable_timing=True)
+        ender = torch.cuda.Event(enable_timing=True)
+        starter.record()
+        with torch.no_grad():
+            _ = gpu_model(gpu_inputs)
+        ender.record()
+        torch.cuda.synchronize()
+        gpu_runs.append((starter.elapsed_time(ender) * 1_000_000))
+
+    gpu_duration_ns = int(sum(gpu_runs) / len(gpu_runs))
+    gpu_min_duration = int(min(gpu_runs))
+    gpu_max_duration = int(max(gpu_runs))
+    gpu_std_dev = float(statistics.stdev(gpu_runs)) if len(gpu_runs) > 1 else 0.0
+
+    print("Step 7: Taking system snapshot (after)...")
     timeline.append({
         "phase": "after_eval",
         "ts": datetime.utcnow().isoformat() + "Z",
         "sys": sample_system(),
         "gpus": sample_nvidia_smi()
     })
+
+    peak_cpu_rss = 0
+    peak_gpu_mb = 0.0
     for t in timeline:
         sys_info = t.get("sys")
         if sys_info and sys_info.get("process_rss_bytes") is not None:
             peak_cpu_rss = max(peak_cpu_rss, sys_info["process_rss_bytes"])
-
         gpus = t.get("gpus")
         if gpus:
             for g in gpus:
@@ -193,92 +188,42 @@ def run_inference(config: Optional[str],
                 if used_mb is not None:
                     peak_gpu_mb = max(peak_gpu_mb, float(used_mb))
 
-    end_dt = datetime.utcnow()
-    duration_seconds = (end_dt - start_dt).total_seconds()
-    duration_ms = int(duration_seconds * 1000000000)
-    cpu_duration = duration_ms
-    cpu_min_duration = duration_ms
-    cpu_max_duration = duration_ms
-    cpu_std_dev = 0.0
+    vendor, product = get_device_info()
+    device_type = f"{vendor} {product}".strip() or platform.node()
+    vm = psutil.virtual_memory()
 
-    if "gpu_duration_ns" in locals() and gpu_duration_ns is not None:
-        gpu_duration = gpu_duration_ns
-        gpu_min_duration = gpu_duration_ns
-        gpu_max_duration = gpu_duration_ns
-        gpu_std_dev = 0.0
-    else:
-        gpu_duration = None
-        gpu_min_duration = None
-        gpu_max_duration = None
-        gpu_std_dev = None
-    vm = psutil.virtual_memory() if psutil else None
-    total_ram_kb = vm.total // 1024 if vm else None
-    free_ram_kb = vm.free // 1024 if (vm and hasattr(vm, "free")) else None
-    available_ram_kb = vm.available // 1024 if vm else None
-    cached_kb = getattr(vm, 'cached', 0) // 1024 if (vm and hasattr(vm, "cached")) else None
-
-
-    cpu_usage_kb = None
-    if psutil:
-        try:
-            cpu_time_ns = None
-            cpu_vals = [
-                t["sys"]["cpu_percent"]
-                for t in timeline
-                if t.get("phase") == "during_eval"
-                   and t.get("sys")
-                   and t["sys"].get("cpu_percent") is not None
-            ]
-            if cpu_vals:
-                cpu_time_ns = max(cpu_vals)
-        except Exception:
-            cpu_usage_kb = None
-
-    gpu_usage_kb = None
-    if torch.cuda.is_available() and not force_cpu:
-        try:
-            torch.cuda.synchronize()
-            d = torch.cuda.current_device()
-            gpu_usage_kb = f"{int(torch.cuda.memory_allocated(d) / 1024)} kB"
-        except Exception:
-            gpu_usage_kb = None
-
-    cpu_cores = psutil.cpu_count(logical=True) if psutil else None
-    processors = [{"vendor_id": platform.processor() or None, "model": platform.machine() or None}]
-
+    print("Step 8: Building report...")
     final_report = {
         "model_name": model_name,
-        "device_type": get_device_type(),
+        "device_type": device_type,
         "os_version": platform.platform(),
-        "valid": len(errors) == 0,
+        "valid": True,
         "emulator": False,
-        "iterations": num_batches,
-        "error_message": errors[0] if errors else None,
-        "unit": torch.cuda.get_device_name(0) if device.type == "cuda" else (platform.processor() or "CPU"),
-        "duration": duration_ms,
-        "cpu_duration": cpu_duration,
+        "iterations": iterations,
+        "error_message": None,
+        "unit": gpu_name,
+        "duration": cpu_duration_ns,
+        "cpu_duration": cpu_duration_ns,
         "cpu_min_duration": cpu_min_duration,
         "cpu_max_duration": cpu_max_duration,
         "cpu_std_dev": cpu_std_dev,
-
-        "gpu_duration": gpu_duration,
+        "gpu_duration": gpu_duration_ns,
         "gpu_min_duration": gpu_min_duration,
         "gpu_max_duration": gpu_max_duration,
         "gpu_std_dev": gpu_std_dev,
-        "total_ram_kb": total_ram_kb,
-        "free_ram_kb": free_ram_kb,
-        "available_ram_kb": available_ram_kb,
-        "cached_kb": cached_kb,
-        "in_dim_0": in_dim_0,
-        "in_dim_1": in_dim_1,
-        "in_dim_2": in_dim_2,
-        "in_dim_3": in_dim_3,
-
+        "total_ram_kb": vm.total // 1024,
+        "free_ram_kb": vm.free // 1024,
+        "available_ram_kb": vm.available // 1024,
+        "cached_kb": getattr(vm, 'cached', 0) // 1024,
+        "in_dim_0": in_shape[0],
+        "in_dim_1": in_shape[2],
+        "in_dim_2": in_shape[3],
+        "in_dim_3": in_shape[1],
         "device_analytics": {
-            "timestamp": start_epoch,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
             "cpu_info": {
-                "cpu_cores": cpu_cores,
-                "processors": processors,
+                "cpu_cores": psutil.cpu_count(logical=True),
+                "processors": [{"vendor_id": platform.processor(), "model": platform.machine()}],
                 "arm_architecture": None
             },
             "timeline": timeline,
@@ -286,15 +231,97 @@ def run_inference(config: Optional[str],
                 "top_ops": [],
                 "profiler_traces": [],
                 "peak_cpu_rss_bytes": peak_cpu_rss,
-                "peak_gpu_mb": peak_gpu_mb,
-               # "metric_result": metric_result
+                "peak_gpu_mb": peak_gpu_mb
             }
         }
     }
 
-    ensure_outdir(outpath)
-    with open(outpath, "w", encoding="utf-8") as f:
-        json.dump(final_report, f, indent=2, default=str)
+    print("Step 9: Saving JSON output...")
+    os.makedirs(OUTPUT_BASE_PATH, exist_ok=True)
+    dataset_folder = f"{task}_{dataset}_{metric}_{model_name}"
+    save_dir = os.path.join(OUTPUT_BASE_PATH, dataset_folder)
+    os.makedirs(save_dir, exist_ok=True)
+    _, product = get_device_info()
+    device_file = f"{platform.system()}_{product}".replace(" ", "")
+    save_path = os.path.join(save_dir, f"{device_file}.json")
 
-    print(f"[inference_profiler] saved: {outpath}")
-    return outpath
+    try:
+        with open(save_path, "w", encoding="utf-8") as f:
+            json.dump(final_report, f, indent=2)
+        print(f"  ✓ Saved to: {save_path}")
+    except Exception as e:
+        print(f"  ✗ ERROR saving: {e}")
+        return
+
+    print(f"\n✓ SUCCESS!")
+    print(f"  Dataset:        {dataset} | Transform: {exact_prm['transform']}")
+    print(f"  Input shape:    {in_shape[2]}x{in_shape[3]} px, {in_shape[1]} ch")
+    print(f"  CPU time:       {cpu_duration_ns / 1_000_000:.2f} ms per iteration")
+    print(f"  GPU time:       {gpu_duration_ns / 1_000_000:.2f} ms per iteration")
+    print(f"  Peak GPU Mem:   {peak_gpu_mb:.2f} MB")
+    print(f"  Peak CPU Mem:   {peak_cpu_rss / (1024*1024):.2f} MB")
+    print(f"  Output: {save_path}\n")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Inference testing for 15K+ neural networks")
+    parser.add_argument("--model-name", type=str, default=None, help="Single model name")
+    parser.add_argument("--dataset", type=str, default=None, help="Override dataset (default: best-accuracy row)")
+    parser.add_argument("--batch", action="store_true", help="Run batch inference")
+    parser.add_argument("--limit", type=int, default=None, help="Limit number of models")
+    parser.add_argument("--skip", type=int, default=0, help="Skip first N models")
+    args = parser.parse_args()
+
+    if args.batch:
+        print("=" * 80)
+        print("BATCH MODE: Processing all models from database")
+        print(f"Output path: {OUTPUT_BASE_PATH}")
+        print("=" * 80)
+
+        try:
+            print("\nFetching model list from database...")
+            df_all = api.data(max_rows=None)
+            unique_models = sorted(df_all['nn'].unique().tolist())
+
+            total = len(unique_models)
+            print(f"Found {total} unique models in database\n")
+
+            if args.skip > 0:
+                unique_models = unique_models[args.skip:]
+                print(f"Skipped first {args.skip} models\n")
+
+            if args.limit:
+                unique_models = unique_models[:args.limit]
+
+            print(f"Processing {len(unique_models)} models...\n")
+
+            success_count = 0
+            fail_count = 0
+
+            for idx, model_name in enumerate(unique_models, 1):
+                print(f"[{idx}/{len(unique_models)}] Processing: {model_name}")
+                try:
+                    run_test_drive(model_name=model_name, dataset=args.dataset)
+                    success_count += 1
+                except Exception as e:
+                    print(f"  ✗ Error: {e}\n")
+                    fail_count += 1
+                    continue
+
+            print("\n" + "=" * 80)
+            print(f"BATCH COMPLETE: {success_count} successful, {fail_count} failed")
+            print(f"Output directory: {OUTPUT_BASE_PATH}")
+            print("=" * 80 + "\n")
+
+        except Exception as e:
+            print(f"✗ ERROR: {e}")
+
+    elif args.model_name:
+        print(f"Output path: {OUTPUT_BASE_PATH}\n")
+        run_test_drive(model_name=args.model_name, dataset=args.dataset)
+
+    else:
+        print("\nUSAGE:")
+        print("  python inference.py --model-name AlexNet")
+        print("  python inference.py --model-name AlexNet --dataset cifar-10")
+        print("  python inference.py --batch --limit 100")
