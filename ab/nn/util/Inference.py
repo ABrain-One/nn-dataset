@@ -9,12 +9,14 @@ import torch
 import subprocess
 from datetime import datetime
 
+from ab.nn.util.Const import stat_run_dir
 from ab.nn.util.Util import sample_system, sample_nvidia_smi, get_in_shape, first_tensor
 from ab.nn import api
 from ab.nn.util.db.Util import get_attr
 from ab.nn.util.Loader import load_dataset
 
-OUTPUT_BASE_PATH = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "ab", "nn", "stat", "run", "pt", "fp32"))
+OUTPUT_BASE_PATH = stat_run_dir / 'pt' / 'fp32'
+
 def get_device_info():
     os_name = platform.system()
     try:
