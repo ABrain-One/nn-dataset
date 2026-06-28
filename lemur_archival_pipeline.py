@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+from ab.nn.util.Const import ab_root_path, nn_dir, stat_train_dir, transform_dir, db_file
 
 import json
 import pandas as pd
@@ -47,15 +48,9 @@ log = logging.getLogger("lemur-pipeline")
 # ---------------------------------------------------------------------------
 # Paths / Constants
 # ---------------------------------------------------------------------------
-REPO_ROOT = Path(__file__).resolve().parent
-
-MODELS_DIR = REPO_ROOT / "ab" / "nn" / "nn"
-STATS_DIR = REPO_ROOT / "ab" / "nn" / "stat" / "train"
-TRANSFORMS_DIR = REPO_ROOT / "ab" / "nn" / "transform"
-DB_PATH = REPO_ROOT / "db" / "ab.nn.db"
 
 TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
-AUDIT_XLSX = REPO_ROOT / f"LEMUR_Deep_Audit_{TIMESTAMP}.xlsx"
+AUDIT_XLSX = ab_root_path / f"LEMUR_Deep_Audit_{TIMESTAMP}.xlsx"
 
 # Reuse the project's existing HF/DB utilities instead of reimplementing them.
 from ab.nn.util.Const import add_version  # noqa: E402
@@ -65,7 +60,7 @@ from ab.nn.util.hf.DB_from_HF import repo_id as HF_REPO_ID  # noqa: E402
 
 # Versioned compressed filename, e.g. db/ab.nn.zst-2.2.9 (version comes from the
 # project's `version` file via add_version()).
-DB_ZST = DB_PATH.parent / add_version("ab.nn.zst")
+DB_ZST = db_file.parent / add_version("ab.nn.zst")
 
 HF_TOKEN = os.environ.get("HF_TOKEN")  # or pass --HF_TOKEN on the command line
 
@@ -110,18 +105,18 @@ def phase0_inventory() -> Tuple[Dict[str, ModelEntry], List[StatFolder], Dict[st
 
     # --- Models -----------------------------------------------------------
     models: Dict[str, ModelEntry] = {}
-    if MODELS_DIR.exists():
-        for py_file in MODELS_DIR.glob("*.py"):
+    if nn_dir.exists():
+        for py_file in nn_dir.glob("*.py"):
             if py_file.stem.startswith("__"):
                 continue
             models[py_file.stem] = ModelEntry(name=py_file.stem, py_path=py_file)
     else:
-        log.warning("Models directory not found: %s", MODELS_DIR)
+        log.warning("Models directory not found: %s", nn_dir)
 
     # --- Statistic folders --------------------------------------------------
     stat_folders: List[StatFolder] = []
-    if STATS_DIR.exists():
-        for folder in STATS_DIR.iterdir():
+    if stat_train_dir.exists():
+        for folder in stat_train_dir.iterdir():
             if not folder.is_dir():
                 continue
             # Folder naming convention: <task>_<dataset>_<metric(s)>_<ModelName>
@@ -148,17 +143,17 @@ def phase0_inventory() -> Tuple[Dict[str, ModelEntry], List[StatFolder], Dict[st
             sf.json_files = sorted(folder.glob("*.json"))
             stat_folders.append(sf)
     else:
-        log.warning("Stats directory not found: %s", STATS_DIR)
+        log.warning("Stats directory not found: %s", stat_train_dir)
 
     # --- Transforms ----------------------------------------------------------
     transforms: Dict[str, TransformEntry] = {}
-    if TRANSFORMS_DIR.exists():
-        for py_file in TRANSFORMS_DIR.glob("*.py"):
+    if transform_dir.exists():
+        for py_file in transform_dir.glob("*.py"):
             if py_file.stem.startswith("__"):
                 continue
             transforms[py_file.stem] = TransformEntry(name=py_file.stem, py_path=py_file)
     else:
-        log.warning("Transforms directory not found: %s", TRANSFORMS_DIR)
+        log.warning("Transforms directory not found: %s", transform_dir)
 
     log.info(
         "Phase 0 complete: %d models, %d stat folders, %d transforms",
@@ -507,16 +502,16 @@ def phase5_compress_db() -> bool:
     cores) so behavior matches the rest of the codebase. The output filename
     already carries the project version via `add_version()`.
     """
-    log.info("Phase 5: Compressing %s -> %s", DB_PATH, DB_ZST)
+    log.info("Phase 5: Compressing %s -> %s", db_file, DB_ZST)
 
-    if not DB_PATH.exists():
-        log.error("Database file not found: %s", DB_PATH)
+    if not db_file.exists():
+        log.error("Database file not found: %s", db_file)
         return False
 
     try:
         # remove=False: never delete the local source DB during compression;
         # actual deletion is governed solely by Phase 7's safety conditions.
-        zst_compress(DB_PATH, DB_ZST, False)
+        zst_compress(db_file, DB_ZST, False)
         log.info("Phase 5 complete: %s (%.2f MB)", DB_ZST, DB_ZST.stat().st_size / (1024 * 1024))
         return True
     except Exception as exc:  # pragma: no cover - defensive
