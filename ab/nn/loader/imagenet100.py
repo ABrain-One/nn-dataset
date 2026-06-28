@@ -1,5 +1,4 @@
 from torchvision.datasets import ImageFolder
-from torchvision import transforms
 from ab.nn.util.Const import data_dir
 
 __norm_mean = (0.485, 0.456, 0.406)
@@ -24,12 +23,7 @@ def __merge_train(merged_dir):
                     link.symlink_to(cls.resolve())
 
 def loader(transform_fn, task):
-    transform = transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
-        transform_fn((__norm_mean, __norm_dev)),
-    ])
-
+    transform = transform_fn((__norm_mean, __norm_dev))
     if not __dataset_dir.exists() or not any(__dataset_dir.iterdir()):
         __download()
 
