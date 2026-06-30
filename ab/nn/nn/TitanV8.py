@@ -50,28 +50,34 @@ class EdgeConvBlock(nn.Module):
 
 # --- 2. UPGRADED TITAN V8 MODEL ---
 class TitanV8(nn.Module):
-    def __init__(self, channels=48):
+    def __init__(self, channels=64):
         super(TitanV8, self).__init__()
         self.entry = nn.Conv2d(3, channels, kernel_size=3, padding=1)
-        self.block1 = EdgeConvBlock(channels)
-        self.block2 = EdgeConvBlock(channels)
-        self.block3 = EdgeConvBlock(channels)
-        self.block4 = EdgeConvBlock(channels)
-        self.block5 = EdgeConvBlock(channels)
-        self.block6 = EdgeConvBlock(channels)
+        
+        # 16 sequential EdgeConvBlock layers
+        blocks = []
+        for _ in range(16):
+            blocks.append(EdgeConvBlock(channels))
+        self.body = nn.Sequential(*blocks)
+        
+        # The final exit nn.Conv2d layer outputs 3 * (3**2) = 27 channels for RGB output
         self.exit = nn.Conv2d(channels, 27, kernel_size=3, padding=1)
         self.pixel_shuffle = nn.PixelShuffle(3)
 
     def forward(self, x):
-        out_entry = self.entry(x)
-        out = self.block1(out_entry)
-        out = self.block2(out)
-        out = self.block3(out)
-        out = self.block4(out)
-        out = self.block5(out)
-        out = self.block6(out)
-        out = out + out_entry 
+        # 2. Global Residual Connection
+        initial_features = self.entry(x)
+        
+        out = self.body(initial_features)
+        
+        # Add initial tensor back BEFORE final exit
+        out = out + initial_features
+        
         out = self.exit(out)
+        
+        # 3. Anti-Overflow Dynamic Clipping
+        out = torch.clamp(out, min=0.0, max=255.0)
+        
         return self.pixel_shuffle(out)
 
 class CharbonnierLoss(nn.Module):
@@ -89,11 +95,11 @@ class Net(nn.Module):
         self.scale = 3
         self.current_epoch = 0
         
-        # 1. Student Model (TitanV8 with 6 EdgeConvBlocks, 48 channels)
-        self.model = TitanV8(channels=48).to(device)
+        # 1. Student Model (TitanV8 with 16 EdgeConvBlocks, 64 channels)
+        self.model = TitanV8(channels=64).to(device)
         
         # Feature KD Setup (Adapter & Hooks Dict)
-        self.feature_adapter = nn.Conv2d(48, 180, 1).to(device)
+        self.feature_adapter = nn.Conv2d(64, 180, 1).to(device)
         self.features = {'student': None, 'teacher': None}
         
         # 2. Godzilla Teacher (frozen, f=180)
@@ -116,35 +122,28 @@ class Net(nn.Module):
         return self.model.load_state_dict(state_dict, strict=strict)
 
     def train_setup(self, prm):
-        # --- WARM RESTART SETUP ---
-        lr = 5e-5  # Reduced LR for fine-tuning
+        # --- FRESH START SETUP ---
+        lr = 2e-4  # Increased LR for training from scratch
         weight_decay = 1e-4
         
-        # 1. Load Saved Student Weights (Warm Restart)
-        student_path = "out/ckpt/TitanV5/best_model.pth"
-        if os.path.exists(student_path):
-            state_dict = torch.load(student_path, map_location=self.device)
-            state_dict = {k.replace('model.', ''): v for k, v in state_dict.items() if k.startswith('model.') or not k.startswith('teacher')}
-            self.model.load_state_dict(state_dict, strict=False)
-            print(f"🔥 [Warm Restart] TitanV8 Loaded from {student_path} | Ready for Fine-tuning!")
-        else:
-            print(f"⚠️ [Warm Restart] WARNING: Student weights NOT found at {student_path}!")
+        print("🚀 [Fresh Start] Training TitanV8 from scratch! No student weights loaded.")
 
-        # 2. Fresh Adam Optimizer & Scheduler (Include Adapter)
+        # 1. Fresh Adam Optimizer & Scheduler (Include Adapter)
         trainable_params = list(self.model.parameters()) + list(self.feature_adapter.parameters())
         self.optimizer = torch.optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=400, eta_min=1e-6)
         
-        # 3. Reset Epoch
+        # 2. Reset Epoch
         self.current_epoch = 0
 
-        # 4. PyTorch Forward Hooks Setup
+        # 3. PyTorch Forward Hooks Setup
         def get_features(name):
             def hook(model, input, output):
                 self.features[name] = output
             return hook
             
-        self.model.block6.register_forward_hook(get_features('student'))
+        # Hook on the last (16th) block of the nn.Sequential body
+        self.model.body[-1].register_forward_hook(get_features('student'))
         self.teacher.tail_conv.register_forward_hook(get_features('teacher'))
 
         # 5. Load Teacher Weights (Hamesha ki tarah)
