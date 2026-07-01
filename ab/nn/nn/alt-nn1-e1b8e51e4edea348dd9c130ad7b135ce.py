@@ -39,7 +39,7 @@ class Net(nn.Module):
             torch.nn.utils.clip_grad_norm_(self.parameters(), 3)
             self.optimizer.step()
 
-    def __init__(self, in_shape: tuple, out_shape: tuple, params: dict, device: torch.device) -> None:
+    def __init__(self, in_shape: tuple, out_shape: tuple, prm: dict, device: torch.device) -> None:
         super().__init__()
         self.device = device
         layers = []
@@ -81,7 +81,7 @@ class Net(nn.Module):
         self.features = nn.Sequential(*layers)
         self.avgpool = nn.AdaptiveAvgPool2d((6, 6))
 
-        dropout_p = params['dropout']
+        dropout_p = prm['dropout']
         classifier_input_features = in_channels * 6 * 6
         self.classifier = nn.Sequential(
             nn.Dropout(p=dropout_p),
