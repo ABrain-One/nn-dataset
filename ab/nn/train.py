@@ -65,6 +65,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
         print(f"{idx}. {sub_config}")
     all_trials_start = time.time()
     completed_trials = 0
+    last_accuracy = None
     for sub_config in sub_configs:
         sub_config_ext = sub_config + (epoch_max,)
         n_optuna_trials_left, n_passed_trials = remaining_trials(sub_config_ext, n_optuna_trials)
@@ -79,7 +80,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
             continue_study = True
             max_batch_binary_power_local = max_batch_binary_power
             _, dataset, _, nn = sub_config
-            last_accuracy = None
+
             while (continue_study and max_batch_binary_power_local >= min_batch_binary_power and fail_iterations > -1
                    and remaining_trials(sub_config_ext, n_expected_trials)[0] > 0):
                 continue_study = False
@@ -112,7 +113,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
 
                     study.optimize(objective, n_trials=n_optuna_trials_left)
                     completed_trials += n_optuna_trials_left
-                    return last_accuracy
+                    break
                 except CudaOutOfMemory as e:
                     max_batch_binary_power_local = e.batch_size_power() - 1
                     print(f"Max batch is decreased to {max_batch(max_batch_binary_power_local)} due to a CUDA Out of Memory Exception for model '{nn}'")
@@ -125,6 +126,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
     print(f"\n{'='*60}")
     print(f"  All trials complete | {completed_trials} trials | Total time: {total_elapsed/60:.1f} min ({total_elapsed:.0f}s)")
     print(f"{'='*60}\n")
+    return last_accuracy
 
 
 if __name__ == "__main__":
