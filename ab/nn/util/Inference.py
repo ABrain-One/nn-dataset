@@ -10,7 +10,7 @@ import subprocess
 from datetime import datetime
 
 from ab.nn.util.Const import stat_run_dir
-from ab.nn.util.Util import sample_system, sample_nvidia_smi, get_in_shape, first_tensor
+from ab.nn.util.Util import torch_device, sample_system, sample_nvidia_smi, get_in_shape, first_tensor
 from ab.nn import api
 from ab.nn.util.db.Util import get_attr
 from ab.nn.util.Loader import load_dataset
@@ -21,23 +21,17 @@ def get_device_info():
     os_name = platform.system()
     try:
         if os_name == "Windows":
-            result = subprocess.run(
-                ["wmic", "computersystem", "get", "Model"],
-                capture_output=True, text=True
-            )
+            result = subprocess.run(["wmic", "computersystem", "get", "Model"], capture_output=True, text=True)
             product = result.stdout.split("\n")[1].strip()
             vendor = ""
         elif os_name == "Darwin":
-            result = subprocess.run(
-                ["system_profiler", "SPHardwareDataType"],
-                capture_output=True, text=True
-            )
+            result = subprocess.run(["system_profiler", "SPHardwareDataType"], capture_output=True, text=True)
             product = ""
             vendor = ""
             for line in result.stdout.splitlines():
                 if "Model Name" in line:
                     product = line.split(":")[1].strip()
-        else:  # Linux
+        else:
             with open("/sys/class/dmi/id/sys_vendor") as f:
                 vendor = f.read().strip()
             with open("/sys/class/dmi/id/product_name") as f:
@@ -46,27 +40,25 @@ def get_device_info():
     except Exception:
         return "", platform.node()
 
-def get_model_params_from_db(model_name, dataset=None):
+def get_model_params_from_db(model_name, task=None, dataset=None):
     try:
-        if dataset:
+        if task and dataset:
+            df_data = api.data(nn=model_name, task=task, dataset=dataset, only_best_accuracy=True)
+        elif dataset:
             df_data = api.data(nn=model_name, dataset=dataset, only_best_accuracy=True)
+        elif task:
+            df_data = api.data(nn=model_name, task=task, only_best_accuracy=True)
         else:
             df_data = api.data(nn=model_name, only_best_accuracy=True)
         row = df_data.sort_values('accuracy', ascending=False).iloc[0]
         prm = row['prm']
-        print(f"  ✓ Loaded from DB: task={row['task']}, dataset={row['dataset']}, "
-              f"transform={prm['transform']}, accuracy={row['accuracy']:.4f}")
-        return {
-            "prm": prm,
-            "task": row['task'],
-            "dataset": row['dataset'],
-            "metric": row['metric']
-        }
+        print(f"  ✓ Loaded from DB: task={row['task']}, dataset={row['dataset']}, transform={prm['transform']}, accuracy={row['accuracy']:.4f}")
+        return {"prm": prm, "task": row['task'], "dataset": row['dataset'], "metric": row['metric']}
     except Exception as e:
         print(f"  ✗ ERROR: {e}")
         raise
 
-def run_test_drive(model_name, dataset=None):
+def run_test_drive(model_name, task=None, dataset=None):
     print(f"\n{'='*80}")
     print(f"Starting Inference: {model_name}")
     print(f"{'='*80}")
@@ -74,7 +66,7 @@ def run_test_drive(model_name, dataset=None):
     gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
 
     print("Step 1: Fetching model from database...")
-    model_data = get_model_params_from_db(model_name, dataset=dataset)
+    model_data = get_model_params_from_db(model_name, task=task, dataset=dataset)
     exact_prm = model_data["prm"]
     task = model_data["task"]
     dataset = model_data["dataset"]
@@ -102,19 +94,9 @@ def run_test_drive(model_name, dataset=None):
 
     print("Step 4: Taking system snapshot (before)...")
     timeline = []
-    timeline.append({
-        "phase": "before_eval",
-        "ts": datetime.utcnow().isoformat() + "Z",
-        "sys": sample_system(),
-        "gpus": sample_nvidia_smi()
-    })
+    timeline.append({"phase": "before_eval", "ts": datetime.utcnow().isoformat() + "Z", "sys": sample_system(), "gpus": sample_nvidia_smi()})
 
-    cpu_model = model_net(
-        in_shape=in_shape,
-        out_shape=out_shape,
-        prm=exact_prm,
-        device=torch.device("cpu")
-    ).cpu()
+    cpu_model = model_net(in_shape=in_shape, out_shape=out_shape, prm=exact_prm, device=torch.device("cpu")).cpu()
     cpu_model.eval()
     cpu_inputs = sample_tensor.cpu()
 
@@ -123,12 +105,8 @@ def run_test_drive(model_name, dataset=None):
         for _ in range(10):
             _ = cpu_model(cpu_inputs)
 
-    gpu_model = model_net(
-        in_shape=in_shape,
-        out_shape=out_shape,
-        prm=exact_prm,
-        device=torch.device("cuda")
-    ).cuda()
+    gpu_model = model_net(in_shape=in_shape, out_shape=out_shape, prm=exact_prm, device=torch.device("cuda")).cuda()
+    gpu_model.to(torch_device())
     gpu_model.eval()
     gpu_inputs = sample_tensor.cuda()
 
@@ -170,12 +148,7 @@ def run_test_drive(model_name, dataset=None):
     gpu_std_dev = float(statistics.stdev(gpu_runs)) if len(gpu_runs) > 1 else 0.0
 
     print("Step 7: Taking system snapshot (after)...")
-    timeline.append({
-        "phase": "after_eval",
-        "ts": datetime.utcnow().isoformat() + "Z",
-        "sys": sample_system(),
-        "gpus": sample_nvidia_smi()
-    })
+    timeline.append({"phase": "after_eval", "ts": datetime.utcnow().isoformat() + "Z", "sys": sample_system(), "gpus": sample_nvidia_smi()})
 
     peak_cpu_rss = 0
     peak_gpu_mb = 0.0
@@ -229,12 +202,7 @@ def run_test_drive(model_name, dataset=None):
                 "arm_architecture": None
             },
             "timeline": timeline,
-            "profile": {
-                "top_ops": [],
-                "profiler_traces": [],
-                "peak_cpu_rss_bytes": peak_cpu_rss,
-                "peak_gpu_mb": peak_gpu_mb
-            }
+            "profile": {"top_ops": [], "profiler_traces": [], "peak_cpu_rss_bytes": peak_cpu_rss, "peak_gpu_mb": peak_gpu_mb}
         }
     }
 
@@ -268,7 +236,8 @@ def run_test_drive(model_name, dataset=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Inference testing for 15K+ neural networks")
     parser.add_argument("--model-name", type=str, default=None, help="Single model name")
-    parser.add_argument("--dataset", type=str, default=None, help="Override dataset (default: best-accuracy row)")
+    parser.add_argument("--task", type=str, default=None, help="Filter by task (e.g. img-classification)")
+    parser.add_argument("--dataset", type=str, default=None, help="Filter by dataset (e.g. cifar-10, coco)")
     parser.add_argument("--batch", action="store_true", help="Run batch inference")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of models")
     parser.add_argument("--skip", type=int, default=0, help="Skip first N models")
@@ -277,12 +246,14 @@ if __name__ == "__main__":
     if args.batch:
         print("=" * 80)
         print("BATCH MODE: Processing all models from database")
+        print(f"  Task filter:    {args.task or 'ALL'}")
+        print(f"  Dataset filter: {args.dataset or 'ALL'}")
         print(f"Output path: {OUTPUT_BASE_PATH}")
         print("=" * 80)
 
         try:
             print("\nFetching model list from database...")
-            df_all = api.data(max_rows=None)
+            df_all = api.data(max_rows=None, task=args.task, dataset=args.dataset)
             unique_models = sorted(df_all['nn'].unique().tolist())
 
             total = len(unique_models)
@@ -297,13 +268,29 @@ if __name__ == "__main__":
 
             print(f"Processing {len(unique_models)} models...\n")
 
+            _, product = get_device_info()
+            device_file = f"{platform.system()}_{product}".replace(" ", "")
+
             success_count = 0
             fail_count = 0
+            skip_count = 0
 
             for idx, model_name in enumerate(unique_models, 1):
                 print(f"[{idx}/{len(unique_models)}] Processing: {model_name}")
+
+                # Skip if output file already exists
+                existing = [f for f in os.listdir(OUTPUT_BASE_PATH)
+                            if os.path.isdir(os.path.join(OUTPUT_BASE_PATH, f)) and model_name in f]
+                if existing:
+                    check_path = os.path.join(OUTPUT_BASE_PATH, existing[0], f"{device_file}.json")
+                    if os.path.exists(check_path):
+                        print(f"  ⏭ Skipping — output already exists\n")
+                        skip_count += 1
+                        success_count += 1
+                        continue
+
                 try:
-                    run_test_drive(model_name=model_name, dataset=args.dataset)
+                    run_test_drive(model_name=model_name, task=args.task, dataset=args.dataset)
                     success_count += 1
                 except Exception as e:
                     print(f"  ✗ Error: {e}\n")
@@ -311,7 +298,7 @@ if __name__ == "__main__":
                     continue
 
             print("\n" + "=" * 80)
-            print(f"BATCH COMPLETE: {success_count} successful, {fail_count} failed")
+            print(f"BATCH COMPLETE: {success_count} successful ({skip_count} skipped), {fail_count} failed")
             print(f"Output directory: {OUTPUT_BASE_PATH}")
             print("=" * 80 + "\n")
 
@@ -320,10 +307,10 @@ if __name__ == "__main__":
 
     elif args.model_name:
         print(f"Output path: {OUTPUT_BASE_PATH}\n")
-        run_test_drive(model_name=args.model_name, dataset=args.dataset)
+        run_test_drive(model_name=args.model_name, task=args.task, dataset=args.dataset)
 
     else:
         print("\nUSAGE:")
-        print("  python inference.py --model-name AlexNet")
-        print("  python inference.py --model-name AlexNet --dataset cifar-10")
-        print("  python inference.py --batch --limit 100")
+        print("  python Inference.py --model-name AlexNet")
+        print("  python Inference.py --batch --task img-classification --dataset cifar-10")
+        print("  python Inference.py --batch --task img-captioning --dataset coco")
