@@ -5,8 +5,6 @@ import datasets
 # import mlx.nn as nn
 import numpy as np
 from huggingface_hub import snapshot_download
-from pydantic import BaseModel
-from transformers import BertTokenizer
 
 import torch, torch.nn as nn
 

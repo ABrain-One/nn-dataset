@@ -19,7 +19,7 @@ from ab.nn.util.Util import *
 from ab.nn.util.db.Calc import save_results
 from ab.nn.util.db.Read import supported_transformers
 from ab.nn.util.db.Util import *
-
+import json
 debug = False
 
 
@@ -30,7 +30,7 @@ class EpochMetrics:
     # Loss metrics
     train_loss: float = 0.0
     test_loss: float = 0.0
-    # Accuracy metrics  
+    # Accuracy metrics
     train_accuracy: float = 0.0
     test_accuracy: float = 0.0
     # Training dynamics
@@ -111,7 +111,7 @@ def get_current_resource_usage() -> dict:
 
 def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout,
                      max_dropout, min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, epoch_max,
-                     pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights):
+                     pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights,layer_analysis=False):
     task, dataset_name, metric, nn = config
     try:
         # Load model
@@ -143,7 +143,7 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
         # Load dataset
         out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset_name, transform_name)
         return Train(config, out_shape, minimum_accuracy, batch, nn_mod('nn', nn), task, train_set, test_set, metric,
-                     num_workers, prms).train_n_eval(epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set)
+                     num_workers, prms,layer_analysis=layer_analysis).train_n_eval(epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set)
 
     except Exception as e:
         accuracy_duration = 0.0, 0.0, 1
@@ -159,7 +159,9 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
             print(f"Estimated training time, minutes: {format_time(e.estimated_training_time)}, but limit {format_time(e.epoch_limit_minutes)}.")
             return (e.epoch_limit_minutes / e.estimated_training_time) / 1e5, 0, e.duration
         else:
-            import traceback; traceback.print_exc(); print(f"error '{nn}': failed to train. Error: {e}")
+            import traceback
+            traceback.print_exc()
+            print(f"error '{nn}': failed to train. Error: {e}")
             if fail_iterations < 0:
                 return accuracy_duration
             else:
@@ -168,7 +170,7 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
 
 class Train:
     def __init__(self, config: tuple[str, str, str, str], out_shape: tuple, minimum_accuracy: float, batch: int, nn_module, task,
-                 train_dataset, test_dataset, metric, num_workers, prm: dict, save_to_db=True, is_code=False):
+                 train_dataset, test_dataset, metric, num_workers, prm: dict, save_to_db=True, is_code=False,layer_analysis: bool = False):
         """
         Universal class for training CV, Text Generation and other models.
         :param config: Tuple of names (Task, Dataset, Metric, Model).
@@ -228,6 +230,8 @@ class Train:
         
         # System information (collected once at initialization)
         self.system_info = get_system_info()
+        self.layer_analysis = layer_analysis
+        self._layer_data = {}
 
     def _get_loss_function(self):
         """Build loss function based on the task or use model's custom criterion."""
@@ -367,8 +371,11 @@ class Train:
             # Use primary metric value from dict if available, otherwise keep scalar from eval()
             accuracy = all_metric_results.get(self.primary_metric, accuracy)
             accuracy = 0.0 if math.isnan(accuracy) or math.isinf(accuracy) else accuracy
+
             duration = time.time_ns() - start_time
-            epoch_duration = (time.time_ns() - epoch_start_time) / 1e9  # seconds
+            duration_seconds = duration / 1e9
+
+            epoch_duration = (time.time_ns() - epoch_start_time) / 1e9
 
             # Calculate throughput
             total_samples = len(self.train_dataset)
@@ -398,9 +405,41 @@ class Train:
             print(f"  Train Acc: {train_accuracy:.4f}, Test Acc: {accuracy:.4f}")
             if lr_now and grad_norm and samples_per_second:
                 print(f"  LR: {lr_now:.6f}, Grad Norm: {grad_norm:.4f}, Throughput: {samples_per_second:.1f} samples/s")
+                # Layer-wise analysis (epochs 1-5, then every 5)
+            layer_summary = {}
+            layer_table = {}
+            layer_result = {}
+            if self.layer_analysis and (epoch <= 5 or epoch % 5 == 0):
+                try:
+                    from ab.nn.util.LayerAnalysis import LayerAnalyzer
+                    analyzer = LayerAnalyzer(self.model, self.device)
 
+                    layer_result = analyzer.full_analysis(
+                        self.train_loader, self.loss_fn, num_batches=1)
+
+
+                    layer_table = analyzer.build_layer_table(layer_result)
+
+                    layer_summary = analyzer.summarize(layer_result)
+                    layer_summary['layer_id_map'] = layer_result.get('layer_types', {})
+
+                    print(f"  Layer summary: {layer_summary}")
+                    print(
+                        f"  Layer result keys/errors: { {k: v.get('error') if isinstance(v, dict) and 'error' in v else 'ok' for k, v in layer_result.items()} }"
+                    )
+
+
+
+                    print(f"  Layer analysis saved (epoch {epoch})")
+
+                except ImportError:
+                    print("[WARN] LayerAnalysis.py not found, disabling layer analysis")
+                    self.layer_analysis = False
+                except Exception as e:
+                    print(f"[WARN] Layer analysis failed (epoch {epoch}): {e}")
             # The accuracy-to-time metric is not stored in the database as it can change over time and can be quickly calculated from saved values.
             accuracy_to_time = accuracy_to_time_metric(accuracy, self.minimum_accuracy, duration)
+
             if not good(accuracy, self.minimum_accuracy, duration):
                 if 'caption' in self.task:
                     print(f"[WARN] Accuracy {accuracy} is below the minimum accepted accuracy {self.minimum_accuracy}. Continuing training...")
@@ -409,6 +448,8 @@ class Train:
                                             f"Accuracy is too low: {accuracy}."
                                             f" The minimum accepted accuracy for the '{self.config[1]}"
                                             f"' dataset is {self.minimum_accuracy}.")
+
+
             if save_pth_weights or save_onnx_weights:
                 save_if_best(self.model, self.model_name, accuracy, save_pth_weights, save_onnx_weights, train_set, self.num_workers, save_path=save_path)
 
@@ -418,42 +459,107 @@ class Train:
             
             # Collect current resource usage
             resource_usage = get_current_resource_usage()
-            
+            # Create train_stat group with new parameters
+            train_stat_group = {
+                'train_loss': train_loss,
+                'test_loss': test_loss,
+                'train_accuracy': train_accuracy,
+                'gradient_norm': grad_norm,
+                'samples_per_second': samples_per_second,
+                'best_accuracy': self.best_accuracy,
+                'best_epoch': self.best_epoch,
+                'epoch_max': epoch_max,
+                'cpu_count': self.system_info.get('cpu_count'),
+                'cpu_type': self.system_info.get('cpu_type'),
+                'cpu_usage_percent': resource_usage.get('cpu_usage_percent'),
+                'total_ram_kb': self.system_info.get('total_ram_kb'),
+                'occupied_ram_kb': resource_usage.get('occupied_ram_kb'),
+                'ram_usage_percent': resource_usage.get('ram_usage_percent'),
+                'gpu_type': self.system_info.get('gpu_type'),
+                'gpu_memory_kb': get_gpu_memory_kb(),
+                'gpu_total_memory_kb': self.system_info.get('gpu_total_memory_kb'),
+                'occupied_gpu_memory_kb': resource_usage.get('occupied_gpu_memory_kb'),
+                'gpu_memory_usage_percent': resource_usage.get('gpu_memory_usage_percent'),
+            }
+
             prm = merge_prm(self.prm, {
-                                          'uid': uuid4(only_prm),
-                                          'duration': duration,
-                                          'accuracy': accuracy,
-                                          # Loss metrics
-                                          'train_loss': train_loss,
-                                          'test_loss': test_loss,
-                                          # Accuracy metrics
-                                          'train_accuracy': train_accuracy,
-                                          # Training dynamics
-                                          'gradient_norm': grad_norm,
-                                          # Timing metrics
-                                          'samples_per_second': samples_per_second,
-                                          # Best tracking
-                                          'best_accuracy': self.best_accuracy,
-                                          'best_epoch': self.best_epoch,
-                                      } 
-                                      # System information
-                                      | self.system_info
-                                      # Current resource usage
-                                      | resource_usage
-                                      # GPU memory (if available)
-                                      | ({'gpu_memory_kb': get_gpu_memory_kb()} if get_gpu_memory_kb() is not None else {})
-                                      # Multi-metrics implementations
-                                      | {f'metric_{k}': v for k, v in all_metric_results.items()})
+                'uid': uuid4(only_prm),
+                'duration': duration,
+                'duration_seconds': round(duration_seconds, 2),
+                'accuracy': accuracy,
+                'train_stat': train_stat_group,
+            }
+                            | {f'metric_{k}': v for k, v in all_metric_results.items()})
+
+            # Build JSON export once
+            prm_json = dict(prm)
+
+            # Promote core experiment info for readability
+            prm_json["task"] = self.config[0]
+            prm_json["dataset"] = self.config[1]
+            prm_json["metric"] = self.config[2]
+            prm_json["model"] = self.config[3] if len(self.config) > 3 else self.model_name
+
+            # Make layer statistics human-readable without losing information
+            if layer_summary or layer_result or layer_table:
+                prm_json["layer_stat"] = {
+                    "summary": layer_summary,
+                    "layers": [
+                        {
+                            "name": name,
+                            **row,
+                        }
+                        for name, row in layer_table.items()
+                    ],
+                    "raw_analysis": layer_result,
+                }
 
             if self.save_to_db:
-                if self.is_code:  # We don't want the filename to contain full codes
+                if self.is_code:
                     if self.save_path:
-                        save_results(self.config + (epoch,), join(self.save_path, f"{epoch}.json"), prm)
+                        save_results(
+                            self.config + (epoch,),
+                            join(self.save_path, f"{epoch}.json"),
+                            prm_json,
+                        )
+
+                        stat_id = DB_Write.save_results(
+                            self.config + (epoch,),
+                            prm,
+                            nn_code=getattr(self, 'nn_code', None)
+                        )
+                        
+                        if layer_table:
+                            DB_Write.save_layer_stat(
+                                epoch,
+                                layer_table,
+                                stat_id,
+                                self.config[2],
+                            )
                     else:
-                        print(f"[WARN]parameter `save_Path` set to null, the statics will not be saved into a file.")
-                else:  # Legacy save result codes in file
-                    save_results(self.config + (epoch,), join(self.save_path, f"{epoch}.json"), prm)
-                    DB_Write.save_results(self.config + (epoch,), prm)  # Separated from Calc.save_results()
+                        print(
+                            "[WARN] parameter `save_path` set to null, the statistics will not be saved into a file."
+                        )
+
+                else:
+                    save_results(
+                        self.config + (epoch,),
+                        join(self.save_path, f"{epoch}.json"),
+                        prm_json,
+                    )
+
+                    stat_id = DB_Write.save_results(
+                        self.config + (epoch,),
+                        prm,
+                    )
+
+                    if layer_table:
+                        DB_Write.save_layer_stat(
+                            epoch,
+                            layer_table,
+                            stat_id,
+                            self.config[2],
+                        )
 
         # Save training summary at the end
         if save_path and self.epoch_history:
@@ -511,6 +617,8 @@ class Train:
         except Exception as e:
             print(f"[WARN] Failed to save training summary: {e}")
 
+
+
     def eval(self, test_loader):
         """Evaluation with standardized metric interface - supports multiple metrics"""
         if debug:
@@ -545,7 +653,7 @@ class Train:
 
 
 def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Union[str, None] = None, save_path: Union[str, None] = None, export_onnx=False,
-              epoch_limit_minutes=default_epoch_limit_minutes, transform_dir=None):
+              epoch_limit_minutes=default_epoch_limit_minutes, layer_analysis=False, transform_dir=None):
     """
     train the model with the given code and hyperparameters and evaluate it.
 
@@ -592,7 +700,9 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             num_workers=num_workers,
             prm=prm,
             save_to_db=save_to_db,
+            layer_analysis=layer_analysis,
             is_code=True)
+        trainer.nn_code = nn_code
         epoch = prm['epoch']
         accuracy, accuracy_to_time, duration = trainer.train_n_eval(epoch, epoch_limit_minutes, False, export_onnx, train_set, save_path=save_path)
         if save_to_db:

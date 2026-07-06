@@ -17,7 +17,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
          min_dropout: float = default_min_dropout, max_dropout: float = default_max_dropout,
          transform: str | tuple = None, nn_fail_attempts: int = default_nn_fail_attempts, random_config_order: bool = default_random_config_order,
          num_workers: int = default_num_workers, pretrained: int = default_pretrained, epoch_limit_minutes: int = default_epoch_limit_minutes,
-         train_missing_pipelines: bool = default_train_missing_pipelines, save_pth_weights: bool = default_save_pth_weights, save_onnx_weights: int = default_save_onnx_weights):
+         train_missing_pipelines: bool = default_train_missing_pipelines, save_pth_weights: bool = default_save_pth_weights, save_onnx_weights: int = default_save_onnx_weights,layer_analysis: bool = default_layer_analysis):
     """
     Main function for training models using Optuna optimization.
 
@@ -65,6 +65,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
         print(f"{idx}. {sub_config}")
     all_trials_start = time.time()
     completed_trials = 0
+    last_accuracy = None
     for sub_config in sub_configs:
         sub_config_ext = sub_config + (epoch_max,)
         n_optuna_trials_left, n_passed_trials = remaining_trials(sub_config_ext, n_optuna_trials)
@@ -79,7 +80,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
             continue_study = True
             max_batch_binary_power_local = max_batch_binary_power
             _, dataset, _, nn = sub_config
-            last_accuracy = None
+
             while (continue_study and max_batch_binary_power_local >= min_batch_binary_power and fail_iterations > -1
                    and remaining_trials(sub_config_ext, n_expected_trials)[0] > 0):
                 continue_study = False
@@ -94,7 +95,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
                             accuracy, accuracy_to_time, duration = optuna_objective(trial, sub_config, nn_prm, num_workers, min_learning_rate, max_learning_rate,
                                                                                     min_momentum, max_momentum, min_dropout, max_dropout,
                                                                                     min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, epoch_max,
-                                                                                    pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights)
+                                                                                    pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights,layer_analysis)
                             log_nn_stat(nn)
                             if good(accuracy, min_accuracy(dataset), duration):
                                 fail_iterations = nn_fail_attempts
@@ -112,7 +113,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
 
                     study.optimize(objective, n_trials=n_optuna_trials_left)
                     completed_trials += n_optuna_trials_left
-                    return last_accuracy
+                    break
                 except CudaOutOfMemory as e:
                     max_batch_binary_power_local = e.batch_size_power() - 1
                     print(f"Max batch is decreased to {max_batch(max_batch_binary_power_local)} due to a CUDA Out of Memory Exception for model '{nn}'")
@@ -125,6 +126,7 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
     print(f"\n{'='*60}")
     print(f"  All trials complete | {completed_trials} trials | Total time: {total_elapsed/60:.1f} min ({total_elapsed:.0f}s)")
     print(f"{'='*60}\n")
+    return last_accuracy
 
 
 if __name__ == "__main__":
@@ -132,4 +134,4 @@ if __name__ == "__main__":
     main(a.config, a.nn_prm, a.epochs, a.trials, a.min_batch_binary_power, a.max_batch_binary_power,
          a.min_learning_rate, a.max_learning_rate, a.min_momentum, a.max_momentum, a.min_dropout, a.max_dropout, a.transform,
          a.nn_fail_attempts, a.random_config_order, a.workers, a.pretrained, a.epoch_limit_minutes, a.train_missing_pipelines,
-         a.save_pth_weights, a.save_onnx_weights)
+         a.save_pth_weights, a.save_onnx_weights,a.layer_analysis)

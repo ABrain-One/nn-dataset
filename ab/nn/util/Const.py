@@ -67,6 +67,7 @@ default_num_workers = 2
 default_random_config_order = False
 default_save_pth_weights = False
 default_save_onnx_weights = False
+default_layer_analysis = False
 
 default_epoch_limit_minutes = 30  # minutes
 
@@ -140,6 +141,7 @@ ab_root_path = __project_root_path()
 print(f"LEMUR root {ab_root_path}")
 out = 'out'
 out_dir = ab_root_path / out
+cache_dir = out_dir / 'cache'
 ckpt_dir = out_dir / 'ckpt'
 data_dir = ab_root_path / 'data'
 db_dir = ab_root_path / 'db'
@@ -156,10 +158,15 @@ main_columns_ext = main_columns + ('epoch',)
 code_tables = ('nn', 'transform', 'metric')
 param_tables = ('prm',)
 dependent_tables = code_tables + param_tables
-all_tables = main_tables + dependent_tables
 index_colum = ('task', 'dataset') + dependent_tables
 extra_main_columns = ('duration', 'accuracy')
 nn_code_minhash_table = "nn_minhash" #New
+
+# Training statistics table (define before all_tables)
+train_stat_table = 'train_stat'
+
+# All tables including training stats
+all_tables = main_tables + dependent_tables + (train_stat_table,)
 
 # Mobile analytics (runtime) table
 run_table = 'run'
@@ -176,6 +183,7 @@ stat_run_pt_dir = stat_dir / 'run' / 'pt'
 
 # NN statistics table
 nn_stat_table = 'nn_stat'
+
 HF_NN = 'NN-Dataset'
 tmp_data = "tmp_data"
 STAT_TABLE = "stat"
