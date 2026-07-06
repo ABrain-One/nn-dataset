@@ -1,9 +1,14 @@
-from ab.nn.util.db.Util import get_ab_nn_attr
 import os
+import importlib
 import importlib.util
 
 def get_obj(name, o_type):
     """ Dynamically load a function/field by name if provided from the object of type 'o_type'"""
+    if o_type == 'loader':
+        module = importlib.import_module(f"ab.nn.loader.{name}")
+        return getattr(module, o_type)
+
+    from ab.nn.util.db.Util import get_ab_nn_attr
     return get_ab_nn_attr(f"{o_type}.{name}", o_type)
 
 
