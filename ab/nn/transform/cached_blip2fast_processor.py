@@ -16,8 +16,17 @@ Important rules enforced:
 import os
 import torch
 from torch.utils.data import Dataset
-from ab.nn.util.Const import cache_dir
 
+def _get_default_cache_dir():
+    if "BLIP2_CACHE_DIR" in os.environ:
+        return os.environ["BLIP2_CACHE_DIR"]
+    legacy_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../nn-gpt/out/nngpt/cache"))
+    if os.path.exists(legacy_path):
+        return legacy_path
+    nn_dataset_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+    return os.path.join(nn_dataset_root, "out", "cache")
+
+cache_dir = _get_default_cache_dir()
 
 _SHARED_CACHE = {}
 
