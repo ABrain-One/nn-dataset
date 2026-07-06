@@ -289,10 +289,10 @@ def mixed_precision_converter_flags(target_h: int, data_root: Path) -> dict:
     }
 
 def export_fp32_reference(model, dummy_input, ref_path):
-    import ai_edge_torch
+    import litert_torch
     print(f"   [BASELINE] FP32 reference not found, exporting for size comparison...")
     t0 = time.perf_counter()
-    ai_edge_torch.convert(model, dummy_input).export(str(ref_path))
+    litert_torch.convert(model, dummy_input).export(str(ref_path))
     verify_tflite(ref_path)
     print(f"   Baseline size:          {file_size_kib(ref_path):.2f} KiB")
     print(f"   Baseline export time:   {(time.perf_counter() - t0) * 1000:.2f} ms")
@@ -330,7 +330,7 @@ def main():
         return
 
     # --- IMPORT TFLITE ONLY WHEN NEEDED ---
-    import ai_edge_torch
+    import litert_torch
     import tensorflow as tf
 
     if args.push_hf: create_repo(TARGET_REPO, repo_type="model", exist_ok=True)
@@ -413,7 +413,7 @@ def main():
                 acc_fp = run_convert_and_eval(
                     "FP32 Conversion",
                     "FP32",
-                    lambda: ai_edge_torch.convert(model, dummy_input).export(str(fp32_p)),
+                    lambda: litert_torch.convert(model, dummy_input).export(str(fp32_p)),
                     fp32_p,
                     data_root,
                 )
@@ -430,7 +430,7 @@ def main():
                 acc_fp16 = run_convert_and_eval(
                     "FP16 Conversion",
                     "FP16",
-                    lambda: ai_edge_torch.convert(
+                    lambda: litert_torch.convert(
                         model, dummy_input,
                         _ai_edge_converter_flags={
                             'optimizations': [tf.lite.Optimize.DEFAULT],
@@ -453,7 +453,7 @@ def main():
                 acc_mixed = run_convert_and_eval(
                     "Mixed Precision Conversion",
                     "MIXED",
-                    lambda: ai_edge_torch.convert(
+                    lambda: litert_torch.convert(
                         model, dummy_input,
                         _ai_edge_converter_flags=mixed_precision_converter_flags(target_h, data_root),
                     ).export(str(mixed_p)),
@@ -473,7 +473,7 @@ def main():
                 acc_int = run_convert_and_eval(
                     "Static INT8 Conversion",
                     "STATIC",
-                    lambda: ai_edge_torch.convert(
+                    lambda: litert_torch.convert(
                         model, dummy_input,
                         _ai_edge_converter_flags={
                             'optimizations': [tf.lite.Optimize.DEFAULT],
@@ -499,7 +499,7 @@ def main():
                 acc_dynamic = run_convert_and_eval(
                     "Dynamic INT8 Conversion",
                     "DYNAMIC",
-                    lambda: ai_edge_torch.convert(
+                    lambda: litert_torch.convert(
                         model, dummy_input,
                         _ai_edge_converter_flags={'optimizations': [tf.lite.Optimize.DEFAULT]},
                     ).export(str(dynamic_p)),
