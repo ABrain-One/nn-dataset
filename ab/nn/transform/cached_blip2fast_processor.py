@@ -34,7 +34,7 @@ def _auto_extract_features(cache_dir: str, split: str):
     import torch
     from tqdm import tqdm
     from torch.utils.data import DataLoader
-    from transformers import Blip2Model
+    from transformers import BitsAndBytesConfig, Blip2Model
     from ab.nn.util.Loader import load_dataset
     
     print(f"\n[CACHE-AUTO] Missing cache for '{split}'. Starting automatic extraction to {cache_dir}...")
@@ -44,7 +44,7 @@ def _auto_extract_features(cache_dir: str, split: str):
     print("[CACHE-AUTO] Loading BLIP-2 Encoder in 4-bit...")
     model = Blip2Model.from_pretrained(
         "Salesforce/blip2-opt-2.7b",
-        load_in_4bit=True,
+        quantization_config=BitsAndBytesConfig(load_in_4bit=True),
         torch_dtype=torch.float16,
         device_map="auto"
     )
@@ -181,6 +181,17 @@ class CachedBlip2Dataset(Dataset):
         self._all_labels = cache["labels"]
         self._offsets = cache["offsets"]
         self._length = len(self._all_labels)
+        self._collate_fn = None
+
+    @property
+    def collate_fn(self):
+        return self._collate_fn
+
+    @collate_fn.setter
+    def collate_fn(self, value):
+        # Silently ignore external overrides (like from Caption.py) 
+        # to preserve our multi-caption logic.
+        pass
 
     def __len__(self) -> int:
         return self._length
@@ -206,7 +217,7 @@ def get_collate_fn():
     def collate_fn(batch):
         nonlocal tokenizer
         if tokenizer is None:
-            from transformers import GPT2Tokenizer
+            from transformers import BitsAndBytesConfig, GPT2Tokenizer
             import os
             os.environ["TOKENIZERS_PARALLELISM"] = "false"
             tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
@@ -224,7 +235,7 @@ def get_collate_fn():
                 flat_captions.append(str(cap).strip() + tokenizer.eos_token)
 
         tokens = tokenizer(
-            flat_captions, padding=True, truncation=True, max_length=40, return_tensors="pt"
+            flat_captions, padding=True, truncation=True, max_length=60, return_tensors="pt"
         )
         
         batch_size = len(batch)
@@ -250,5 +261,8 @@ def transform(norm):
 def get_dataset(cache_dir: str = None, split: str = "train") -> CachedBlip2Dataset:
     resolved = os.path.realpath(cache_dir or _DEFAULT_CACHE_DIR)
     dataset = CachedBlip2Dataset(resolved, split)
-    dataset.collate_fn = get_collate_fn()
+    dataset._collate_fn = get_collate_fn()  # Set privately
     return dataset
+
+def get_vocab_size():
+    return (50257,)
