@@ -14,7 +14,6 @@ TRAIN_STAT_FIELDS = (
     "samples_per_second",
     "best_accuracy",
     "best_epoch",
-    "epoch_max",
 
     "cpu_count",
     "cpu_type",
@@ -68,6 +67,17 @@ def restructure_record(prm):
         if prm.get("train_stat") != train_stat:
             prm["train_stat"] = train_stat
             changed = True
+
+    if isinstance(prm.get("train_stat"), dict) and "epoch_max" in prm["train_stat"]:
+        if "epoch_max" not in prm or prm["epoch_max"] is None:
+            prm["epoch_max"] = prm["train_stat"]["epoch_max"]
+
+        del prm["train_stat"]["epoch_max"]
+        changed = True
+        moved_count += 1
+
+        if not prm["train_stat"]:
+            del prm["train_stat"]
 
     return changed, moved_count
 
