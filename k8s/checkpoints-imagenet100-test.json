@@ -11,8 +11,8 @@
     "template": {
       "spec": {
         "securityContext": {
-          "runAsUser": 1051,
-          "runAsGroup": 1051
+          "runAsUser": 1030,
+          "runAsGroup": 1030
         },
         "containers": [
           {
@@ -21,16 +21,15 @@
             "imagePullPolicy": "Always",
             "command": ["/bin/bash", "-c"],
             "args": [
-              "set -euo pipefail; export HOME=/shared/ssd/home/b-ahsan3919; export HF_HOME=/shared/ssd/home/b-ahsan3919/.cache/huggingface; export PYTHONUNBUFFERED=1; export GIT_CONFIG_NOSYSTEM=1; export GIT_CONFIG_GLOBAL=/dev/null; cd /shared/ssd/home/b-ahsan3919/nn-dataset; export PYTHONPATH=/shared/ssd/home/b-ahsan3919/nn-dataset:$PYTHONPATH; python3 -m pip install --user -e . -q 2>&1 | tail -5; python3 -c \"import torch; print('CUDA:', torch.cuda.is_available())\"; python3 util/py/checkpoints_to_hugging_face.py --dataset imagenet100 --epoch-train-max 1 --model ComplexNet --dry-run"
+              "set -euo pipefail; export HOME=/shared/ssd/home/b-ahsan3919; export HF_HOME=/shared/ssd/home/b-ahsan3919/.cache/huggingface; export PYTHONUNBUFFERED=1; export GIT_CONFIG_NOSYSTEM=1; export GIT_CONFIG_GLOBAL=/dev/null; cd /shared/ssd/home/b-ahsan3919/nn-dataset; export PYTHONPATH=/shared/ssd/home/b-ahsan3919/nn-dataset:$PYTHONPATH; python3 -m pip install --user pandas -q; python3 util/py/checkpoints_to_hugging_face.py --dataset imagenet100 --model ComplexNet --dry-run"
             ],
             "resources": {
               "requests": {
-                "nvidia.com/gpu": 0,
-                "cpu": 2,
+                "cpu": "2",
                 "memory": "8Gi"
               },
               "limits": {
-                "cpu": 8,
+                "cpu": "8",
                 "memory": "16Gi"
               }
             },

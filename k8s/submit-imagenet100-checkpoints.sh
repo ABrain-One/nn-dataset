@@ -5,7 +5,7 @@
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-b-ahsan3919}"
-USER_ID="${USER_ID:-1051}"
+USER_ID="${USER_ID:-1030}"
 HF_TOKEN="${HF_TOKEN:-}"
 EPOCHS="${EPOCHS:-50}"
 DATASET="${DATASET:-imagenet100}"
