@@ -207,8 +207,6 @@ class Net(nn.Module):
         assert self.criteria and self.optimizer is not None and self.scaler is not None, "Call train_setup(prm) first."
         self.train()
         amp_device = 'cuda' if self.device.type == 'cuda' else 'cpu'
-        total_loss = 0.0
-        num_batches = 0
         for batch in train_data:
             if isinstance(batch, (list, tuple)):
                 images, captions = batch[0], batch[1]
@@ -230,8 +228,3 @@ class Net(nn.Module):
             nn.utils.clip_grad_norm_(self.parameters(), 3.0)
             self.scaler.step(self.optimizer)
             self.scaler.update()
-            
-            total_loss += loss.item()
-            num_batches += 1
-            
-        return 0.0, (total_loss / max(num_batches, 1))

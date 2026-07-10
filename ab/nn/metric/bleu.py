@@ -4,26 +4,7 @@ from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 class BLEUMetric:
     def __init__(self, out_shape=None):
         self.smooth = SmoothingFunction().method1
-        self.vocab_size = out_shape[0] if out_shape else 0
-        if self.vocab_size == 50257:
-            try:
-                from transformers import GPT2TokenizerFast
-                self.gpt2_tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
-            except ImportError:
-                self.gpt2_tokenizer = None
-        else:
-            self.gpt2_tokenizer = None
         self.reset()
-
-    def _decode_ids(self, token_ids):
-            
-        words = []
-        for w in token_ids:
-            if w == 0: continue
-            word = idx2word.get(w, "")
-            if word and word not in ('<EOS>', '<SOS>', '<PAD>', '<UNK>', '<|endoftext|>'):
-                words.append(word.lower())
-        return words
 
     def reset(self):
         self.scores1 = []  # BLEU-1
@@ -45,23 +26,9 @@ class BLEUMetric:
         else:
             targets = [[t] for t in labels.cpu().tolist()]
         for p, refs in zip(pred_ids, targets):
-            if self.vocab_size == 50257 and self.gpt2_tokenizer:
-                # NEW LOGIC: Text-based Decoding (GPT-2/OPT)
-                p_clean = [x for x in p if x != -100 and x >= 0]
-                hyp_text = self.gpt2_tokenizer.decode(p_clean, skip_special_tokens=True)
-                hyp = hyp_text.lower().split()
-                filtered_refs = []
-                for r in refs:
-                    r_clean = [x for x in r if x != -100 and x >= 0]
-                    ref_text = self.gpt2_tokenizer.decode(r_clean, skip_special_tokens=True)
-                    if ref_text.strip():
-                        filtered_refs.append(ref_text.lower().split())
-            else:
-                # LEGACY LOGIC: Integer ID-based Lookup
-                hyp = [w for w in p if w != 0]
-                filtered_refs = [[w for w in r if w != 0] for r in refs]
-                filtered_refs = [ref for ref in filtered_refs if len(ref) > 0]
-                
+            hyp = [w for w in p if w != 0]
+            filtered_refs = [[w for w in r if w != 0] for r in refs]
+            filtered_refs = [ref for ref in filtered_refs if len(ref) > 0]
             if not filtered_refs:
                 print("[BLEUMetric WARN] Empty reference for sample; this should not happen often.")
                 continue

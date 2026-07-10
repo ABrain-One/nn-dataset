@@ -1,7 +1,7 @@
 from typing import Dict, Set, Any, Optional, Iterable, Union
 import torch
 import torch.nn as nn
-from transformers import BitsAndBytesConfig, (AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig)
+from transformers import (AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig)
 from peft import (LoraConfig, get_peft_model, prepare_model_for_kbit_training)
 
 
@@ -72,7 +72,7 @@ class Net(nn.Module):
         quant_cfg = None
         if self.load_in_4bit:
             quant_cfg = BitsAndBytesConfig(
-                quantization_config=BitsAndBytesConfig(load_in_4bit=True),
+                load_in_4bit=True,
                 bnb_4bit_compute_dtype=torch.float16,
             )
 
