@@ -258,11 +258,29 @@ class Train:
             for inputs, labels in data_loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 try:
-                    # SOTA Fix: For captioning models that return loss when labels are provided
                     if 'caption' in self.task:
                         # Some models need captions in a specific format (e.g. flattened)
                         caps = labels[:, 0, :] if labels.dim() == 3 else labels
-                        loss = self.model(inputs, caps)
+                        model_out = self.model(inputs, caps)
+                        
+                        # Handle Legacy models returning tuples like (outputs, targets)
+                        if isinstance(model_out, tuple):
+                            model_out, caps = model_out[0], model_out[1]
+
+                        # Legacy models return logits, SOTA models (Blip2) return computed scalar loss directly
+                        if isinstance(model_out, torch.Tensor) and model_out.numel() == 1:
+                            loss = model_out
+                        else:
+                            # Squeeze out the extra dimension for cross entropy if needed
+                            if model_out.dim() == 3:
+                                # If sequence lengths mismatch (e.g. model_out is T-1, caps is T), align them
+                                if model_out.size(1) == caps.size(1) - 1:
+                                    caps = caps[:, 1:]
+                                # Reshape logits to [B*T, V] and labels to [B*T]
+                                vocab_s = model_out.size(-1)
+                                loss = self.loss_fn(model_out.reshape(-1, vocab_s), caps.reshape(-1))
+                            else:
+                                loss = self.loss_fn(model_out, caps)
                     else:
                         outputs = self.model(inputs)
                         loss = self.loss_fn(outputs, labels)
@@ -382,7 +400,8 @@ class Train:
             self.epoch_history.append(epoch_metrics)
 
             # Print detailed metrics
-            print(f"  Train Loss: {train_loss:.4f}, Test Loss: {test_loss:.4f}")
+            t_loss_print = train_loss if train_loss is not None else 0.0
+            print(f"  Train Loss: {t_loss_print:.4f}, Test Loss: {test_loss:.4f}")
             print(f"  Train Acc: {train_accuracy:.4f}, Test Acc: {accuracy:.4f}")
             if lr_now and grad_norm and samples_per_second:
                 print(f"  LR: {lr_now:.6f}, Grad Norm: {grad_norm:.4f}, Throughput: {samples_per_second:.1f} samples/s")
@@ -615,8 +634,9 @@ class Train:
         for metric_fn in self.metric_fns.values():
             metric_fn.reset()
 
+        from tqdm import tqdm
         with torch.no_grad():
-            for inputs, labels in test_loader:
+            for inputs, labels in tqdm(test_loader, desc="Evaluating"):
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 outputs = self.model(inputs)
 

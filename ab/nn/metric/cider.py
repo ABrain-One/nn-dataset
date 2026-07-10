@@ -112,6 +112,15 @@ class CiderMetric:
         self.predictions = []
         self.references = []
         self.idx2word = None
+        self.vocab_size = out_shape[0] if out_shape else 0
+        if self.vocab_size == 50257:
+            try:
+                from transformers import GPT2TokenizerFast
+                self.gpt2_tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
+            except ImportError:
+                self.gpt2_tokenizer = None
+        else:
+            self.gpt2_tokenizer = None
 
     def reset(self):
         self.predictions = []
@@ -155,11 +164,16 @@ class CiderMetric:
         # This assumes the caller will set vocab or we use simple space-joined IDs as tokens (works for stats)
         
         for p, t in zip(pred_ids, label_ids):
-            # If idx2word is not set, we can't really compute valid CIDEr unless we treat IDs as words
-            # Treat IDs as words is valid for n-gram overlap
-            
-            hyp_str = " ".join(str(x) for x in p if x != 0) # 0 is usually PAD
-            ref_str = " ".join(str(x) for x in t if x != 0)
+            if self.vocab_size == 50257 and self.gpt2_tokenizer:
+                # NEW LOGIC: Text-based Decoding (GPT-2/OPT)
+                p_clean = [x for x in p if x != -100 and x >= 0]
+                t_clean = [x for x in t if x != -100 and x >= 0]
+                hyp_str = self.gpt2_tokenizer.decode(p_clean, skip_special_tokens=True).strip()
+                ref_str = self.gpt2_tokenizer.decode(t_clean, skip_special_tokens=True).strip()
+            else:
+                # LEGACY LOGIC: Integer ID string-join (Fallback for CIDEr if no vocab)
+                hyp_str = " ".join(str(x) for x in p if x != 0) # 0 is usually PAD
+                ref_str = " ".join(str(x) for x in t if x != 0)
             
             self.predictions.append(hyp_str)
             self.references.append([ref_str]) # List of refs
