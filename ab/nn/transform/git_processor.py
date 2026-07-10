@@ -1,27 +1,33 @@
 """
 GIT Processor Transform for NN Dataset Framework
 
-Applies minimal preprocessing — only resize and convert to [0,1].
-GIT-SOTA's _prep_images() will clamp and pass directly to the
-HuggingFace GitProcessor which applies its own internal normalization.
+This transform uses appropriate preprocessing for Microsoft's GIT model
+for image captioning.
 """
 
 from torchvision import transforms
 
+try:
+    import os
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    from transformers import GitProcessor
+    _processor = GitProcessor.from_pretrained("microsoft/git-large-coco")
+except Exception:
+    _processor = None
+
 
 def transform(norm):
     """
-    Returns a transform compatible with the NN Dataset framework.
-
-    Pipeline:
-        PIL Image → Resize(224x224) → ToTensor [0,1]
-
-    NO custom Normalize here — the HuggingFace GitProcessor inside
-    GIT-SOTA.py handles its own mean/std normalization internally.
-    Custom normalization + denormalization would corrupt images to near-zero.
+    Returns a transform function compatible with NN Dataset framework.
+    
+    For GIT, we need to:
+    1. Resize to 224x224
+    2. Normalize appropriately
+    
+    The actual GIT processor will be used in the model's forward pass.
     """
     return transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
-        # No Normalize — images stay in [0,1] for _prep_images() clamp
+        transforms.Normalize(*norm)
     ])
