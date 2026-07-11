@@ -20,24 +20,15 @@ import time
 from pathlib import Path
 import argparse
 
-# --- PROJECT IMPORTS (core only; train/HF loaded when needed) ---
+# --- PROJECT IMPORTS ---
 try:
-    from ab.nn.util.Const import ckpt_dir, HF_NN, core_nn_cls
-except ImportError as exc:
-    print("\n❌ Critical Error: Could not import 'ab.nn' modules.")
-    print(f"   Details: {exc}")
-    print("   Try: export PYTHONPATH=/path/to/nn-dataset:$PYTHONPATH")
-    sys.exit(1)
-
-
-def load_train_main():
     from ab.nn.train import main as train_main
-    return train_main
-
-
-def load_hf():
+    from ab.nn.util.Const import ckpt_dir, HF_NN, core_nn_cls
     import ab.nn.util.hf.HF as HF
-    return HF
+except ImportError:
+    print("\n❌ Critical Error: Could not import 'ab.nn' modules.")
+    print("   Please ensure you are running this script from the project root or 'cmd/py' folder.")
+    sys.exit(1)
 
 # --- CONFIGURATION ---
 SUMMARY_FILENAME = 'all_models.json'
@@ -183,7 +174,6 @@ def get_existing_models_and_summary(repo_id):
 
     summary_data = {}
     uploaded_models = set()
-    HF = load_hf()
 
     try:
         local_path = HF.download(repo_id, SUMMARY_FILENAME, '.')
@@ -349,7 +339,6 @@ def main():
 
         print(f'🚀 Starting FRESH training for {model}...')
         try:
-            train_main = load_train_main()
             accuracy = train_main(
                 config=f'{task}_{dataset}_{metric}_{model}',
                 nn_prm=params,
