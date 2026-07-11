@@ -279,7 +279,9 @@ if __name__ == "__main__":
 
                 # Skip if output file already exists
                 existing = [f for f in os.listdir(OUTPUT_BASE_PATH)
-                            if os.path.isdir(os.path.join(OUTPUT_BASE_PATH, f)) and model_name in f]
+                            if os.path.isdir(os.path.join(OUTPUT_BASE_PATH, f)) 
+                            and model_name in f
+                            and (args.dataset is None or args.dataset in f)]
                 if existing:
                     check_path = os.path.join(OUTPUT_BASE_PATH, existing[0], f"{device_file}.json")
                     if os.path.exists(check_path):
