@@ -80,7 +80,32 @@ DATASET_DEFAULT_PRM = {
 }
 
 
+# Models whose code expects complex-valued inputs (torch.complex64).
+COMPLEX_DATASET_TRANSFORM = {
+    'cifar-10': 'complex',
+    'cifar-100': 'complex',
+    'imagenet100': 'complex_160_flip',
+    'imagenette': 'complex_160_flip',
+}
+
+_COMPLEX_NN_CACHE = {}
+
+
 # =================================================================
+
+def is_complex_nn(nn):
+    """Detect architectures that require complex input tensors."""
+    if nn in _COMPLEX_NN_CACHE:
+        return _COMPLEX_NN_CACHE[nn]
+    nn_file = Path(ab_root_path) / 'ab' / 'nn' / 'nn' / f'{nn}.py'
+    if not nn_file.is_file():
+        _COMPLEX_NN_CACHE[nn] = False
+        return False
+    text = nn_file.read_text(encoding='utf-8', errors='ignore')
+    needs_complex = 'apply_complex' in text and 'input.imag' in text
+    _COMPLEX_NN_CACHE[nn] = needs_complex
+    return needs_complex
+
 
 def dataset_default_prm(dataset):
     if dataset not in DATASET_DEFAULT_PRM:
@@ -91,12 +116,22 @@ def dataset_default_prm(dataset):
     return copy.deepcopy(DATASET_DEFAULT_PRM[dataset])
 
 
-def merge_prm(prm_from_db, dataset):
+def default_prm_for(nn, dataset):
+    """Per-model dataset defaults (complex architectures get complex transforms)."""
     prm = dataset_default_prm(dataset)
+    if is_complex_nn(nn):
+        prm['transform'] = COMPLEX_DATASET_TRANSFORM.get(dataset, prm['transform'])
+    return prm
+
+
+def merge_prm(prm_from_db, dataset, nn):
+    prm = default_prm_for(nn, dataset)
     if isinstance(prm_from_db, dict):
         for key, value in prm_from_db.items():
             if value is not None and value == value:
                 prm[key] = value
+    if is_complex_nn(nn) and not str(prm.get('transform', '')).startswith('complex'):
+        prm['transform'] = COMPLEX_DATASET_TRANSFORM.get(dataset, 'complex')
     return prm
 
 
@@ -143,8 +178,10 @@ def build_training_plan(epoch_max, dataset, task, metric, models=None):
     for nn in models:
         if nn in stats_by_nn:
             row = stats_by_nn[nn]
-            prm = merge_prm(row.get('prm'), dataset)
+            prm = merge_prm(row.get('prm'), dataset, nn)
             source = 'db' if prm_is_complete(row.get('prm')) else 'db+default'
+            if is_complex_nn(nn):
+                source = f'{source}+complex-transform'
             db_count += 1
             plan.append({
                 'nn': nn,
@@ -156,8 +193,8 @@ def build_training_plan(epoch_max, dataset, task, metric, models=None):
             fallback_count += 1
             plan.append({
                 'nn': nn,
-                'prm': dataset_default_prm(dataset),
-                'param_source': 'default',
+                'prm': default_prm_for(nn, dataset),
+                'param_source': 'default+complex-transform' if is_complex_nn(nn) else 'default',
                 'db_accuracy': None,
             })
 
