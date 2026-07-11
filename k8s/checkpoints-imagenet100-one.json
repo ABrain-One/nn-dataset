@@ -11,8 +11,8 @@
     "template": {
       "spec": {
         "securityContext": {
-          "runAsUser": 1030,
-          "runAsGroup": 1030
+          "runAsUser": 1051,
+          "runAsGroup": 1051
         },
         "containers": [
           {
@@ -21,7 +21,7 @@
             "imagePullPolicy": "Always",
             "command": ["/bin/bash", "-c"],
             "args": [
-              "set -euo pipefail; export HOME=/shared/ssd/home/b-ahsan3919; export HF_HOME=/shared/ssd/home/b-ahsan3919/.cache/huggingface; export PYTHONUNBUFFERED=1; export GIT_CONFIG_NOSYSTEM=1; export GIT_CONFIG_GLOBAL=/dev/null; cd /shared/ssd/home/b-ahsan3919/nn-dataset; export PYTHONPATH=/shared/ssd/home/b-ahsan3919/nn-dataset:$PYTHONPATH; echo '--- GPU check ---'; python3 -c \"import torch; print('CUDA:', torch.cuda.is_available(), 'GPUs:', torch.cuda.device_count())\"; echo '--- Train + upload one model ---'; python3 util/py/checkpoints_to_hugging_face.py --dataset imagenet100 --epoch-train-max 50 --model ComplexNet"
+              "set -euo pipefail; export HOME=/shared/ssd/home/b-ahsan3919; export HF_HOME=/shared/ssd/home/b-ahsan3919/.cache/huggingface; export PYTHONUNBUFFERED=1; export GIT_CONFIG_NOSYSTEM=1; export GIT_CONFIG_GLOBAL=/dev/null; cd /shared/ssd/home/b-ahsan3919/nn-dataset; export PYTHONPATH=/shared/ssd/home/b-ahsan3919/nn-dataset:$PYTHONPATH; echo '--- Install package ---'; python3 -m pip install --user -e . -q 2>&1 | tail -5; echo '--- GPU check ---'; python3 -c \"import torch; print('CUDA:', torch.cuda.is_available(), 'GPUs:', torch.cuda.device_count())\"; echo '--- Train + upload one model ---'; python3 util/py/checkpoints_to_hugging_face.py --dataset imagenet100 --epoch-train-max 50 --model ComplexNet"
             ],
             "resources": {
               "requests": {
