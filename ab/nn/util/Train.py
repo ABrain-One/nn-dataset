@@ -475,12 +475,6 @@ class Train:
             # Build JSON export once
             prm_json = dict(prm)
 
-            # Promote core experiment info for readability
-            prm_json["task"] = self.config[0]
-            prm_json["dataset"] = self.config[1]
-            prm_json["metric"] = self.config[2]
-            prm_json["model"] = self.config[3] if len(self.config) > 3 else self.model_name
-
             # Make layer statistics human-readable without losing information
             if layer_summary or layer_result or layer_table:
                 prm_json["layer_stat"] = {
