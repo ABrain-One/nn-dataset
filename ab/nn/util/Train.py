@@ -586,6 +586,7 @@ class Train:
 
         summary_path = out_dir / 'training_summary.json'
         try:
+            out_dir.mkdir(parents=True, exist_ok=True)
             with open(summary_path, 'w') as f:
                 json.dump(summary, f, indent=2)
             print(f"Training summary saved to {summary_path}")
