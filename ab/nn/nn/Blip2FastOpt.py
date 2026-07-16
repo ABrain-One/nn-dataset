@@ -40,12 +40,10 @@ PROMPT_TEXT = "a photo of "
 BEAM_WIDTH = 3
 
 _default_proj_path = os.path.join(
-    os.path.expanduser("~"),
-    ".cache",
-    "blip2fast",
-    "pretrained_projection_opt27b.pth",
+    os.path.dirname(__file__),
+    "pretrained_projection_opt27b.pth"
 )
-PROJECTION_CACHE_PATH = os.environ.get("BLIP2_PROJECTION_PATH", _default_proj_path)
+PROJECTION_CACHE_PATH = os.environ.get("BLIP2_PROJECTION_PATH", os.path.abspath(_default_proj_path))
 # ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -114,7 +112,8 @@ class OPTCaptionDecoder(nn.Module):
         if self.opt_tokenizer.pad_token is None:
             self.opt_tokenizer.pad_token = self.opt_tokenizer.eos_token
 
-        self.gpt2_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+        _tok_dir = os.path.join(os.path.dirname(__file__), "../transform/gpt2_tokenizer")
+        self.gpt2_tokenizer = GPT2Tokenizer.from_pretrained(_tok_dir, local_files_only=True)
         self.gpt2_tokenizer.pad_token = self.gpt2_tokenizer.eos_token
 
         self.opt = OPTForCausalLM.from_pretrained(
@@ -507,6 +506,12 @@ class GPT2Idx2WordWrapper:
     def __len__(self):
         return self.tokenizer.vocab_size
 
+    def __contains__(self, idx):
+        return True
+
+    def __getitem__(self, idx):
+        return self.get(idx)
+
 
 class GPT2Word2IdxWrapper:
     def __init__(self, tokenizer):
@@ -518,6 +523,12 @@ class GPT2Word2IdxWrapper:
             return ids[0] if ids else default
         except Exception:
             return default
+
+    def __contains__(self, word):
+        return True
+
+    def __getitem__(self, word):
+        return self.get(word)
 
     def __len__(self):
         return self.tokenizer.vocab_size

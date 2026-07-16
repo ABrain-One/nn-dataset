@@ -9,7 +9,9 @@ class BLEUMetric:
         if self.vocab_size == 50257:
             try:
                 from transformers import GPT2TokenizerFast
-                self.gpt2_tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
+                import os
+                _tok_dir = os.path.join(os.path.dirname(__file__), "../transform/gpt2_tokenizer")
+                self.gpt2_tokenizer = GPT2TokenizerFast.from_pretrained(_tok_dir, local_files_only=True)
             except ImportError:
                 self.gpt2_tokenizer = None
         else:

@@ -23,7 +23,9 @@ class MeteorMetric:
         if self.vocab_size == 50257:
             try:
                 from transformers import GPT2TokenizerFast
-                self.gpt2_tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
+                import os
+                _tok_dir = os.path.join(os.path.dirname(__file__), "../transform/gpt2_tokenizer")
+                self.gpt2_tokenizer = GPT2TokenizerFast.from_pretrained(_tok_dir, local_files_only=True)
             except ImportError:
                 self.gpt2_tokenizer = None
         else:
@@ -110,11 +112,13 @@ class MeteorMetric:
                         ref_list_words.append(ref_text.lower().split())
             else:
                 # LEGACY LOGIC: Integer ID-based Lookup
-                hyp_words = [self.idx2word[i] for i in p if i in self.idx2word and i != 0 and self.idx2word[i] not in ['<SOS>', '<EOS>', '<PAD>', '<UNK>']]
+                # NOTE: self.idx2word is a wrapper (GPT2Idx2WordWrapper) with no __contains__,
+                # so use .get(i) instead of `i in self.idx2word` (which raised TypeError).
+                hyp_words = [self.idx2word.get(i) for i in p if self.idx2word.get(i) is not None and i != 0 and self.idx2word.get(i) not in ['<SOS>', '<EOS>', '<PAD>', '<UNK>']]
                 
                 ref_list_words = []
                 for t in t_list:
-                    ref_words = [self.idx2word[i] for i in t if i in self.idx2word and i != 0 and self.idx2word[i] not in ['<SOS>', '<EOS>', '<PAD>', '<UNK>']]
+                    ref_words = [self.idx2word.get(i) for i in t if self.idx2word.get(i) is not None and i != 0 and self.idx2word.get(i) not in ['<SOS>', '<EOS>', '<PAD>', '<UNK>']]
                     if ref_words:
                         ref_list_words.append(ref_words)
             

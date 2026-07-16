@@ -109,7 +109,9 @@ class CaptionDecoder(nn.Module):
 
         # [TRAINABLE] Load GPT2-small (124M params vs OPT's 2.7B = ~20x faster)
         gpt2_id = "gpt2"
-        self.tokenizer = GPT2Tokenizer.from_pretrained(gpt2_id)
+        import os
+        _tok_dir = os.path.join(os.path.dirname(__file__), "../transform/gpt2_tokenizer")
+        self.tokenizer = GPT2Tokenizer.from_pretrained(_tok_dir, local_files_only=True)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
         config = GPT2Config.from_pretrained(gpt2_id)
