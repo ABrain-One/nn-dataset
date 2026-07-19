@@ -16,8 +16,17 @@ Important rules enforced:
 import os
 import torch
 from torch.utils.data import Dataset
-from ab.nn.util.Const import cache_dir
 
+def _get_default_cache_dir():
+    if "BLIP2_CACHE_DIR" in os.environ:
+        return os.environ["BLIP2_CACHE_DIR"]
+    legacy_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../nn-gpt/out/nngpt/cache"))
+    if os.path.exists(legacy_path):
+        return legacy_path
+    base_dir = os.path.dirname(__file__)
+    return os.path.abspath(os.path.join(base_dir, "../../../out/cache"))
+
+cache_dir = _get_default_cache_dir()
 
 _SHARED_CACHE = {}
 
@@ -25,17 +34,19 @@ def _auto_extract_features(split: str):
     import torch
     from tqdm import tqdm
     from torch.utils.data import DataLoader
-    from transformers import Blip2Model
+    from transformers import BitsAndBytesConfig, Blip2Model
     from ab.nn.util.Loader import load_dataset
     
     print(f"\n[CACHE-AUTO] Missing cache for '{split}'. Starting automatic extraction to {cache_dir}...")
     os.makedirs(cache_dir, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
+    from ab.nn.util.hf.HF import from_pretrained_with_retry
     print("[CACHE-AUTO] Loading BLIP-2 Encoder in 4-bit...")
-    model = Blip2Model.from_pretrained(
+    model = from_pretrained_with_retry(
+        Blip2Model.from_pretrained,
         "Salesforce/blip2-opt-2.7b",
-        load_in_4bit=True,
+        quantization_config=BitsAndBytesConfig(load_in_4bit=True),
         torch_dtype=torch.float16,
         device_map="auto"
     )
@@ -171,6 +182,15 @@ class CachedBlip2Dataset(Dataset):
         self._all_labels = cache["labels"]
         self._offsets = cache["offsets"]
         self._length = len(self._all_labels)
+        self._collate_fn = None
+
+    @property
+    def collate_fn(self):
+        return self._collate_fn
+
+    @collate_fn.setter
+    def collate_fn(self, value):
+        self._collate_fn = value
 
     def __len__(self) -> int:
         return self._length
@@ -196,10 +216,12 @@ def get_collate_fn():
     def collate_fn(batch):
         nonlocal tokenizer
         if tokenizer is None:
-            from transformers import GPT2Tokenizer
+            from transformers import BitsAndBytesConfig, GPT2Tokenizer
             import os
             os.environ["TOKENIZERS_PARALLELISM"] = "false"
-            tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+            
+            _tok_dir = os.path.join(os.path.dirname(__file__), "gpt2_tokenizer")
+            tokenizer = GPT2Tokenizer.from_pretrained(_tok_dir, local_files_only=True)
             tokenizer.pad_token = tokenizer.eos_token
         features = torch.stack([item[0] for item in batch], dim=0)
         raw_captions = [item[1] if isinstance(item[1], (list, tuple)) else [item[1]] for item in batch]
@@ -214,7 +236,7 @@ def get_collate_fn():
                 flat_captions.append(str(cap).strip() + tokenizer.eos_token)
 
         tokens = tokenizer(
-            flat_captions, padding=True, truncation=True, max_length=40, return_tensors="pt"
+            flat_captions, padding=True, truncation=True, max_length=60, return_tensors="pt"
         )
         
         batch_size = len(batch)
@@ -239,5 +261,8 @@ def transform(norm):
 
 def get_dataset(split: str = "train") -> CachedBlip2Dataset:
     dataset = CachedBlip2Dataset(split)
-    dataset.collate_fn = get_collate_fn()
+    dataset._collate_fn = get_collate_fn()
     return dataset
+
+def get_vocab_size():
+    return (50257,)
