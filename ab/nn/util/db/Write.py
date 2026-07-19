@@ -99,7 +99,7 @@ def code_to_db(cursor, table_name, code=None, code_file=None, force_name = None)
         # If model exists, update the code if it has changed
         existing_code = existing_entry[0]
         if existing_code != code:
-            # print(f"Updating code for model: {nm}")
+            print(f"Updating code for model: {nm}")
             cursor.execute("UPDATE nn SET code = ?, id = ? WHERE name = ?", (code, id_val, nm))
     else:
         cursor.execute(f"INSERT INTO {table_name} (name, code, id) VALUES (?, ?, ?)", (nm, code, id_val))
