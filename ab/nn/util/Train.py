@@ -449,7 +449,6 @@ class Train:
                 'samples_per_second': samples_per_second,
                 'best_accuracy': self.best_accuracy,
                 'best_epoch': self.best_epoch,
-                'epoch_max': epoch_max,
                 'cpu_count': self.system_info.get('cpu_count'),
                 'cpu_type': self.system_info.get('cpu_type'),
                 'cpu_usage_percent': resource_usage.get('cpu_usage_percent'),
@@ -468,18 +467,13 @@ class Train:
                 'duration': duration,
                 'duration_seconds': round(duration_seconds, 2),
                 'accuracy': accuracy,
+                'epoch_max': epoch_max,
                 'train_stat': train_stat_group,
             }
                             | {f'metric_{k}': v for k, v in all_metric_results.items()})
 
             # Build JSON export once
             prm_json = dict(prm)
-
-            # Promote core experiment info for readability
-            prm_json["task"] = self.config[0]
-            prm_json["dataset"] = self.config[1]
-            prm_json["metric"] = self.config[2]
-            prm_json["model"] = self.config[3] if len(self.config) > 3 else self.model_name
 
             # Make layer statistics human-readable without losing information
             if layer_summary or layer_result or layer_table:
@@ -592,6 +586,7 @@ class Train:
 
         summary_path = out_dir / 'training_summary.json'
         try:
+            out_dir.mkdir(parents=True, exist_ok=True)
             with open(summary_path, 'w') as f:
                 json.dump(summary, f, indent=2)
             print(f"Training summary saved to {summary_path}")

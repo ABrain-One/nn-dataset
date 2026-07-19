@@ -49,17 +49,18 @@ The `NN Dataset` includes the following key modules within the **<a href='https:
 
 ## Create and Activate a Virtual Environment (recommended)
 For Linux/Mac:
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
-   python -m pip install --upgrade pip
-   ```
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
 For Windows:
-   ```bash
-   python3 -m venv .venv
-   .venv\Scripts\activate
-   python -m pip install --upgrade pip
-   ```
+```bash
+python3 -m venv .venv
+.venv\Scripts\activate
+python -m pip install --upgrade pip
+```
 
 It is assumed that CUDA 13.0 is installed; otherwise, consider replacing 'cu130' with the appropriate version. Some neural network training tasks require GPUs with at least 24 GB of memory.
 
