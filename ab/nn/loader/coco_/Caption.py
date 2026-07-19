@@ -91,7 +91,7 @@ class COCOCaptionDataset(Dataset):
 
         ann_ids = self.coco.getAnnIds(imgIds=img_id)
         anns = self.coco.loadAnns(ann_ids)
-        captions = []  
+        captions = []
         for ann in anns:
             if 'caption' in ann:
                 captions.append(ann['caption'])
@@ -152,6 +152,27 @@ def build_vocab(dataset, threshold=5):
     idx2word = {idx: word for idx, word in enumerate(vocab)}
     return word2idx, idx2word
 
+def gpt2_collate_fn(batch):
+    """Surgical Fix: Tokenize captions using GPT2 tokenizer for decoder compatibility."""
+    import torch
+    from transformers import GPT2TokenizerFast
+    tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+    tokenizer.pad_token = tokenizer.eos_token
+
+    images = torch.stack([item[0] for item in batch], dim=0)
+    # COCO items[1] is a list of captions. Use the first one for training.
+    raw_captions = [item[1][0] if isinstance(item[1], list) and len(item[1]) > 0 else str(item[1]) for item in batch]
+
+    tokens = tokenizer(
+        raw_captions,
+        padding=True,
+        truncation=True,
+        max_length=40,
+        return_tensors="pt",
+    )
+    # Shape: (B, seq_len) -> (B, 1, seq_len) to match existing pipeline expectations if needed, 
+    # but Blip2Fast usually handles (B, seq_len) after unsqueeze.
+    return images, tokens.input_ids
 
 def loader(transform_fn, task):
     if task != 'img-captioning':
@@ -171,17 +192,11 @@ def loader(transform_fn, task):
             except Exception:
                 val_dataset = transform_module.get_dataset(split='train')
             
-            # Dynamically attach collate_fn if the transform module provides one
-            if hasattr(transform_module, 'get_collate_fn'):
-                train_dataset.collate_fn = transform_module.get_collate_fn()
-                val_dataset.collate_fn = transform_module.get_collate_fn()
+            # Use GPT2 collate for transformer compatibility
+            train_dataset.collate_fn = gpt2_collate_fn
+            val_dataset.collate_fn = gpt2_collate_fn
             
-            # Fetch vocab size dynamically or default safely
-            vocab_size = (50257,)
-            if hasattr(transform_module, 'get_vocab_size'):
-                vocab_size = transform_module.get_vocab_size()
-            
-            return vocab_size, MINIMUM_ACCURACY, train_dataset, val_dataset
+            return (50257,), MINIMUM_ACCURACY, train_dataset, val_dataset
         else:
             raise ImportError(f"get_dataset() missing in {mod_name}")
 
