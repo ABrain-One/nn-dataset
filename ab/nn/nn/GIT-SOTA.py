@@ -32,8 +32,9 @@ class Net(nn.Module):
         model_id = "microsoft/git-large-coco"
         print(f"Loading GIT Model: {model_id}")
 
-        self.processor = GitProcessor.from_pretrained(model_id, use_fast=False)
-        self.model = GitForCausalLM.from_pretrained(model_id).to(device)
+        from ab.nn.util.hf.HF import from_pretrained_with_retry
+        self.processor = from_pretrained_with_retry(GitProcessor.from_pretrained, model_id, use_fast=False)
+        self.model = from_pretrained_with_retry(GitForCausalLM.from_pretrained, model_id).to(device)
 
         for p in self.model.parameters():
             p.requires_grad = False

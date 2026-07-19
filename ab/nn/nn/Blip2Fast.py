@@ -34,6 +34,8 @@ import os
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+from ab.nn.util.hf.HF import from_pretrained_with_retry
+
 
 def supported_hyperparameters():
     return {'lr', 'batch'}
@@ -56,7 +58,8 @@ class FrozenBlip2Encoder(nn.Module):
         # [FROZEN] Load backbone in float16 to save 7.6GB of VRAM (3.8B params).
         # This is essential for fitting the model + activations in 24GB.
         # Frozen weights do not need float32 precision for inference-only use.
-        self.blip2 = Blip2Model.from_pretrained(
+        self.blip2 = from_pretrained_with_retry(
+            Blip2Model.from_pretrained,
             model_id,
             torch_dtype=torch.float16,
             low_cpu_mem_usage=True,
@@ -114,8 +117,8 @@ class CaptionDecoder(nn.Module):
         self.tokenizer = GPT2Tokenizer.from_pretrained(_tok_dir, local_files_only=True)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        config = GPT2Config.from_pretrained(gpt2_id)
-        self.gpt2 = GPT2LMHeadModel.from_pretrained(gpt2_id, config=config)
+        config = from_pretrained_with_retry(GPT2Config.from_pretrained, gpt2_id)
+        self.gpt2 = from_pretrained_with_retry(GPT2LMHeadModel.from_pretrained, gpt2_id, config=config)
         self.gpt2 = self.gpt2.to(device)
         self.gpt2_hidden = config.n_embd  # 768
 
@@ -127,7 +130,7 @@ class CaptionDecoder(nn.Module):
             nn.LayerNorm(self.gpt2_hidden),
             nn.GELU(),
         ).to(device)
-        
+
         # Number of visual prefix tokens from Q-Former (32 queries)
         self.num_visual_tokens = 32
 
@@ -213,7 +216,7 @@ class Net(nn.Module):
             q_former_hidden=self.encoder.hidden_size,
             device=device
         )
-        
+
         # [PIPELINE] Define a dummy criterion to bypass generic MSELoss in Train.py.
         # This is necessary because Train.py defaults to MSE for non-img-classification tasks,
         # while captioning requires special handling (BLEU/METEOR).
@@ -262,7 +265,7 @@ class Net(nn.Module):
         # [TRAINABLE] Only optimize decoder params
         trainable_params = [p for p in self.decoder.parameters() if p.requires_grad]
         self.optimizer = torch.optim.AdamW(trainable_params, lr=prm.get('lr', 1e-4))
-        
+
         # [FAST-FAIL] Shape Contract Check: Automatically validates generated model shapes
         # If this fails, NNEval.py will catch it natively and skip the model.
         try:
@@ -313,3 +316,4 @@ class Net(nn.Module):
         result = 0.0, total_loss / max(num_batches, 1)
         print(f"[Blip2Fast] Epoch complete: {num_batches} batches, avg_loss={result[1]:.4f}")
         return result
+

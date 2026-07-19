@@ -20,8 +20,11 @@ from torch.utils.data import Dataset
 def _get_default_cache_dir():
     if "BLIP2_CACHE_DIR" in os.environ:
         return os.environ["BLIP2_CACHE_DIR"]
+    legacy_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../nn-gpt/out/nngpt/cache"))
+    if os.path.exists(legacy_path):
+        return legacy_path
     base_dir = os.path.dirname(__file__)
-    return os.path.abspath(os.path.join(base_dir, "../../../out/cache/blip2fast"))
+    return os.path.abspath(os.path.join(base_dir, "../../../out/cache"))
 
 cache_dir = _get_default_cache_dir()
 
@@ -38,8 +41,10 @@ def _auto_extract_features(split: str):
     os.makedirs(cache_dir, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
+    from ab.nn.util.hf.HF import from_pretrained_with_retry
     print("[CACHE-AUTO] Loading BLIP-2 Encoder in 4-bit...")
-    model = Blip2Model.from_pretrained(
+    model = from_pretrained_with_retry(
+        Blip2Model.from_pretrained,
         "Salesforce/blip2-opt-2.7b",
         quantization_config=BitsAndBytesConfig(load_in_4bit=True),
         torch_dtype=torch.float16,

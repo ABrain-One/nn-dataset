@@ -108,7 +108,9 @@ class OPTCaptionDecoder(nn.Module):
 
         print(f"[Blip2FastOpt] Loading frozen OPT decoder: {OPT_MODEL_ID}")
 
-        self.opt_tokenizer = AutoTokenizer.from_pretrained(OPT_MODEL_ID, use_fast=False)
+        from ab.nn.util.hf.HF import from_pretrained_with_retry
+
+        self.opt_tokenizer = from_pretrained_with_retry(AutoTokenizer.from_pretrained, OPT_MODEL_ID, use_fast=False)
         if self.opt_tokenizer.pad_token is None:
             self.opt_tokenizer.pad_token = self.opt_tokenizer.eos_token
 
@@ -116,7 +118,8 @@ class OPTCaptionDecoder(nn.Module):
         self.gpt2_tokenizer = GPT2Tokenizer.from_pretrained(_tok_dir, local_files_only=True)
         self.gpt2_tokenizer.pad_token = self.gpt2_tokenizer.eos_token
 
-        self.opt = OPTForCausalLM.from_pretrained(
+        self.opt = from_pretrained_with_retry(
+            OPTForCausalLM.from_pretrained,
             OPT_MODEL_ID,
             torch_dtype=torch.float16,
             device_map={"": device},
@@ -183,7 +186,9 @@ class OPTCaptionDecoder(nn.Module):
             from transformers import Blip2ForConditionalGeneration
             import gc
 
-            temp_model = Blip2ForConditionalGeneration.from_pretrained(
+            from ab.nn.util.hf.HF import from_pretrained_with_retry
+            temp_model = from_pretrained_with_retry(
+                Blip2ForConditionalGeneration.from_pretrained,
                 "Salesforce/blip2-opt-2.7b",
                 torch_dtype=torch.float16,
                 low_cpu_mem_usage=True,
