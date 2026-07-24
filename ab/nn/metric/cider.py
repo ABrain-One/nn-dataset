@@ -112,6 +112,19 @@ class CiderMetric:
         self.predictions = []
         self.references = []
         self.idx2word = None
+        self.vocab_size = out_shape[0] if out_shape else 0
+        if self.vocab_size == 50257:
+            try:
+                from transformers import GPT2TokenizerFast
+                from ab.nn.util.hf.download_utils import ensure_hf_model
+                tokenizer_path = ensure_hf_model("gpt2")
+                self.gpt2_tokenizer = GPT2TokenizerFast.from_pretrained(tokenizer_path, local_files_only=True)
+            except (ImportError, OSError) as error:
+                raise RuntimeError(
+                    f"GPT-2 tokenizer is required for vocab size 50257 but could not be loaded: {error}"
+                ) from error
+        else:
+            self.gpt2_tokenizer = None
 
     def reset(self):
         self.predictions = []
@@ -136,6 +149,35 @@ class CiderMetric:
         return " ".join(words)
 
     def __call__(self, preds, labels):
+        if isinstance(preds, list) and preds and isinstance(preds[0], str):
+            if labels.dim() == 3:
+                label_ids = labels.cpu().tolist()
+            else:
+                label_ids = [[reference] for reference in labels.cpu().tolist()]
+                
+            for p_str, sample_refs in zip(preds, label_ids):
+                refs = []
+                for ref_ids in sample_refs:
+                    if self.vocab_size == 50257 and self.gpt2_tokenizer:
+                        # GPT-2 mode: labels are GPT-2 token IDs — decode with gpt2_tokenizer
+                        clean_ids = [x for x in ref_ids if x >= 0 and x != -100]
+                        ref_str = self.gpt2_tokenizer.decode(clean_ids, skip_special_tokens=True).strip()
+                    else:
+                        # Legacy COCO vocab mode
+                        from ab.nn.loader.coco_.Caption import GLOBAL_CAPTION_VOCAB
+                        if self.idx2word is None:
+                            self.idx2word = GLOBAL_CAPTION_VOCAB.get('idx2word', {})
+                        ref_str = self.decode(ref_ids).strip()
+                        
+                    if ref_str:
+                        refs.append(ref_str.lower())
+
+                hyp = p_str.strip().lower()
+                if hyp and refs:
+                    self.predictions.append(hyp)
+                    self.references.append(refs)
+            return
+
         # preds: [B, T, V] or [B, T]
         if preds.dim() == 3:
             pred_ids = torch.argmax(preds, -1).cpu().tolist()
@@ -143,26 +185,32 @@ class CiderMetric:
             pred_ids = preds.cpu().tolist()
             
         if labels.dim() == 3:
-            # Multi-ref or just reshaped? Usually [B, NumRef, T]
-            # But standard loader gives [B, T] for single caption training
-            # We will handle [B, T]
-            label_ids = labels[:, 0, :].cpu().tolist()
-        else:
             label_ids = labels.cpu().tolist()
+        else:
+            label_ids = [[reference] for reference in labels.cpu().tolist()]
 
-        # We assume idx2word is available via dependency injection or we need to pass it
-        # For now, we will store raw IDs if we can't decode, but Cider needs strings.
-        # This assumes the caller will set vocab or we use simple space-joined IDs as tokens (works for stats)
-        
-        for p, t in zip(pred_ids, label_ids):
-            # If idx2word is not set, we can't really compute valid CIDEr unless we treat IDs as words
-            # Treat IDs as words is valid for n-gram overlap
+        for p, sample_refs in zip(pred_ids, label_ids):
+            refs = []
+            for t in sample_refs:
+                if self.vocab_size == 50257 and self.gpt2_tokenizer:
+                    # NEW LOGIC: Text-based Decoding (GPT-2/OPT)
+                    t_clean = [x for x in t if x != -100 and x >= 0]
+                    ref_str = self.gpt2_tokenizer.decode(t_clean, skip_special_tokens=True).strip()
+                else:
+                    # LEGACY LOGIC: Integer ID string-join (Fallback for CIDEr if no vocab)
+                    ref_str = " ".join(str(x) for x in t if x != 0)
+                if ref_str:
+                    refs.append(ref_str)
             
-            hyp_str = " ".join(str(x) for x in p if x != 0) # 0 is usually PAD
-            ref_str = " ".join(str(x) for x in t if x != 0)
-            
-            self.predictions.append(hyp_str)
-            self.references.append([ref_str]) # List of refs
+            if self.vocab_size == 50257 and self.gpt2_tokenizer:
+                p_clean = [x for x in p if x != -100 and x >= 0]
+                hyp_str = self.gpt2_tokenizer.decode(p_clean, skip_special_tokens=True).strip()
+            else:
+                hyp_str = " ".join(str(x) for x in p if x != 0) # 0 is usually PAD
+                
+            if hyp_str and refs:
+                self.predictions.append(hyp_str)
+                self.references.append(refs)
 
     def result(self):
         if not self.predictions:
@@ -179,11 +227,9 @@ class CiderMetric:
             
         self.scorer.compute_doc_freq() 
         scores = self.scorer.compute_cider()
-        # Normalize CIDEr to 0-1 range by dividing by 3.0
         # CIDEr typically ranges 0-3 for good captions
         raw_score = np.mean(scores)
-        normalized_score = raw_score / 3.0
-        return min(normalized_score, 1.0)  # Cap at 1.0
+        return float(raw_score)
 
 def create_metric(out_shape=None):
     return CiderMetric(out_shape)
