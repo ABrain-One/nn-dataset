@@ -83,7 +83,7 @@ def init_population():
 def code_to_db(cursor, table_name, code=None, code_file=None, force_name = None):
     # If the model does not exist, insert it with a new UUID
     if code_file:
-        nm = code_file.stem 
+        nm = code_file.stem
     elif force_name is None:
         nm = uuid4(code)
     else:
@@ -177,31 +177,150 @@ def save_train_stat(cursor, stat_id: str, train_stat: dict):
         values,
     )
 
+def _layer_snapshot_to_table(snapshot: dict) -> dict:
+    """
+    Convert one JSON layer_stat snapshot into the table format expected by
+    _save_layer_stat().
+    """
+    if not isinstance(snapshot, dict):
+        return {}
+
+    # New cumulative format:
+    # {
+    #     "summary": {...},
+    #     "layers": [{"name": "...", ...}],
+    #     "raw_analysis": {...}
+    # }
+    layers = snapshot.get("layers")
+
+    if isinstance(layers, list):
+        return {
+            row["name"]: {
+                key: value
+                for key, value in row.items()
+                if key != "name"
+            }
+            for row in layers
+            if isinstance(row, dict) and row.get("name")
+        }
+
+    # Legacy format:
+    # {
+    #     "summary": {...},
+    #     "analysis": {...},
+    #     "table": {...}
+    # }
+    table = snapshot.get("table")
+
+    if isinstance(table, dict):
+        return table
+
+    # Direct layer-table fallback.
+    return {
+        name: values
+        for name, values in snapshot.items()
+        if isinstance(values, dict)
+    }
+
+
+
 
 def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
     prm = dict(prm)
 
-    # Extract grouped training diagnostics before prm-table insert
-    train_stat = prm.pop('train_stat', {})
+    # Extract grouped data before scalar parameter insertion.
+    train_stat = prm.pop("train_stat", {})
+    layer_stat = prm.pop("layer_stat", {})
 
-    transform = prm['transform']
-    uid = prm.pop('uid')
-    extra_main_column_values = [prm.pop(nm, None) for nm in extra_main_columns]
 
-    # Only normal hyperparameters go into prm table
-    for nm in param_tables:
-        populate_prm_table(nm, cursor, prm, uid)
 
-    all_values = [transform, uid, *config_ext, *extra_main_column_values]
+    transform = prm["transform"]
+    uid = prm.pop("uid")
+
+    extra_main_column_values = [
+        prm.pop(name, None)
+        for name in extra_main_columns
+    ]
+
+    # Only ordinary scalar hyperparameters go into parameter tables.
+    for table_name in param_tables:
+        populate_prm_table(
+            table_name,
+            cursor,
+            prm,
+            uid,
+        )
+
+    all_values = [
+        transform,
+        uid,
+        *config_ext,
+        *extra_main_column_values,
+    ]
+
     stat_id = uuid4(all_values)
 
-    cursor.execute(f"""
-    INSERT OR IGNORE INTO stat (id, transform, prm, {', '.join(main_columns_ext + extra_main_columns)})
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (stat_id, *all_values))
+    cursor.execute(
+        f"""
+        INSERT OR IGNORE INTO stat (
+            id,
+            transform,
+            prm,
+            {', '.join(main_columns_ext + extra_main_columns)}
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (stat_id, *all_values),
+    )
 
-    # Save train_stat row linked 1:1 to stat.id
-    save_train_stat(cursor, stat_id, train_stat)
+    # Save grouped training diagnostics.
+    save_train_stat(
+        cursor,
+        stat_id,
+        train_stat,
+    )
+
+    # Save all cumulative layer-analysis snapshots under this stat.
+    if isinstance(layer_stat, dict):
+        metric = config_ext[2]
+        imported_numeric_snapshot = False
+
+        for snapshot_epoch, snapshot in layer_stat.items():
+            if not str(snapshot_epoch).isdigit():
+                continue
+
+            imported_numeric_snapshot = True
+
+            table = _layer_snapshot_to_table(snapshot)
+
+            if not table:
+                continue
+
+            _save_layer_stat(
+                cursor=cursor,
+                epoch=int(snapshot_epoch),
+                table=table,
+                stat_id=stat_id,
+                metric=metric,
+            )
+
+        # Legacy format:
+        # {
+        #     "summary": {...},
+        #     "analysis": {...},
+        #     "table": {...}
+        # }
+        if not imported_numeric_snapshot:
+            legacy_table = layer_stat.get("table")
+
+            if isinstance(legacy_table, dict) and legacy_table:
+                _save_layer_stat(
+                    cursor=cursor,
+                    epoch=config_ext[-1],
+                    table=legacy_table,
+                    stat_id=stat_id,
+                    metric=metric,
+                )
 
     return stat_id
 
@@ -235,12 +354,32 @@ def json_train_to_db():
                         for single_metric in metric.split(','):
                             populate_code_table('metric', cursor, name=single_metric.strip())
 
-                        if trial['transform']:
-                            populate_code_table('transform', cursor, name=trial['transform'])
-                        extracted_train_stat = trial.get('train_stat') if isinstance(trial.get('train_stat'), dict) else {}
-                        trial = {k: v for k, v in trial.items() if not isinstance(v, (dict, list))}
+                        if trial["transform"]:
+                            populate_code_table("transform", cursor, name=trial["transform"])
+
+                        extracted_train_stat = (
+                            trial.get("train_stat")
+                            if isinstance(trial.get("train_stat"), dict)
+                            else {}
+                        )
+
+                        extracted_layer_stat = (
+                            trial.get("layer_stat")
+                            if isinstance(trial.get("layer_stat"), dict)
+                            else {}
+                        )
+
+                        trial = {
+                            k: v
+                            for k, v in trial.items()
+                            if not isinstance(v, (dict, list))
+                        }
+
                         if extracted_train_stat:
-                            trial['train_stat'] = extracted_train_stat
+                            trial["train_stat"] = extracted_train_stat
+
+                        if extracted_layer_stat:
+                            trial["layer_stat"] = extracted_layer_stat
 
                         save_stat(sub_config + (epoch,), trial, cursor)
             except Exception as e:
@@ -511,74 +650,130 @@ def save_nn_stat(nn_name: str, prm_id: str, stats: dict):
         print(f"Error saving NN statistics to database: {e}")
         return False
 
-def save_layer_stat(epoch: int, table: dict, stat_id: str, metric: str = None):
-    """Save per-layer analysis into layer_stat and per_layer_stat."""
-    conn, cursor = sql_conn()
-    try:
-        cursor.execute("""
-                       CREATE TABLE IF NOT EXISTS layer_stat
-                       (
-                           id TEXT PRIMARY KEY,
-                           layer_name TEXT,
-                           layer_type TEXT,
-                           stat_id TEXT
-                       )
-                       """)
-        cursor.execute("""
-                       CREATE TABLE IF NOT EXISTS per_layer_stat
-                       (
-                           id TEXT,
-                           stat_id TEXT,
-                           layer_type TEXT,
-                           ww_alpha REAL,
-                           grad_norm REAL,
-                           dead_frac REAL,
-                           taylor_imp REAL,
-                           cka_redund REAL,
-                           eff_rank REAL,
-                           rank_ratio REAL,
-                           sensitivity REAL,
-                           PRIMARY KEY (id, stat_id)
-                       )
-                       """)
+def _save_layer_stat(
+    cursor,
+    epoch: int,
+    table: dict,
+    stat_id: str,
+    metric: str = None,
+):
+    """
+    Save one layer-analysis snapshot using an existing cursor.
+    """
 
-        for layer_name, row in table.items():
-            layer_stat_id = uuid4([stat_id, layer_name])
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS layer_stat
+        (
+            id TEXT PRIMARY KEY,
+            layer_name TEXT,
+            layer_type TEXT,
+            stat_id TEXT
+        )
+        """
+    )
 
-            cursor.execute("""
-                INSERT OR IGNORE INTO layer_stat (id, layer_name, layer_type, stat_id)
-                VALUES (?, ?, ?, ?)
-            """, (
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS per_layer_stat
+        (
+            id TEXT,
+            stat_id TEXT,
+            layer_type TEXT,
+            ww_alpha REAL,
+            grad_norm REAL,
+            dead_frac REAL,
+            taylor_imp REAL,
+            cka_redund REAL,
+            eff_rank REAL,
+            rank_ratio REAL,
+            sensitivity REAL,
+            PRIMARY KEY (id, stat_id)
+        )
+        """
+    )
+
+    for layer_name, row in table.items():
+        layer_stat_id = uuid4(
+            [
+                stat_id,
+                layer_name,
+                str(epoch),
+            ]
+        )
+
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO layer_stat
+                (id, layer_name, layer_type, stat_id)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
                 layer_stat_id,
                 layer_name,
-                row.get('layer_type'),
+                row.get("layer_type"),
                 stat_id,
-            ))
+            ),
+        )
 
-            cursor.execute("""
-                INSERT OR REPLACE INTO per_layer_stat (
-                    id, stat_id, layer_type,
-                    ww_alpha, grad_norm, dead_frac,
-                    taylor_imp, cka_redund, eff_rank, rank_ratio, sensitivity
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO per_layer_stat (
+                id,
+                stat_id,
+                layer_type,
+                ww_alpha,
+                grad_norm,
+                dead_frac,
+                taylor_imp,
+                cka_redund,
+                eff_rank,
+                rank_ratio,
+                sensitivity
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
                 layer_stat_id,
                 stat_id,
-                row.get('layer_type'),
-                row.get('ww_alpha'),
-                row.get('grad_norm'),
-                row.get('dead_frac'),
-                row.get('taylor_imp'),
-                row.get('cka_redund'),
-                row.get('eff_rank'),
-                row.get('rank_ratio'),
-                row.get('sensitivity'),
-            ))
+                row.get("layer_type"),
+                row.get("ww_alpha"),
+                row.get("grad_norm"),
+                row.get("dead_frac"),
+                row.get("taylor_imp"),
+                row.get("cka_redund"),
+                row.get("eff_rank"),
+                row.get("rank_ratio"),
+                row.get("sensitivity"),
+            ),
+        )
+
+@_serialized_db_write
+def save_layer_stat(
+    epoch: int,
+    table: dict,
+    stat_id: str,
+    metric: str = None,
+):
+    """
+    Public wrapper for live-training callers.
+    """
+
+    conn, cursor = sql_conn()
+
+    try:
+        _save_layer_stat(
+            cursor=cursor,
+            epoch=epoch,
+            table=table,
+            stat_id=stat_id,
+            metric=metric,
+        )
 
         conn.commit()
+
     finally:
         conn.close()
-
 
 @_serialized_db_write
 def json_run_tflite_to_db():

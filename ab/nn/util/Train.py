@@ -7,6 +7,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Optional
 from typing import Union
+import copy
 
 from torch.cuda import OutOfMemoryError
 
@@ -72,7 +73,7 @@ def get_system_info() -> dict:
         'cpu_count': psutil.cpu_count(logical=True),
         'total_ram_kb': round(psutil.virtual_memory().total / 1024, 2),
     }
-    
+
     # GPU information
     if torch.cuda.is_available():
         try:
@@ -83,7 +84,7 @@ def get_system_info() -> dict:
             info['gpu_type'] = 'CUDA Available (details unavailable)'
     else:
         info['gpu_type'] = 'No GPU'
-    
+
     return info
 
 
@@ -94,7 +95,7 @@ def get_current_resource_usage() -> dict:
         'ram_usage_percent': psutil.virtual_memory().percent,
         'cpu_usage_percent': psutil.cpu_percent(interval=0.1),
     }
-    
+
     # GPU memory usage
     if torch.cuda.is_available():
         try:
@@ -105,7 +106,7 @@ def get_current_resource_usage() -> dict:
             )
         except Exception:
             pass
-    
+
     return usage
 
 
@@ -227,11 +228,12 @@ class Train:
         self.best_accuracy = 0.0
         self.best_epoch = 0
         self.save_path = None
-        
+
         # System information (collected once at initialization)
         self.system_info = get_system_info()
         self.layer_analysis = layer_analysis
-        self._layer_data = {}
+        self.layer_stat = {}
+
 
     def _get_loss_function(self):
         """Build loss function based on the task or use model's custom criterion."""
@@ -266,7 +268,7 @@ class Train:
                     else:
                         outputs = self.model(inputs)
                         loss = self.loss_fn(outputs, labels)
-                    
+
                     total_loss += loss.item()
                     num_batches += 1
                 except Exception as e:
@@ -384,52 +386,87 @@ class Train:
             # Print detailed metrics
             print(f"  Train Loss: {train_loss:.4f}, Test Loss: {test_loss:.4f}")
             print(f"  Train Acc: {train_accuracy:.4f}, Test Acc: {accuracy:.4f}")
-            if lr_now and grad_norm and samples_per_second:
-                print(f"  LR: {lr_now:.6f}, Grad Norm: {grad_norm:.4f}, Throughput: {samples_per_second:.1f} samples/s")
-                # Layer-wise analysis (epochs 1-5, then every 5)
+
+            if lr_now is not None and grad_norm is not None and samples_per_second:
+                print(
+                    f"  LR: {lr_now:.6f}, "
+                    f"Grad Norm: {grad_norm:.4f}, "
+                    f"Throughput: {samples_per_second:.1f} samples/s"
+                )
+
+            # Layer-wise analysis (epochs 1-5, then every 5)
             layer_summary = {}
             layer_table = {}
             layer_result = {}
+
+
             if self.layer_analysis and (epoch <= 5 or epoch % 5 == 0):
                 try:
                     from ab.nn.util.LayerAnalysis import LayerAnalyzer
+
                     analyzer = LayerAnalyzer(self.model, self.device)
 
                     layer_result = analyzer.full_analysis(
-                        self.train_loader, self.loss_fn, num_batches=1)
-
-
-                    layer_table = analyzer.build_layer_table(layer_result)
-
-                    layer_summary = analyzer.summarize(layer_result)
-                    layer_summary['layer_id_map'] = layer_result.get('layer_types', {})
-
-                    print(f"  Layer summary: {layer_summary}")
-                    print(
-                        f"  Layer result keys/errors: { {k: v.get('error') if isinstance(v, dict) and 'error' in v else 'ok' for k, v in layer_result.items()} }"
+                        self.train_loader,
+                        self.loss_fn,
+                        num_batches=1,
                     )
 
+                    layer_table = analyzer.build_layer_table(layer_result)
+                    layer_summary = analyzer.summarize(layer_result)
 
+                    layer_summary["layer_id_map"] = layer_result.get(
+                        "layer_types",
+                        {},
+                    )
+
+                    self.layer_stat[str(epoch)] = {
+                        "summary": layer_summary,
+                        "layers": [
+                            {
+                                "name": layer_name,
+                                **layer_values,
+                            }
+                            for layer_name, layer_values in layer_table.items()
+                        ],
+                        "raw_analysis": layer_result,
+                    }
 
                     print(f"  Layer analysis saved (epoch {epoch})")
 
                 except ImportError:
-                    print("[WARN] LayerAnalysis.py not found, disabling layer analysis")
+                    print(
+                        "[WARN] LayerAnalysis.py not found, "
+                        "disabling layer analysis"
+                    )
                     self.layer_analysis = False
+
                 except Exception as e:
-                    print(f"[WARN] Layer analysis failed (epoch {epoch}): {e}")
-            # The accuracy-to-time metric is not stored in the database as it can change over time and can be quickly calculated from saved values.
-            accuracy_to_time = accuracy_to_time_metric(accuracy, self.minimum_accuracy, duration)
+                    print(
+                        f"[WARN] Layer analysis failed "
+                        f"(epoch {epoch}): {e}"
+                    )
+
+            accuracy_to_time = accuracy_to_time_metric(
+                accuracy,
+                self.minimum_accuracy,
+                duration,
+            )
 
             if not good(accuracy, self.minimum_accuracy, duration):
                 if 'caption' in self.task:
-                    print(f"[WARN] Accuracy {accuracy} is below the minimum accepted accuracy {self.minimum_accuracy}. Continuing training...")
+                    print(
+                        f"[WARN] Accuracy {accuracy} is below the minimum accepted "
+                        f"accuracy {self.minimum_accuracy}. Continuing training..."
+                    )
                 else:
-                    raise AccuracyException(accuracy, duration,
-                                            f"Accuracy is too low: {accuracy}."
-                                            f" The minimum accepted accuracy for the '{self.config[1]}"
-                                            f"' dataset is {self.minimum_accuracy}.")
-
+                    raise AccuracyException(
+                        accuracy,
+                        duration,
+                        f"Accuracy is too low: {accuracy}."
+                        f" The minimum accepted accuracy for the '{self.config[1]}'"
+                        f" dataset is {self.minimum_accuracy}."
+                    )
 
             if save_pth_weights or save_onnx_weights:
                 save_if_best(self.model, self.model_name, accuracy, save_pth_weights, save_onnx_weights, train_set, self.num_workers, save_path=save_path)
@@ -437,7 +474,7 @@ class Train:
             # Build extended parameters with new metrics
             only_prm = {k: v for k, v in self.prm.items() if k not in {'uid', 'duration', 'accuracy', 'epoch'}}
             # Use 'lr' as the canonical learning-rate key to avoid duplication with 'learning_rate'
-            
+
             # Collect current resource usage
             resource_usage = get_current_resource_usage()
             # Create train_stat group with new parameters
@@ -449,6 +486,7 @@ class Train:
                 'samples_per_second': samples_per_second,
                 'best_accuracy': self.best_accuracy,
                 'best_epoch': self.best_epoch,
+                'epoch_max': epoch_max,
                 'cpu_count': self.system_info.get('cpu_count'),
                 'cpu_type': self.system_info.get('cpu_type'),
                 'cpu_usage_percent': resource_usage.get('cpu_usage_percent'),
@@ -467,27 +505,24 @@ class Train:
                 'duration': duration,
                 'duration_seconds': round(duration_seconds, 2),
                 'accuracy': accuracy,
-                'epoch_max': epoch_max,
                 'train_stat': train_stat_group,
             }
                             | {f'metric_{k}': v for k, v in all_metric_results.items()})
 
-            # Build JSON export once
+            # Store only the layer-analysis snapshot produced at this epoch.
+            # Epochs without analysis do not receive a new layer_stat field.
+            if self.layer_stat:
+                prm["layer_stat"] = copy.deepcopy(self.layer_stat)
+
             prm_json = dict(prm)
 
-            # Make layer statistics human-readable without losing information
-            if layer_summary or layer_result or layer_table:
-                prm_json["layer_stat"] = {
-                    "summary": layer_summary,
-                    "layers": [
-                        {
-                            "name": name,
-                            **row,
-                        }
-                        for name, row in layer_table.items()
-                    ],
-                    "raw_analysis": layer_result,
-                }
+
+
+            # Promote core experiment info for readability
+            prm_json["task"] = self.config[0]
+            prm_json["dataset"] = self.config[1]
+            prm_json["metric"] = self.config[2]
+            prm_json["model"] = self.config[3] if len(self.config) > 3 else self.model_name
 
             if self.save_to_db:
                 if self.is_code:
@@ -498,22 +533,14 @@ class Train:
                             prm_json,
                         )
 
-                        stat_id = DB_Write.save_results(
+                        DB_Write.save_results(
                             self.config + (epoch,),
                             prm,
-                            nn_code=getattr(self, 'nn_code', None)
                         )
-                        
-                        if layer_table:
-                            DB_Write.save_layer_stat(
-                                epoch,
-                                layer_table,
-                                stat_id,
-                                self.config[2],
-                            )
                     else:
                         print(
-                            "[WARN] parameter `save_path` set to null, the statistics will not be saved into a file."
+                            "[WARN] parameter `save_path` set to null, "
+                            "the statistics will not be saved into a file."
                         )
 
                 else:
@@ -523,18 +550,12 @@ class Train:
                         prm_json,
                     )
 
-                    stat_id = DB_Write.save_results(
+                    DB_Write.save_results(
                         self.config + (epoch,),
                         prm,
                     )
 
-                    if layer_table:
-                        DB_Write.save_layer_stat(
-                            epoch,
-                            layer_table,
-                            stat_id,
-                            self.config[2],
-                        )
+
 
         # Save training summary at the end
         if save_path and self.epoch_history:
@@ -545,10 +566,10 @@ class Train:
     def _save_training_summary(self):
         """Save comprehensive training summary"""
         import json
-        
+
         # Get final resource usage
         final_resource_usage = get_current_resource_usage()
-        
+
         summary = {
             'config': {
                 'task': self.config[0],
@@ -586,7 +607,6 @@ class Train:
 
         summary_path = out_dir / 'training_summary.json'
         try:
-            out_dir.mkdir(parents=True, exist_ok=True)
             with open(summary_path, 'w') as f:
                 json.dump(summary, f, indent=2)
             print(f"Training summary saved to {summary_path}")
@@ -621,7 +641,7 @@ class Train:
 
         # Collect results from ALL metrics
         all_results = {name: fn.result() for name, fn in self.metric_fns.items()}
-        
+
         # Return primary metric (first one) for accuracy comparison, and all results
         primary_accuracy = all_results[self.primary_metric]
         return primary_accuracy, all_results
@@ -677,7 +697,6 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             save_to_db=save_to_db,
             layer_analysis=layer_analysis,
             is_code=True)
-        trainer.nn_code = nn_code
         epoch = prm['epoch']
         accuracy, accuracy_to_time, duration = trainer.train_n_eval(epoch, epoch_limit_minutes, False, export_onnx, train_set, save_path=save_path)
         if save_to_db:
