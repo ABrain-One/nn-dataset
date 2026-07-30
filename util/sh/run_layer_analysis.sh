@@ -12,32 +12,23 @@ set -euo pipefail
 # Usage
 # ============================================================
 #
-# Dry-run every historical record for the selected config:
+# Run every historical record for the selected config:
 #
 #   ./util/sh/run_layer_analysis.sh
-#
-# Run every historical record without historical writeback:
-#
-#   RUN=1 WRITEBACK=0 ./util/sh/run_layer_analysis.sh
 #
 # Run one source JSON only:
 #
-#   SOURCE_JSON=3.json \
-#   RUN=1 \
-#   WRITEBACK=1 \
+#   SOURCE_JSON=1.json \
 #   ./util/sh/run_layer_analysis.sh
 #
-# Force every replay to run for 50 epochs:
+# Override the default replay length:
 #
-#   SOURCE_JSON=3.json \
-#   RUN=1 \
-#   WRITEBACK=1 \
-#   BACKFILL_EPOCHS=50 \
+#   SOURCE_JSON=1.json \
+#   BACKFILL_EPOCHS=5 \
 #   ./util/sh/run_layer_analysis.sh
 #
 # Save logs:
 #
-#   RUN=1 WRITEBACK=1 \
 #   ./util/sh/run_layer_analysis.sh \
 #   2>&1 | tee out/training_log.txt
 #
@@ -45,12 +36,8 @@ set -euo pipefail
 #
 #   out/<CONFIG>-layerstats/
 #
-# Historical JSON files are modified only when:
-#
-#   RUN=1 WRITEBACK=1
-#
-# With WRITEBACK=1, each completed historical record is
-# atomically written immediately after its replay succeeds.
+# Each successfully completed historical record is atomically
+# written back immediately after its replay succeeds.
 #
 # ============================================================
 
@@ -136,9 +123,7 @@ BACKFILL_EPOCHS="${BACKFILL_EPOCHS:-50}"
 
 python - \
     "$CONFIG" \
-    "1" \
     "$SOURCE_JSON" \
-    "1" \
     "$BACKFILL_EPOCHS" <<'PY'
 
 import copy
@@ -146,6 +131,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from ab.nn.util.Exception import AccuracyException
 
 from ab.nn.util.Loader import load_dataset
 from ab.nn.util.Train import Train
@@ -156,10 +142,8 @@ from ab.nn.util.Util import (
 from ab.nn.util.db.Util import get_ab_nn_attr
 
 CONFIG = sys.argv[1]
-RUN_TRAINING = sys.argv[2] == "1"
-SOURCE_JSON = sys.argv[3]
-WRITEBACK = sys.argv[4] == "1"
-BACKFILL_EPOCHS = int(sys.argv[5])
+SOURCE_JSON = sys.argv[2]
+BACKFILL_EPOCHS = int(sys.argv[3])
 
 if BACKFILL_EPOCHS < 1:
     raise SystemExit(
@@ -636,6 +620,14 @@ selected_records = select_all_records(
     model_name,
 )
 
+START_RECORD = int(os.environ.get("START_RECORD", "0"))
+
+selected_records = [
+    item
+    for item in selected_records
+    if item["record_index"] >= START_RECORD
+]
+
 historical_json_files = get_json_files(
     CONFIG
 )
@@ -700,10 +692,6 @@ for selected in selected_records:
     )
     print()
 
-    if not RUN_TRAINING:
-        print("DRY RUN: training will not run.")
-        print()
-        continue
 
     replay_dir = get_replay_dir(
         CONFIG
@@ -722,20 +710,33 @@ for selected in selected_records:
     )
     print()
 
-    run_training(
-        task=task,
-        dataset=dataset,
-        metric=metric,
-        model_name=model_name,
-        parameters=parameters,
-        epoch_max=replay_epoch_max,
-        replay_dir=replay_dir,
-    )
+    try:
+        run_training(
+            task=task,
+            dataset=dataset,
+            metric=metric,
+            model_name=model_name,
+            parameters=parameters,
+            epoch_max=replay_epoch_max,
+            replay_dir=replay_dir,
+        )
+    except AccuracyException as exc:
+        print()
+        print(
+            "Skipping historical record because "
+            "the accuracy/time threshold was not met:"
+        )
+        print(f"  source JSON: {source_json}")
+        print(f"  record index: {record_index}")
+        print(f"  reason: {exc}")
+        print()
+        continue
 
     final_json = (
         replay_dir
         / f"{replay_epoch_max}.json"
     )
+
 
     if not final_json.exists():
         raise RuntimeError(
@@ -829,28 +830,27 @@ for selected in selected_records:
         source_json
     )
 
-    if WRITEBACK:
-        atomic_write_json(
-            source_json,
-            pending_records_by_path[
-                source_json
-            ],
-        )
+    atomic_write_json(
+        source_json,
+        pending_records_by_path[
+            source_json
+        ],
+    )
 
-        print()
-        print(
-            "Checkpoint writeback completed"
-        )
-        print(
-            "-----------------------------"
-        )
-        print(
-            f"  updated: {source_json}"
-        )
-        print(
-            f"  record index: {record_index}"
-        )
-        print()
+    print()
+    print(
+        "Checkpoint writeback completed"
+    )
+    print(
+        "-----------------------------"
+    )
+    print(
+        f"  updated: {source_json}"
+    )
+    print(
+        f"  record index: {record_index}"
+    )
+    print()
 
     print()
     print("Complete layer analysis found")
@@ -872,49 +872,18 @@ for selected in selected_records:
     print()
 
 print()
-
-if RUN_TRAINING and WRITEBACK:
-    print(
-        "Incremental historical JSON "
-        "writeback completed."
-    )
-    print(
-        "Each completed record was written "
-        "atomically."
-    )
-
-elif RUN_TRAINING:
-    print(
-        "DRY RUN: historical JSON files were not modified."
-    )
-
-if RUN_TRAINING:
-    print()
-    print(
-        "All selected layer-analysis replays "
-        "completed."
-    )
-else:
-    print("DRY RUN ONLY.")
-    print()
-    print(
-        "To run every selected historical record:"
-    )
-    print(
-        "  RUN=1 WRITEBACK=1 "
-        "BACKFILL_EPOCHS=50 "
-        "./util/sh/run_layer_analysis.sh"
-    )
-    print()
-    print(
-        "To run one source JSON first:"
-    )
-    print(
-        "  SOURCE_JSON=3.json "
-        "RUN=1 "
-        "WRITEBACK=1 "
-        "BACKFILL_EPOCHS=50 "
-        "./util/sh/run_layer_analysis.sh"
-    )
+print(
+    "Incremental historical JSON "
+    "writeback completed."
+)
+print(
+    "Each completed record was written "
+    "atomically."
+)
+print()
+print(
+    "All selected layer-analysis replays "
+    "completed."
+)
 
 PY
