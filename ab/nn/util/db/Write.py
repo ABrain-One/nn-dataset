@@ -222,17 +222,112 @@ def _layer_snapshot_to_table(snapshot: dict) -> dict:
         if isinstance(values, dict)
     }
 
+def _save_layer_stat(
+    cursor,
+    epoch: int,
+    table: dict,
+    stat_id: str,
+    metric: str = None,
+):
+    """
+    Save one layer-analysis snapshot using an existing database cursor.
+    """
 
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS layer_stat
+        (
+            id TEXT PRIMARY KEY,
+            layer_name TEXT,
+            layer_type TEXT,
+            stat_id TEXT
+        )
+        """
+    )
 
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS per_layer_stat
+        (
+            id TEXT,
+            stat_id TEXT,
+            layer_type TEXT,
+            ww_alpha REAL,
+            grad_norm REAL,
+            dead_frac REAL,
+            taylor_imp REAL,
+            cka_redund REAL,
+            eff_rank REAL,
+            rank_ratio REAL,
+            sensitivity REAL,
+            PRIMARY KEY (id, stat_id)
+        )
+        """
+    )
+
+    for layer_name, row in table.items():
+        layer_stat_id = uuid4(
+            [
+                stat_id,
+                layer_name,
+                str(epoch),
+            ]
+        )
+
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO layer_stat
+                (id, layer_name, layer_type, stat_id)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                layer_stat_id,
+                layer_name,
+                row.get("layer_type"),
+                stat_id,
+            ),
+        )
+
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO per_layer_stat (
+                id,
+                stat_id,
+                layer_type,
+                ww_alpha,
+                grad_norm,
+                dead_frac,
+                taylor_imp,
+                cka_redund,
+                eff_rank,
+                rank_ratio,
+                sensitivity
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                layer_stat_id,
+                stat_id,
+                row.get("layer_type"),
+                row.get("ww_alpha"),
+                row.get("grad_norm"),
+                row.get("dead_frac"),
+                row.get("taylor_imp"),
+                row.get("cka_redund"),
+                row.get("eff_rank"),
+                row.get("rank_ratio"),
+                row.get("sensitivity"),
+            ),
+        )
 
 def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
     prm = dict(prm)
 
+    # Extract grouped training diagnostics before prm-table insert
+
     # Extract grouped data before scalar parameter insertion.
     train_stat = prm.pop("train_stat", {})
     layer_stat = prm.pop("layer_stat", {})
-
-
 
     transform = prm["transform"]
     uid = prm.pop("uid")
@@ -240,6 +335,7 @@ def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
     extra_main_column_values = [
         prm.pop(name, None)
         for name in extra_main_columns
+
     ]
 
     # Only ordinary scalar hyperparameters go into parameter tables.
@@ -251,12 +347,14 @@ def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
             uid,
         )
 
+
     all_values = [
         transform,
         uid,
         *config_ext,
         *extra_main_column_values,
     ]
+
 
     stat_id = uuid4(all_values)
 
@@ -322,6 +420,8 @@ def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
                     metric=metric,
                 )
 
+
+
     return stat_id
 
 
@@ -380,6 +480,7 @@ def json_train_to_db():
 
                         if extracted_layer_stat:
                             trial["layer_stat"] = extracted_layer_stat
+
 
                         save_stat(sub_config + (epoch,), trial, cursor)
             except Exception as e:
@@ -650,104 +751,6 @@ def save_nn_stat(nn_name: str, prm_id: str, stats: dict):
         print(f"Error saving NN statistics to database: {e}")
         return False
 
-def _save_layer_stat(
-    cursor,
-    epoch: int,
-    table: dict,
-    stat_id: str,
-    metric: str = None,
-):
-    """
-    Save one layer-analysis snapshot using an existing cursor.
-    """
-
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS layer_stat
-        (
-            id TEXT PRIMARY KEY,
-            layer_name TEXT,
-            layer_type TEXT,
-            stat_id TEXT
-        )
-        """
-    )
-
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS per_layer_stat
-        (
-            id TEXT,
-            stat_id TEXT,
-            layer_type TEXT,
-            ww_alpha REAL,
-            grad_norm REAL,
-            dead_frac REAL,
-            taylor_imp REAL,
-            cka_redund REAL,
-            eff_rank REAL,
-            rank_ratio REAL,
-            sensitivity REAL,
-            PRIMARY KEY (id, stat_id)
-        )
-        """
-    )
-
-    for layer_name, row in table.items():
-        layer_stat_id = uuid4(
-            [
-                stat_id,
-                layer_name,
-                str(epoch),
-            ]
-        )
-
-        cursor.execute(
-            """
-            INSERT OR IGNORE INTO layer_stat
-                (id, layer_name, layer_type, stat_id)
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                layer_stat_id,
-                layer_name,
-                row.get("layer_type"),
-                stat_id,
-            ),
-        )
-
-        cursor.execute(
-            """
-            INSERT OR REPLACE INTO per_layer_stat (
-                id,
-                stat_id,
-                layer_type,
-                ww_alpha,
-                grad_norm,
-                dead_frac,
-                taylor_imp,
-                cka_redund,
-                eff_rank,
-                rank_ratio,
-                sensitivity
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                layer_stat_id,
-                stat_id,
-                row.get("layer_type"),
-                row.get("ww_alpha"),
-                row.get("grad_norm"),
-                row.get("dead_frac"),
-                row.get("taylor_imp"),
-                row.get("cka_redund"),
-                row.get("eff_rank"),
-                row.get("rank_ratio"),
-                row.get("sensitivity"),
-            ),
-        )
-
 @_serialized_db_write
 def save_layer_stat(
     epoch: int,
@@ -771,9 +774,9 @@ def save_layer_stat(
         )
 
         conn.commit()
-
     finally:
         conn.close()
+
 
 @_serialized_db_write
 def json_run_tflite_to_db():

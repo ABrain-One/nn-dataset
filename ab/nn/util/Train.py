@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import List, Optional
 from typing import Union
 import copy
-
 from torch.cuda import OutOfMemoryError
 
 import ab.nn.util.CodeEval as codeEvaluator
@@ -234,7 +233,6 @@ class Train:
         self.layer_analysis = layer_analysis
         self.layer_stat = {}
 
-
     def _get_loss_function(self):
         """Build loss function based on the task or use model's custom criterion."""
         if hasattr(self.model, 'criterion') and self.model.criterion is not None:
@@ -394,27 +392,29 @@ class Train:
                     f"Throughput: {samples_per_second:.1f} samples/s"
                 )
 
-            # Layer-wise analysis (epochs 1-5, then every 5)
+
+                # Layer-wise analysis (epochs 1-5, then every 5)
             layer_summary = {}
             layer_table = {}
             layer_result = {}
-
-
             if self.layer_analysis and (epoch <= 5 or epoch % 5 == 0):
                 try:
                     from ab.nn.util.LayerAnalysis import LayerAnalyzer
-
                     analyzer = LayerAnalyzer(self.model, self.device)
 
                     layer_result = analyzer.full_analysis(
-                        self.train_loader,
-                        self.loss_fn,
-                        num_batches=1,
-                    )
+                        self.train_loader, self.loss_fn, num_batches=1)
+
 
                     layer_table = analyzer.build_layer_table(layer_result)
+
                     layer_summary = analyzer.summarize(layer_result)
 
+
+                    print(f"  Layer summary: {layer_summary}")
+                    print(
+                        f"  Layer result keys/errors: { {k: v.get('error') if isinstance(v, dict) and 'error' in v else 'ok' for k, v in layer_result.items()} }"
+                    )
                     layer_summary["layer_id_map"] = layer_result.get(
                         "layer_types",
                         {},
@@ -439,19 +439,20 @@ class Train:
                         "[WARN] LayerAnalysis.py not found, "
                         "disabling layer analysis"
                     )
-                    self.layer_analysis = False
 
+                    self.layer_analysis = False
                 except Exception as e:
                     print(
                         f"[WARN] Layer analysis failed "
                         f"(epoch {epoch}): {e}"
                     )
 
-            accuracy_to_time = accuracy_to_time_metric(
-                accuracy,
-                self.minimum_accuracy,
-                duration,
-            )
+                accuracy_to_time = accuracy_to_time_metric(
+                    accuracy,
+                    self.minimum_accuracy,
+                    duration,
+                )
+
 
             if not good(accuracy, self.minimum_accuracy, duration):
                 if 'caption' in self.task:
@@ -467,6 +468,7 @@ class Train:
                         f" The minimum accepted accuracy for the '{self.config[1]}'"
                         f" dataset is {self.minimum_accuracy}."
                     )
+
 
             if save_pth_weights or save_onnx_weights:
                 save_if_best(self.model, self.model_name, accuracy, save_pth_weights, save_onnx_weights, train_set, self.num_workers, save_path=save_path)
@@ -500,23 +502,30 @@ class Train:
                 'gpu_memory_usage_percent': resource_usage.get('gpu_memory_usage_percent'),
             }
 
-            prm = merge_prm(self.prm, {
-                'uid': uuid4(only_prm),
-                'duration': duration,
-                'duration_seconds': round(duration_seconds, 2),
-                'accuracy': accuracy,
-                'train_stat': train_stat_group,
-            }
-                            | {f'metric_{k}': v for k, v in all_metric_results.items()})
+            prm = merge_prm(
+                self.prm,
+                {
+                    "uid": uuid4(only_prm),
+                    "duration": duration,
+                    "duration_seconds": round(
+                        duration_seconds,
+                        2,
+                    ),
+                    "accuracy": accuracy,
+                    "train_stat": train_stat_group,
+                }
+                | {
+                    f"metric_{k}": v
+                    for k, v in all_metric_results.items()
+                },
+            )
 
-            # Store only the layer-analysis snapshot produced at this epoch.
-            # Epochs without analysis do not receive a new layer_stat field.
             if self.layer_stat:
-                prm["layer_stat"] = copy.deepcopy(self.layer_stat)
+                prm["layer_stat"] = copy.deepcopy(
+                    self.layer_stat
+                )
 
             prm_json = dict(prm)
-
-
 
             # Promote core experiment info for readability
             prm_json["task"] = self.config[0]
@@ -533,14 +542,15 @@ class Train:
                             prm_json,
                         )
 
+                        stat_id = DB_Write.save_results(self.config + (epoch,), prm)
+
                         DB_Write.save_results(
                             self.config + (epoch,),
                             prm,
                         )
                     else:
                         print(
-                            "[WARN] parameter `save_path` set to null, "
-                            "the statistics will not be saved into a file."
+                            "[WARN] parameter `save_path` set to null, the statistics will not be saved into a file."
                         )
 
                 else:
@@ -554,7 +564,6 @@ class Train:
                         self.config + (epoch,),
                         prm,
                     )
-
 
 
         # Save training summary at the end
