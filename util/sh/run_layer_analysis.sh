@@ -131,8 +131,8 @@ import json
 import os
 import sys
 from pathlib import Path
-from ab.nn.util.Exception import AccuracyException
 
+from ab.nn.util.Exception import AccuracyException
 from ab.nn.util.Loader import load_dataset
 from ab.nn.util.Train import Train
 from ab.nn.util.Util import (
@@ -692,7 +692,6 @@ for selected in selected_records:
     )
     print()
 
-
     replay_dir = get_replay_dir(
         CONFIG
     )
@@ -736,7 +735,6 @@ for selected in selected_records:
         replay_dir
         / f"{replay_epoch_max}.json"
     )
-
 
     if not final_json.exists():
         raise RuntimeError(
