@@ -24,7 +24,6 @@ LLM Markers (for nn-gpt / Delta LLM pipeline):
 import torch
 import torch.nn as nn
 from transformers import (
-    Blip2Processor,
     Blip2Model,
     GPT2LMHeadModel,
     GPT2Config,
@@ -33,6 +32,9 @@ from transformers import (
 import os
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+from ab.nn.util.hf.download_utils import ensure_hf_model
+
+
 
 
 def supported_hyperparameters():
@@ -52,13 +54,17 @@ class FrozenBlip2Encoder(nn.Module):
         model_id = "Salesforce/blip2-opt-2.7b"
         print(f"[Blip2Fast] Loading frozen vision encoder from: {model_id}")
 
+        # [AUTO-DOWNLOAD] Ensure the model is in the local HF cache (robust
+        # snapshot_download, avoids the from_pretrained download crash).
+        ensure_hf_model(model_id)
+
         # Load only the vision + Q-Former part (not the full OPT decoder)
         # [FROZEN] Load backbone in float16 to save 7.6GB of VRAM (3.8B params).
         # This is essential for fitting the model + activations in 24GB.
         # Frozen weights do not need float32 precision for inference-only use.
         self.blip2 = Blip2Model.from_pretrained(
-            model_id,
-            torch_dtype=torch.float16,
+            "Salesforce/blip2-opt-2.7b", local_files_only=True,
+            dtype=torch.float16,
             low_cpu_mem_usage=True,
             device_map={"": device}
         )
@@ -89,7 +95,14 @@ class FrozenBlip2Encoder(nn.Module):
         self.blip2.eval()
         with torch.no_grad():
             outputs = self.blip2.get_qformer_features(pixel_values=pixel_values)
-        return outputs.last_hidden_state  # (B, 32, 768)
+            
+        # Safely handle different Transformers versions (Object vs Tensor return types)
+        if hasattr(outputs, 'last_hidden_state'):
+            return outputs.last_hidden_state  # (B, 32, 768)
+        elif isinstance(outputs, tuple):
+            return outputs[0]
+        else:
+            return outputs
 
 
 # ============================================================
@@ -109,11 +122,17 @@ class CaptionDecoder(nn.Module):
 
         # [TRAINABLE] Load GPT2-small (124M params vs OPT's 2.7B = ~20x faster)
         gpt2_id = "gpt2"
-        self.tokenizer = GPT2Tokenizer.from_pretrained(gpt2_id)
+
+        # [AUTO-DOWNLOAD] Ensure GPT2 (model + tokenizer) is in the local HF cache.
+        ensure_hf_model(gpt2_id)
+
+        # [UNIFIED] Load GPT2 tokenizer from the same HF cache as the model
+        # (populated above) instead of a separate local folder. One source of truth.
+        self.tokenizer = GPT2Tokenizer.from_pretrained(gpt2_id, local_files_only=True)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        config = GPT2Config.from_pretrained(gpt2_id)
-        self.gpt2 = GPT2LMHeadModel.from_pretrained(gpt2_id, config=config)
+        config = GPT2Config.from_pretrained(gpt2_id, local_files_only=True)
+        self.gpt2 = GPT2LMHeadModel.from_pretrained(gpt2_id, config=config, local_files_only=True)
         self.gpt2 = self.gpt2.to(device)
         self.gpt2_hidden = config.n_embd  # 768
 
@@ -125,7 +144,7 @@ class CaptionDecoder(nn.Module):
             nn.LayerNorm(self.gpt2_hidden),
             nn.GELU(),
         ).to(device)
-        
+
         # Number of visual prefix tokens from Q-Former (32 queries)
         self.num_visual_tokens = 32
 
@@ -211,7 +230,7 @@ class Net(nn.Module):
             q_former_hidden=self.encoder.hidden_size,
             device=device
         )
-        
+
         # [PIPELINE] Define a dummy criterion to bypass generic MSELoss in Train.py.
         # This is necessary because Train.py defaults to MSE for non-img-classification tasks,
         # while captioning requires special handling (BLEU/METEOR).
@@ -260,7 +279,7 @@ class Net(nn.Module):
         # [TRAINABLE] Only optimize decoder params
         trainable_params = [p for p in self.decoder.parameters() if p.requires_grad]
         self.optimizer = torch.optim.AdamW(trainable_params, lr=prm.get('lr', 1e-4))
-        
+
         # [FAST-FAIL] Shape Contract Check: Automatically validates generated model shapes
         # If this fails, NNEval.py will catch it natively and skip the model.
         try:
@@ -311,3 +330,4 @@ class Net(nn.Module):
         result = 0.0, total_loss / max(num_batches, 1)
         print(f"[Blip2Fast] Epoch complete: {num_batches} batches, avg_loss={result[1]:.4f}")
         return result
+
