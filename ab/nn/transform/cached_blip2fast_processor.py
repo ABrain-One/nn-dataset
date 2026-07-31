@@ -16,20 +16,8 @@ Important rules enforced:
 import os
 import torch
 from torch.utils.data import Dataset
-from ab.nn.util.hf.download_utils import ensure_hf_model
+from ab.nn.util.Const import cache_dir
 
-def _get_default_cache_dir():
-    # Allow overriding via environment variable (useful for clusters/shared storage)
-    env_cache = os.environ.get("BLIP2_CACHE_DIR")
-    if env_cache and os.path.exists(env_cache):
-        return os.path.abspath(env_cache)
-
-    # Standard cache location: out/cache inside the project root.
-    # If empty/missing, auto-extraction will populate it automatically.
-    base_dir = os.path.dirname(__file__)
-    return os.path.abspath(os.path.join(base_dir, "../../../out/cache"))
-
-cache_dir = _get_default_cache_dir()
 
 _SHARED_CACHE = {}
 
@@ -37,21 +25,18 @@ def _auto_extract_features(split: str):
     import torch
     from tqdm import tqdm
     from torch.utils.data import DataLoader
-    from transformers import BitsAndBytesConfig, Blip2Model
+    from transformers import Blip2Model
     from ab.nn.util.Loader import load_dataset
     
     print(f"\n[CACHE-AUTO] Missing cache for '{split}'. Starting automatic extraction to {cache_dir}...")
     os.makedirs(cache_dir, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
-
     print("[CACHE-AUTO] Loading BLIP-2 Encoder in 4-bit...")
-    # [AUTO-DOWNLOAD] Ensure BLIP-2 is in local HF cache before local_files_only load.
-    ensure_hf_model("Salesforce/blip2-opt-2.7b")
     model = Blip2Model.from_pretrained(
-        "Salesforce/blip2-opt-2.7b", local_files_only=True,
-        quantization_config=BitsAndBytesConfig(load_in_4bit=True),
-        dtype=torch.float16,
+        "Salesforce/blip2-opt-2.7b",
+        load_in_4bit=True,
+        torch_dtype=torch.float16,
         device_map="auto"
     )
     model.eval()
@@ -61,18 +46,12 @@ def _auto_extract_features(split: str):
     
     target_dataset = train_dataset if split == "train" else test_dataset
     
-    # [FIX] Caption.py explicitly truncates validation to 300 images for fast debugging.
-    # We must bypass this limit here so the cache contains the full 5000 validation images.
-    if split == "val" and hasattr(target_dataset, "coco"):
-        target_dataset.ids = list(sorted(target_dataset.coco.imgs.keys()))
-        print(f"[CACHE-AUTO] Bypassed validation limit. Full dataset size restored to {len(target_dataset.ids)}.")
-    
     def _collate(batch):
         images = torch.stack([item[0] for item in batch])
         labels = [item[1] for item in batch]
         return images, labels
         
-    loader = DataLoader(target_dataset, batch_size=32, num_workers=0, shuffle=False, collate_fn=_collate)
+    loader = DataLoader(target_dataset, batch_size=32, num_workers=4, shuffle=False, collate_fn=_collate)
     features_list = []
     labels_list = []
     
@@ -80,16 +59,7 @@ def _auto_extract_features(split: str):
     with torch.no_grad():
         for i, (images, labels) in enumerate(tqdm(loader)):
             images = images.to(device)
-            # Safely handle different Transformers versions (ModelOutput object vs Tensor)
-            # Transformers <4.59 returns ModelOutput with .last_hidden_state
-            # Transformers >=4.59 may return a Tensor directly
-            raw = model.get_qformer_features(pixel_values=images)
-            if hasattr(raw, 'last_hidden_state'):
-                feats = raw.last_hidden_state
-            elif isinstance(raw, tuple):
-                feats = raw[0]
-            else:
-                feats = raw  # Already a tensor
+            feats = model.get_qformer_features(pixel_values=images).last_hidden_state
             # CRITICAL: Must save as float16 CPU — _load_shared_cache strictly validates this
             features_list.append(feats.cpu().to(torch.float16))
             labels_list.extend(labels)
@@ -201,15 +171,6 @@ class CachedBlip2Dataset(Dataset):
         self._all_labels = cache["labels"]
         self._offsets = cache["offsets"]
         self._length = len(self._all_labels)
-        self._collate_fn = None
-
-    @property
-    def collate_fn(self):
-        return self._collate_fn
-
-    @collate_fn.setter
-    def collate_fn(self, value):
-        self._collate_fn = value
 
     def __len__(self) -> int:
         return self._length
@@ -236,12 +197,9 @@ def get_collate_fn():
         nonlocal tokenizer
         if tokenizer is None:
             from transformers import GPT2Tokenizer
+            import os
             os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-            # [AUTO-DOWNLOAD + UNIFIED] Ensure GPT2 is cached, then load tokenizer
-            # from the same HF cache as the model (one source of truth).
-            ensure_hf_model("gpt2")
-            tokenizer = GPT2Tokenizer.from_pretrained("gpt2", local_files_only=True)
+            tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
             tokenizer.pad_token = tokenizer.eos_token
         features = torch.stack([item[0] for item in batch], dim=0)
         raw_captions = [item[1] if isinstance(item[1], (list, tuple)) else [item[1]] for item in batch]
@@ -256,7 +214,7 @@ def get_collate_fn():
                 flat_captions.append(str(cap).strip() + tokenizer.eos_token)
 
         tokens = tokenizer(
-            flat_captions, padding=True, truncation=True, max_length=60, return_tensors="pt"
+            flat_captions, padding=True, truncation=True, max_length=40, return_tensors="pt"
         )
         
         batch_size = len(batch)
@@ -281,8 +239,5 @@ def transform(norm):
 
 def get_dataset(split: str = "train") -> CachedBlip2Dataset:
     dataset = CachedBlip2Dataset(split)
-    dataset._collate_fn = get_collate_fn()
+    dataset.collate_fn = get_collate_fn()
     return dataset
-
-def get_vocab_size():
-    return (50257,)

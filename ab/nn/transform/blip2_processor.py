@@ -13,11 +13,7 @@ try:
     import os
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     from transformers import Blip2Processor
-    from ab.nn.util.hf.download_utils import ensure_hf_model
-    # [AUTO-DOWNLOAD] Ensure the model is cached via robust snapshot_download
-    # (avoids the from_pretrained download crash on newer transformers).
-    ensure_hf_model("Salesforce/blip2-opt-2.7b")
-    _processor = Blip2Processor.from_pretrained("Salesforce/blip2-opt-2.7b", local_files_only=True)
+    _processor = Blip2Processor.from_pretrained("Salesforce/blip2-opt-2.7b")
 except Exception:
     _processor = None
 
