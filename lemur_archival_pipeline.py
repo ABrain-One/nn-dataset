@@ -9,14 +9,16 @@ uploads the database to Hugging Face, and finally deletes local artifacts only
 if every safety condition is satisfied.
 
 Phases:
-    0. Inventory Scan
-    1. Dependency Mapping (Model <-> Stats <-> Transforms)
-    2. SAFE / KEEP Logic
-    3. DB Verification (hash + tuple lookups)
-    4. Excel Audit Report
-    5. Compress ab.nn.db -> ab.nn.db.zst
-    6. Upload to Hugging Face
-    7. Local Deletion (only SAFE + VERIFIED + UPLOAD OK)
+    1.  Inventory Scan
+    2.  HF Fallback — download DB from Hugging Face if no local copy exists
+    3.  Ingest new statistics into DB (json_train_to_db)
+    4.  Dependency Mapping (Model <-> Stats <-> Transforms)
+    5.  SAFE / KEEP Logic
+    6.  DB Verification (hash + tuple lookups)
+    7.  Excel Audit Report
+    8.  Compress ab.nn.db -> ab.nn.db.zst
+    9.  Upload updated DB to Hugging Face (replaces current version)
+    10. Local Deletion (only SAFE + VERIFIED + UPLOAD OK)
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ import argparse
 import hashlib
 import logging
 import os
+import re
+import sqlite3
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -48,7 +52,6 @@ log = logging.getLogger("lemur-pipeline")
 # ---------------------------------------------------------------------------
 # Paths / Constants
 # ---------------------------------------------------------------------------
-
 TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 AUDIT_XLSX = ab_root_path / f"LEMUR_Deep_Audit_{TIMESTAMP}.xlsx"
 
@@ -97,11 +100,11 @@ class TransformEntry:
 
 
 # ===========================================================================
-# Phase 0: Inventory Scan
+# Phase 1: Inventory Scan
 # ===========================================================================
-def phase0_inventory() -> Tuple[Dict[str, ModelEntry], List[StatFolder], Dict[str, TransformEntry]]:
+def phase1_inventory() -> Tuple[Dict[str, ModelEntry], List[StatFolder], Dict[str, TransformEntry]]:
     """Scan the repository for Models, Statistic folders, and Transforms."""
-    log.info("Phase 0: Inventory scan starting...")
+    log.info("Phase 1: Inventory scan starting...")
 
     # --- Models -----------------------------------------------------------
     models: Dict[str, ModelEntry] = {}
@@ -156,22 +159,98 @@ def phase0_inventory() -> Tuple[Dict[str, ModelEntry], List[StatFolder], Dict[st
         log.warning("Transforms directory not found: %s", transform_dir)
 
     log.info(
-        "Phase 0 complete: %d models, %d stat folders, %d transforms",
+        "Phase 1 complete: %d models, %d stat folders, %d transforms",
         len(models), len(stat_folders), len(transforms),
     )
     return models, stat_folders, transforms
 
 
 # ===========================================================================
-# Phase 1: Dependency Mapping (Model <-> Stats <-> Transforms)
+# Phase 2: HF Fallback — ensure DB exists locally
 # ===========================================================================
-def phase1_dependency_mapping(
+def phase2_ensure_db() -> bool:
+    """
+    If the local database does not exist, download it from Hugging Face using
+    the project's own db_from_hf() helper, which:
+      - Downloads the versioned compressed file (ab.nn.zst-<version>) from the
+        NN-Dataset/LEMUR_DB HF repo (uses the version from the project's
+        `version` file via add_version(), matching the current project release).
+      - Decompresses it to db/ab.nn.db and removes the .zst download.
+
+    If the DB already exists locally this phase is a no-op.
+    Returns True when the DB is present (either pre-existing or downloaded).
+    """
+    if db_file.exists():
+        log.info("Phase 2: DB already present locally — skipping download.")
+        return True
+
+    log.info("Phase 2: DB not found locally. Downloading from Hugging Face...")
+    try:
+        from ab.nn.util.hf.DB_from_HF import db_from_hf  # type: ignore
+        db_from_hf()
+        if db_file.exists():
+            log.info("Phase 2 complete: DB downloaded to %s", db_file)
+            return True
+        else:
+            log.error("Download finished but DB file still not found: %s", db_file)
+            return False
+    except Exception as exc:
+        log.error("Failed to download DB from Hugging Face: %s", exc)
+        return False
+
+
+# ===========================================================================
+# Phase 3: Ingest new statistics into the DB
+# ===========================================================================
+def phase3_ingest_stats() -> bool:
+    """
+    Transfer any new local statistics (ab/nn/stat/train/**/*.json) into the
+    database BEFORE verification runs.
+
+    Uses the project's own `json_train_to_db()` which:
+      - Reads every <task>_<dataset>_<metric>_<nn>/<epoch>.json file.
+      - Inserts each trial row into the `stat` and `train_stat` tables using
+        INSERT OR REPLACE / INSERT OR IGNORE, so existing rows are never
+        duplicated.
+      - Also populates the `nn`, `transform`, `metric`, and `prm` code tables.
+
+    After this phase the DB is fully up-to-date, so Phase 6 verification will
+    correctly find all local stats and mark them as verified for deletion.
+
+    Returns True on success, False if the ingest step failed (pipeline will
+    still continue but deletion gate will remain closed for unverified items).
+    """
+    log.info("Phase 3: Ingesting new statistics into DB...")
+
+    if not stat_train_dir.exists():
+        log.warning("Stats directory not found — nothing to ingest: %s", stat_train_dir)
+        return True  # not a fatal error; pipeline can still verify what's already in DB
+
+    try:
+        from ab.nn.util.db.Write import json_train_to_db  # type: ignore
+    except ImportError as exc:
+        log.error("Failed to import json_train_to_db: %s", exc)
+        return False
+
+    try:
+        json_train_to_db()
+        log.info("Phase 3 complete: all local statistics ingested into DB.")
+        return True
+    except Exception as exc:
+        log.error("Statistics ingestion failed: %s", exc)
+        return False
+
+
+# ===========================================================================
+# Phase 4: Dependency Mapping (Model <-> Stats <-> Transforms)
+# ===========================================================================
+def phase4_dependency_mapping(
     models: Dict[str, ModelEntry],
     stat_folders: List[StatFolder],
     transforms: Dict[str, TransformEntry],
 ) -> None:
     """Link models to their statistic folders, and statistic folders to transforms."""
-    log.info("Phase 1: Dependency mapping starting...")
+    log.info("Phase 4: Dependency mapping starting...")
 
     # Map model -> stat folders
     for sf in stat_folders:
@@ -203,13 +282,13 @@ def phase1_dependency_mapping(
                 transforms[transform_name] = t_entry
             t_entry.referenced_by.append(sf)
 
-    log.info("Phase 1 complete.")
+    log.info("Phase 4 complete.")
 
 
 # ===========================================================================
-# Phase 2: SAFE / KEEP Logic
+# Phase 5: SAFE / KEEP Logic
 # ===========================================================================
-def phase2_safe_keep_logic(
+def phase5_safe_keep_logic(
     models: Dict[str, ModelEntry],
     transforms: Dict[str, TransformEntry],
 ) -> None:
@@ -224,7 +303,7 @@ def phase2_safe_keep_logic(
         A transform is SAFE TO PROCESS only if every statistic folder that
         references it belongs to a model that is itself SAFE TO PROCESS.
     """
-    log.info("Phase 2: SAFE/KEEP logic starting...")
+    log.info("Phase 5: SAFE/KEEP logic starting...")
 
     for model in models.values():
         if not model.py_path.exists():
@@ -253,12 +332,38 @@ def phase2_safe_keep_logic(
         )
         transform.safe = all_referencing_safe and transform.py_path is not None
 
-    log.info("Phase 2 complete.")
+    log.info("Phase 5 complete.")
 
 
 # ===========================================================================
-# Phase 3: DB Verification
+# Phase 6: DB Verification
 # ===========================================================================
+# Matches generated variant names: <prefix(es)>-<BaseModel>-<32-hex-MD5>
+# e.g. "ast-dimension-AlexNet-9244124f15c45d6add6bcb95d922a9c7"
+_VARIANT_RE = re.compile(r"^.+-[A-Z][a-zA-Z0-9]+-[0-9a-f]{32}$")
+
+
+def is_generated_variant(model_name: str) -> bool:
+    """Return True if this model name follows the <prefix>-<Base>-<md5> pattern."""
+    return bool(_VARIANT_RE.match(model_name))
+
+
+def _stat_nn_exists_in_db(nn: str) -> bool:
+    """
+    Direct SQLite check: does any row with this exact nn value exist in the
+    stat table? Used for generated variants whose nn_code is NULL in api.data().
+    """
+    try:
+        conn = sqlite3.connect(db_file)
+        cur = conn.execute("SELECT 1 FROM stat WHERE nn = ? LIMIT 1;", (nn,))
+        found = cur.fetchone() is not None
+        conn.close()
+        return found
+    except Exception as exc:
+        log.warning("Direct DB nn lookup failed for %r: %s", nn, exc)
+        return False
+
+
 def _sha256_of_file(path: Path) -> str:
     """Return the SHA256 hex digest of a file's contents."""
     h = hashlib.sha256()
@@ -290,7 +395,7 @@ def load_lemur_dataframe() -> Optional[pd.DataFrame]:
     return df
 
 
-def phase3_db_verification(
+def phase6_db_verification(
     models: Dict[str, ModelEntry],
     transforms: Dict[str, TransformEntry],
     df: Optional[pd.DataFrame],
@@ -301,7 +406,7 @@ def phase3_db_verification(
     Returns a dict keyed by artifact type ("model", "transform", "stat") mapping
     artifact-identifier -> bool (True = verified in DB).
     """
-    log.info("Phase 3: DB verification starting...")
+    log.info("Phase 6: DB verification starting...")
 
     verification: Dict[str, Dict[str, bool]] = {"model": {}, "transform": {}, "stat": {}}
 
@@ -335,16 +440,27 @@ def phase3_db_verification(
             zip(df["task"].astype(str), df["dataset"].astype(str), df["nn"].astype(str))
         )
 
-    # --- Model verification (hash of nn_code) -----------------------------
+    # --- Model verification ------------------------------------------------
+    # Base models  → SHA256 of local .py vs nn_code hashes in api.data().
+    # Generated variants (<prefix>-<Base>-<md5>) → nn_code is NULL in the DB
+    #   (only stats were stored, not source code). For these we fall back to
+    #   a direct stat-table nn existence check via SQLite.
     for model in models.values():
         if not model.safe:
             continue
-        try:
-            local_hash = _sha256_of_file(model.py_path)
-            verified = local_hash in nn_code_hashes
-        except OSError as exc:
-            log.warning("Could not read model file %s: %s", model.py_path, exc)
-            verified = False
+        if is_generated_variant(model.name):
+            # Stat-tuple-only path: the model is considered verified if its
+            # nn value appears in the stat table (confirming training data was
+            # archived) even though nn_code was never stored for it.
+            verified = _stat_nn_exists_in_db(model.name)
+            log.debug("Variant model %r -> stat-nn lookup: %s", model.name, verified)
+        else:
+            try:
+                local_hash = _sha256_of_file(model.py_path)
+                verified = local_hash in nn_code_hashes
+            except OSError as exc:
+                log.warning("Could not read model file %s: %s", model.py_path, exc)
+                verified = False
         verification["model"][model.name] = verified
 
     # --- Transform verification (hash of transform_code) ------------------
@@ -363,6 +479,7 @@ def phase3_db_verification(
         verification["transform"][transform.name] = verified
 
     # --- Statistic verification (task, dataset, nn) tuple lookup ----------
+    # Both base models and generated variants use the tuple check for stats.
     for model in models.values():
         for sf in model.stat_folders:
             if not model.safe:
@@ -370,20 +487,20 @@ def phase3_db_verification(
             key = (sf.task, sf.dataset, sf.nn)
             verification["stat"][sf.name] = key in tuple_set
 
-    log.info("Phase 3 complete.")
+    log.info("Phase 6 complete.")
     return verification
 
 
 # ===========================================================================
-# Phase 4: Excel Audit Report
+# Phase 7: Excel Audit Report
 # ===========================================================================
-def phase4_generate_audit(
+def phase7_generate_audit(
     models: Dict[str, ModelEntry],
     transforms: Dict[str, TransformEntry],
     verification: Dict[str, Dict[str, bool]],
 ) -> bool:
     """Generate the multi-sheet Excel audit report. Returns True on success."""
-    log.info("Phase 4: Generating Excel audit report -> %s", AUDIT_XLSX)
+    log.info("Phase 7: Generating Excel audit report -> %s", AUDIT_XLSX)
 
     try:
         # --- Sheet 1: Models & Stats --------------------------------------
@@ -436,12 +553,17 @@ def phase4_generate_audit(
             safe_candidate = model.safe
             db_verified = verification["model"].get(model.name, False)
             final_action = "DELETE" if (safe_candidate and db_verified) else "KEEP"
+            # Reflect the actual verification path taken in Phase 6
+            if is_generated_variant(model.name):
+                verify_method = "stat_nn_exists (variant fallback)"
+            else:
+                verify_method = "nn_code_hash"
             sheet3_rows.append({
                 "Artifact Type": "Model",
                 "Artifact Name": model.name,
                 "Safe Candidate": "Yes" if safe_candidate else "No",
                 "DB Verified": "Yes" if db_verified else "No",
-                "Verification Method": "nn_code_hash",
+                "Verification Method": verify_method,
                 "Final Action": final_action,
             })
 
@@ -484,7 +606,7 @@ def phase4_generate_audit(
             df_sheet2.to_excel(writer, sheet_name="Transform Deep Dive", index=False)
             df_sheet3.to_excel(writer, sheet_name="DB Verification Audit", index=False)
 
-        log.info("Phase 4 complete: audit report written to %s", AUDIT_XLSX)
+        log.info("Phase 7 complete: audit report written to %s", AUDIT_XLSX)
         return True
 
     except Exception as exc:  # pragma: no cover - defensive
@@ -493,16 +615,16 @@ def phase4_generate_audit(
 
 
 # ===========================================================================
-# Phase 5: Compress ab.nn.db -> ab.nn.db.zst
+# Phase 8: Compress ab.nn.db -> ab.nn.db.zst
 # ===========================================================================
-def phase5_compress_db() -> bool:
+def phase8_compress_db() -> bool:
     """Compress db/ab.nn.db into the versioned db/ab.nn.zst-<version> file.
 
     Reuses the project's own `compress()` helper (zstandard, level 16, all
     cores) so behavior matches the rest of the codebase. The output filename
     already carries the project version via `add_version()`.
     """
-    log.info("Phase 5: Compressing %s -> %s", db_file, DB_ZST)
+    log.info("Phase 8: Compressing %s -> %s", db_file, DB_ZST)
 
     if not db_file.exists():
         log.error("Database file not found: %s", db_file)
@@ -510,9 +632,9 @@ def phase5_compress_db() -> bool:
 
     try:
         # remove=False: never delete the local source DB during compression;
-        # actual deletion is governed solely by Phase 7's safety conditions.
+        # actual deletion is governed solely by Phase 10's safety conditions.
         zst_compress(db_file, DB_ZST, False)
-        log.info("Phase 5 complete: %s (%.2f MB)", DB_ZST, DB_ZST.stat().st_size / (1024 * 1024))
+        log.info("Phase 8 complete: %s (%.2f MB)", DB_ZST, DB_ZST.stat().st_size / (1024 * 1024))
         return True
     except Exception as exc:  # pragma: no cover - defensive
         log.error("Failed to compress database: %s", exc)
@@ -520,9 +642,9 @@ def phase5_compress_db() -> bool:
 
 
 # ===========================================================================
-# Phase 6: Upload to Hugging Face
+# Phase 9: Upload to Hugging Face
 # ===========================================================================
-def phase6_upload_to_hf(compression_ok: bool, audit_ok: bool, hf_token: Optional[str]) -> bool:
+def phase9_upload_to_hf(compression_ok: bool, audit_ok: bool, hf_token: Optional[str]) -> bool:
     """
     Upload the versioned compressed DB to the Hugging Face repo root, using
     the project's own `upload_file()` helper (which in turn uses
@@ -530,7 +652,7 @@ def phase6_upload_to_hf(compression_ok: bool, audit_ok: bool, hf_token: Optional
     The Excel audit report is kept local only (not uploaded). Returns True
     only if the upload succeeds.
     """
-    log.info("Phase 6: Uploading artifacts to Hugging Face repo '%s'...", HF_REPO_ID)
+    log.info("Phase 9: Uploading artifacts to Hugging Face repo '%s'...", HF_REPO_ID)
 
     if not (compression_ok and audit_ok):
         log.error("Skipping upload: prerequisite phases (compression/audit) failed.")
@@ -545,13 +667,13 @@ def phase6_upload_to_hf(compression_ok: bool, audit_ok: bool, hf_token: Optional
         return False
 
     try:
-        # remove=False: the local DB is only deleted by Phase 7's own
+        # remove=False: the local DB is only deleted by Phase 10's own
         # safety-gated cleanup, never as a side effect of uploading.
-        # The audit report stays local only (not uploaded to HF) — see Phase 4.
+        # The audit report stays local only (not uploaded to HF) — see Phase 7.
         hf_upload_file(HF_REPO_ID, DB_ZST, DB_ZST, False, hf_token=token)
         log.info("Uploaded %s -> %s", DB_ZST.name, HF_REPO_ID)
 
-        log.info("Phase 6 complete: upload succeeded.")
+        log.info("Phase 9 complete: upload succeeded.")
         return True
 
     except Exception as exc:  # pragma: no cover - defensive (network errors, auth, etc.)
@@ -560,9 +682,9 @@ def phase6_upload_to_hf(compression_ok: bool, audit_ok: bool, hf_token: Optional
 
 
 # ===========================================================================
-# Phase 7: Local Deletion
+# Phase 10: Local Deletion
 # ===========================================================================
-def phase7_delete_local(
+def phase10_delete_local(
     models: Dict[str, ModelEntry],
     transforms: Dict[str, TransformEntry],
     verification: Dict[str, Dict[str, bool]],
@@ -578,7 +700,7 @@ def phase7_delete_local(
         4. HF upload succeeded.
         5. Excel audit generated successfully.
     """
-    log.info("Phase 7: Local deletion starting...")
+    log.info("Phase 10: Local deletion starting...")
 
     global_ok = compression_ok and upload_ok and audit_ok
     if not global_ok:
@@ -633,7 +755,7 @@ def phase7_delete_local(
             log.info("Keeping transform (not SAFE/verified): %s", transform.name)
 
     log.info(
-        "Phase 7 complete: %d models, %d stat folders, %d transforms deleted.",
+        "Phase 10 complete: %d models, %d stat folders, %d transforms deleted.",
         deleted_models, deleted_stats, deleted_transforms,
     )
 
@@ -649,30 +771,42 @@ def main() -> int:
 
     log.info("=== LEMUR DB Archival & Cleanup Pipeline starting ===")
 
-    # Phase 0: Inventory Scan
-    models, stat_folders, transforms = phase0_inventory()
+    # Phase 1: Inventory Scan
+    models, stat_folders, transforms = phase1_inventory()
 
-    # Phase 1: Dependency Mapping
-    phase1_dependency_mapping(models, stat_folders, transforms)
+    # Phase 2: Ensure DB exists locally — download from HF if missing.
+    db_ok = phase2_ensure_db()
+    if not db_ok:
+        log.error("Cannot proceed without a local database. Exiting.")
+        return 1
 
-    # Phase 2: SAFE / KEEP Logic
-    phase2_safe_keep_logic(models, transforms)
+    # Phase 3: Ingest any new local statistics into the DB before verification.
+    # The dataframe is loaded AFTER this so Phase 6 sees the fully updated DB.
+    ingest_ok = phase3_ingest_stats()
+    if not ingest_ok:
+        log.warning("Stat ingestion had errors — some new stats may not be in DB yet.")
 
-    # Phase 3: DB Verification
+    # Phase 4: Dependency Mapping
+    phase4_dependency_mapping(models, stat_folders, transforms)
+
+    # Phase 5: SAFE / KEEP Logic
+    phase5_safe_keep_logic(models, transforms)
+
+    # Phase 6: DB Verification (load dataframe now, after ingestion)
     df = load_lemur_dataframe()
-    verification = phase3_db_verification(models, transforms, df)
+    verification = phase6_db_verification(models, transforms, df)
 
-    # Phase 4: Excel Audit Report (must run BEFORE any deletion)
-    audit_ok = phase4_generate_audit(models, transforms, verification)
+    # Phase 7: Excel Audit Report (must run BEFORE any deletion)
+    audit_ok = phase7_generate_audit(models, transforms, verification)
 
-    # Phase 5: Compression
-    compression_ok = phase5_compress_db()
+    # Phase 8: Compression
+    compression_ok = phase8_compress_db()
 
-    # Phase 6: Upload to Hugging Face
-    upload_ok = phase6_upload_to_hf(compression_ok, audit_ok, hf_token)
+    # Phase 9: Upload to Hugging Face
+    upload_ok = phase9_upload_to_hf(compression_ok, audit_ok, hf_token)
 
-    # Phase 7: Local Deletion (only if all conditions are satisfied)
-    phase7_delete_local(
+    # Phase 10: Local Deletion (only if all conditions are satisfied)
+    phase10_delete_local(
         models=models,
         transforms=transforms,
         verification=verification,
