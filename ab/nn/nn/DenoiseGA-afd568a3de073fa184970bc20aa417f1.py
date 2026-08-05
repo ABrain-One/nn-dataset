@@ -1,0 +1,91 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+class DilBlock(nn.Module):
+    """Self-attention residual block (softmax + matmul — absent from the pool)."""
+
+    def __init__(self, channels):
+        super().__init__()
+        self.q = nn.Conv2d(channels, channels, 1)
+        self.k = nn.Conv2d(channels, channels, 1)
+        self.v = nn.Conv2d(channels, channels, 1)
+        self.proj = nn.Conv2d(channels, channels, 1)
+        self.pool = nn.AvgPool2d(4)
+        self.soft = nn.Softmax(dim=-1)
+
+    def forward(self, x):
+        b, c, h, w = x.shape
+        qh = self.pool(self.q(x)).flatten(2)
+        kh = self.pool(self.k(x)).flatten(2)
+        vh = self.pool(self.v(x)).flatten(2)
+        att = self.soft(torch.matmul(qh.transpose(1, 2), kh) / c ** 0.5)
+        out = torch.matmul(vh, att.transpose(1, 2))
+        out = out.reshape(b, c, h // 4, w // 4)
+        out = nn.functional.interpolate(out, size=(h, w), mode='nearest')
+        return x + self.proj(out)
+
+class Net(nn.Module):
+    """DILATED FULL-RESOLUTION denoiser — NOT a U-Net. Resolution NEVER changes; the
+    receptive field grows purely through dilation. No downsampling, no upsampling, no
+    encoder/decoder, no cross-scale skips."""
+
+    def __init__(self, in_shape=(1, 3, 512, 512), out_shape=None, prm={}, device='cuda'):
+        super().__init__()
+        self.device = device
+        f = 24
+        self.in_conv = nn.Conv2d(3, f, 3, padding=1)
+        self.b0 = DilBlock(f)
+        self.b1 = DilBlock(f)
+        self.b2 = DilBlock(f)
+        self.b3 = DilBlock(f)
+        self.out_conv = nn.Conv2d(f, 3, 3, padding=1)
+        self.criterion_mse = nn.MSELoss()
+        self.criterion_l1 = nn.L1Loss()
+        self.train_setup(prm)
+        self.to(device)
+
+    def forward(self, x):
+        identity = x
+        h = self.in_conv(x)
+        h = self.b0(h)
+        h = self.b1(h)
+        h = self.b2(h)
+        h = self.b3(h)
+        return torch.clamp(self.out_conv(h) + identity, 0.0, 1.0)
+
+    def train_setup(self, prm):
+        lr = prm.get('lr', 0.0001)
+        self.optimizer = optim.Adam(self.parameters(), lr=lr)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=200, eta_min=1e-05)
+
+    def learn(self, train_data):
+        self.train()
+        total_loss = 0.0
+        count = 0
+        bn_layers = [m for m in self.modules() if isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.SyncBatchNorm))]
+        for noisy, clean in train_data:
+            noisy, clean = (noisy.to(self.device), clean.to(self.device))
+            self.optimizer.zero_grad()
+            bn_state = [(m.running_mean.clone(), m.running_var.clone(), m.num_batches_tracked.clone()) for m in bn_layers]
+            preds = self(noisy)
+            loss_gt = self.criterion_mse(preds, clean)
+            loss = loss_gt * 1000 + self.criterion_l1(preds, clean) * 50
+            bad = not torch.isfinite(loss)
+            if not bad and bn_layers:
+                bad = not all((torch.isfinite(m.running_mean).all() and torch.isfinite(m.running_var).all() for m in bn_layers))
+            if bad:
+                for m, (rm, rv, nb) in zip(bn_layers, bn_state):
+                    m.running_mean.copy_(rm)
+                    m.running_var.copy_(rv)
+                    m.num_batches_tracked.copy_(nb)
+                continue
+            if not torch.isfinite(loss):
+                continue
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=0.1)
+            self.optimizer.step()
+            total_loss += loss_gt.item()
+            count += 1
+        self.scheduler.step()
+        return total_loss / max(count, 1)
