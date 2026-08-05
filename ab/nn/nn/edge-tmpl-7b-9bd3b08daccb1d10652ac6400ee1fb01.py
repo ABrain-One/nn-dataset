@@ -1,0 +1,107 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torchvision
+
+# hyperparameters used below: 'lr', 'momentum', 'epoch', 'batch', 'dropout', 'transform'
+def supported_hyperparameters():
+    return {'batch', 'dropout', 'epoch', 'lr', 'momentum', 'transform'}
+
+def _edge_backbone(name, device):
+    """Return (feature_extractor, ) for a torchvision backbone with ImageNet
+    weights; only the conv feature portion is kept (classifier dropped)."""
+    import torchvision.models as _tvm
+    ctor = getattr(_tvm, name)
+    m = ctor(weights='DEFAULT')
+    if name.startswith('mobilenet') or name.startswith('efficientnet') or name.startswith('squeezenet'):
+        feat = m.features
+    elif name.startswith('mnasnet'):
+        feat = m.layers
+    elif name.startswith('shufflenet'):
+        feat = torch.nn.Sequential(m.conv1, m.maxpool, m.stage2, m.stage3, m.stage4, m.conv5)
+    elif name.startswith('regnet'):
+        feat = torch.nn.Sequential(m.stem, m.trunk_output)
+    else:
+        feat = m.features
+    return feat.to(device)
+# ===================== LLM-GENERATED HEAD =====================
+class Head(nn.Module):
+    def __init__(self, in_channels, num_classes, prm):
+        super().__init__()
+        p = float(prm['dropout'])
+        self.projector = nn.Conv2d(in_channels, 128, kernel_size=1, bias=False)
+        self.bn = nn.BatchNorm2d(128)
+        self.relu = nn.ReLU(inplace=True)
+        self.depthwise_conv = nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1, groups=128, bias=False)
+        self.pointwise_conv = nn.Conv2d(128, 128, kernel_size=1, bias=False)
+        self.se = SEBlock(128, reduction_ratio=16)
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.drop = nn.Dropout(p)
+        self.fc = nn.LazyLinear(num_classes)
+
+    def forward(self, x):
+        x = self.projector(x)
+        x = self.bn(x)
+        x = self.relu(x)
+        x = self.depthwise_conv(x)
+        x = self.pointwise_conv(x)
+        x = self.se(x)
+        x = self.pool(x).flatten(1)
+        return self.fc(self.drop(x))
+
+class SEBlock(nn.Module):
+    def __init__(self, channel, reduction_ratio):
+        super(SEBlock, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction_ratio, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction_ratio, channel, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y.expand_as(x)
+# =============================================================
+
+class Net(nn.Module):
+    def __init__(self, in_shape, out_shape, prm, device):
+        super().__init__()
+        self.device = device
+        self.dropout = float(prm['dropout'])
+        self.batch = int(prm['batch'])
+        self.learning_rate = float(prm['lr'])
+        self.momentum_value = float(prm['momentum'])
+        self.num_epochs = int(prm['epoch'])
+        self._transform_name = prm['transform']
+        self.backbone = _edge_backbone('mnasnet1_0', device)
+        self.backbone.eval()
+        with torch.no_grad():
+            dummy = torch.zeros(1, int(in_shape[1]), int(in_shape[2]), int(in_shape[3]), device=device)
+            feat = self.backbone(dummy)
+        in_channels = int(feat.shape[1])
+        self.head = Head(in_channels, int(out_shape[0]), prm)
+        self.to(device)
+
+# ============ LLM-GENERATED forward / train_setup / learn ============
+    def forward(self, x):
+        x = self.backbone(x)
+        return self.head(x)
+
+    def train_setup(self, prm):
+        self.to(self.device)
+        self.criteria = nn.CrossEntropyLoss().to(self.device)
+        self.optimizer = torch.optim.AdamW(self.parameters(), lr=float(prm['lr']), weight_decay=1e-4)
+
+    def learn(self, train_data):
+        self.train()
+        for inputs, labels in train_data:
+            inputs, labels = inputs.to(self.device), labels.to(self.device)
+            self.optimizer.zero_grad()
+            loss = self.criteria(self(inputs), labels)
+            loss.backward()
+            self.optimizer.step()
+# =====================================================================
