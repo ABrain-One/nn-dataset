@@ -177,49 +177,26 @@ def save_train_stat(cursor, stat_id: str, train_stat: dict):
         values,
     )
 
-def _layer_snapshot_to_table(snapshot: dict) -> dict:
+def _layer_snapshot_to_table(layer_stat: dict) -> dict:
     """
-    Convert one JSON layer_stat snapshot into the table format expected by
-    _save_layer_stat().
+    Convert direct layer_stat["layers"] JSON data into the table format
+    expected by _save_layer_stat().
     """
-    if not isinstance(snapshot, dict):
+    if not isinstance(layer_stat, dict):
         return {}
 
-    # New cumulative format:
-    # {
-    #     "summary": {...},
-    #     "layers": [{"name": "...", ...}],
-    #     "raw_analysis": {...}
-    # }
-    layers = snapshot.get("layers")
+    layers = layer_stat.get("layers")
+    if not isinstance(layers, list):
+        return {}
 
-    if isinstance(layers, list):
-        return {
-            row["name"]: {
-                key: value
-                for key, value in row.items()
-                if key != "name"
-            }
-            for row in layers
-            if isinstance(row, dict) and row.get("name")
-        }
-
-    # Legacy format:
-    # {
-    #     "summary": {...},
-    #     "analysis": {...},
-    #     "table": {...}
-    # }
-    table = snapshot.get("table")
-
-    if isinstance(table, dict):
-        return table
-
-    # Direct layer-table fallback.
     return {
-        name: values
-        for name, values in snapshot.items()
-        if isinstance(values, dict)
+        row["name"]: {
+            key: value
+            for key, value in row.items()
+            if key != "name"
+        }
+        for row in layers
+        if isinstance(row, dict) and row.get("name")
     }
 
 def _save_layer_stat(
@@ -327,7 +304,7 @@ def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
 
     # Extract grouped data before scalar parameter insertion.
     train_stat = prm.pop("train_stat", {})
-    layer_stat = prm.pop("layer_stat", {})
+    prm.pop("layer_stat", None)
 
     transform = prm["transform"]
     uid = prm.pop("uid")
@@ -378,51 +355,9 @@ def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
         train_stat,
     )
 
-    # Save all cumulative layer-analysis snapshots under this stat.
-    if isinstance(layer_stat, dict):
-        metric = config_ext[2]
-        imported_numeric_snapshot = False
-
-        for snapshot_epoch, snapshot in layer_stat.items():
-            if not str(snapshot_epoch).isdigit():
-                continue
-
-            imported_numeric_snapshot = True
-
-            table = _layer_snapshot_to_table(snapshot)
-
-            if not table:
-                continue
-
-            _save_layer_stat(
-                cursor=cursor,
-                epoch=int(snapshot_epoch),
-                table=table,
-                stat_id=stat_id,
-                metric=metric,
-            )
-
-        # Legacy format:
-        # {
-        #     "summary": {...},
-        #     "analysis": {...},
-        #     "table": {...}
-        # }
-        if not imported_numeric_snapshot:
-            legacy_table = layer_stat.get("table")
-
-            if isinstance(legacy_table, dict) and legacy_table:
-                _save_layer_stat(
-                    cursor=cursor,
-                    epoch=config_ext[-1],
-                    table=legacy_table,
-                    stat_id=stat_id,
-                    metric=metric,
-                )
-
-
-
     return stat_id
+
+
 
 
 @_serialized_db_write
@@ -463,11 +398,22 @@ def json_train_to_db():
                             else {}
                         )
 
+                        raw_layer_stat = trial.get("layer_stat")
                         extracted_layer_stat = (
-                            trial.get("layer_stat")
-                            if isinstance(trial.get("layer_stat"), dict)
+                            raw_layer_stat
+                            if isinstance(raw_layer_stat, dict)
                             else {}
                         )
+
+                        if (
+                            raw_layer_stat is not None
+                            and not isinstance(raw_layer_stat, dict)
+                        ):
+                            print(
+                                f"Warning: skipping invalid layer_stat in "
+                                f"{model_stat_file}: expected an object.",
+                                file=sys.stderr,
+                            )
 
                         trial = {
                             k: v
@@ -478,11 +424,56 @@ def json_train_to_db():
                         if extracted_train_stat:
                             trial["train_stat"] = extracted_train_stat
 
+                        stat_id = save_stat(
+                            sub_config + (epoch,),
+                            trial,
+                            cursor,
+                        )
+
                         if extracted_layer_stat:
-                            trial["layer_stat"] = extracted_layer_stat
+                            try:
+                                layers = extracted_layer_stat.get("layers")
 
+                                if not isinstance(layers, list):
+                                    raise ValueError(
+                                        'layer_stat["layers"] must be a list'
+                                    )
 
-                        save_stat(sub_config + (epoch,), trial, cursor)
+                                invalid_rows = sum(
+                                    1
+                                    for row in layers
+                                    if (
+                                        not isinstance(row, dict)
+                                        or not row.get("name")
+                                    )
+                                )
+
+                                if invalid_rows:
+                                    print(
+                                        f"Warning: skipping {invalid_rows} invalid "
+                                        f"layer row(s) in {model_stat_file}.",
+                                        file=sys.stderr,
+                                    )
+
+                                layer_table = _layer_snapshot_to_table(
+                                    extracted_layer_stat
+                                )
+
+                                if layer_table:
+                                    _save_layer_stat(
+                                        cursor=cursor,
+                                        epoch=epoch,
+                                        table=layer_table,
+                                        stat_id=stat_id,
+                                        metric=metric,
+                                    )
+
+                            except Exception as e:
+                                print(
+                                    f"Warning: skipping invalid layer_stat in "
+                                    f"{model_stat_file}: {e}",
+                                    file=sys.stderr,
+                                )
             except Exception as e:
                 print(f"Warning: skipping JSON file {model_stat_file}: {e}", file=sys.stderr)
     close_conn(conn)
