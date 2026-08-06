@@ -20,7 +20,6 @@ from ab.nn.util.db.Calc import save_results
 from ab.nn.util.db.Read import supported_transformers
 from ab.nn.util.db.Util import *
 import json
-
 debug = False
 
 
@@ -73,7 +72,7 @@ def get_system_info() -> dict:
         'cpu_count': psutil.cpu_count(logical=True),
         'total_ram_kb': round(psutil.virtual_memory().total / 1024, 2),
     }
-
+    
     # GPU information
     if torch.cuda.is_available():
         try:
@@ -84,7 +83,7 @@ def get_system_info() -> dict:
             info['gpu_type'] = 'CUDA Available (details unavailable)'
     else:
         info['gpu_type'] = 'No GPU'
-
+    
     return info
 
 
@@ -95,7 +94,7 @@ def get_current_resource_usage() -> dict:
         'ram_usage_percent': psutil.virtual_memory().percent,
         'cpu_usage_percent': psutil.cpu_percent(interval=0.1),
     }
-
+    
     # GPU memory usage
     if torch.cuda.is_available():
         try:
@@ -106,14 +105,13 @@ def get_current_resource_usage() -> dict:
             )
         except Exception:
             pass
-
+    
     return usage
 
 
 def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout,
-                     max_dropout, min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations,
-                     epoch_max,
-                     pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights, layer_analysis=False):
+                     max_dropout, min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, epoch_max,
+                     pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights,layer_analysis=False):
     task, dataset_name, metric, nn = config
     try:
         # Load model
@@ -134,10 +132,8 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
                     case _:
                         prms[prm] = trial.suggest_float(prm, 0.0, 1.0)
         prms['epoch_max'] = epoch_max
-        batch = add_categorical_if_absent(trial, prms, 'batch', lambda: [max_batch(x) for x in
-                                                                         range(min_batch_binary_power,
-                                                                               max_batch_binary_power_local + 1)])
-        batch = max(1, int(batch))  # Ensure batch is at least 1 and an integer to prevent indexing errors
+        batch = add_categorical_if_absent(trial, prms, 'batch', lambda: [max_batch(x) for x in range(min_batch_binary_power, max_batch_binary_power_local + 1)])
+        batch = max(1, int(batch)) # Ensure batch is at least 1 and an integer to prevent indexing errors
         transform_name = add_categorical_if_absent(trial, prms, 'transform', supported_transformers, default=transform)
 
         prm_str = ''
@@ -147,9 +143,7 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
         # Load dataset
         out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset_name, transform_name)
         return Train(config, out_shape, minimum_accuracy, batch, nn_mod('nn', nn), task, train_set, test_set, metric,
-                     num_workers, prms, layer_analysis=layer_analysis).train_n_eval(epoch_max, epoch_limit_minutes,
-                                                                                    save_pth_weights, save_onnx_weights,
-                                                                                    train_set)
+                     num_workers, prms,layer_analysis=layer_analysis).train_n_eval(epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set)
 
     except Exception as e:
         accuracy_duration = 0.0, 0.0, 1
@@ -162,8 +156,7 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
             print(e.message)
             return e.accuracy, accuracy_to_time_metric(e.accuracy, minimum_accuracy, e.duration), e.duration
         elif isinstance(e, LearnTimeException):
-            print(
-                f"Estimated training time, minutes: {format_time(e.estimated_training_time)}, but limit {format_time(e.epoch_limit_minutes)}.")
+            print(f"Estimated training time, minutes: {format_time(e.estimated_training_time)}, but limit {format_time(e.epoch_limit_minutes)}.")
             return (e.epoch_limit_minutes / e.estimated_training_time) / 1e5, 0, e.duration
         else:
             import traceback
@@ -176,10 +169,8 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
 
 
 class Train:
-    def __init__(self, config: tuple[str, str, str, str], out_shape: tuple, minimum_accuracy: float, batch: int,
-                 nn_module, task,
-                 train_dataset, test_dataset, metric, num_workers, prm: dict, save_to_db=True, is_code=False,
-                 layer_analysis: bool = False):
+    def __init__(self, config: tuple[str, str, str, str], out_shape: tuple, minimum_accuracy: float, batch: int, nn_module, task,
+                 train_dataset, test_dataset, metric, num_workers, prm: dict, save_to_db=True, is_code=False,layer_analysis: bool = False):
         """
         Universal class for training CV, Text Generation and other models.
         :param config: Tuple of names (Task, Dataset, Metric, Model).
@@ -219,8 +210,7 @@ class Train:
         self.train_loader = train_loader_f(self.train_dataset, self.batch, num_workers)
         self.test_loader = test_loader_f(self.test_dataset, self.batch, num_workers)
 
-        self.in_shape = get_in_shape(train_dataset,
-                                     num_workers)  # Model input tensor shape (e.g., (8, 3, 32, 32) for a batch size 8, RGB image 32x32 px).
+        self.in_shape = get_in_shape(train_dataset, num_workers) # Model input tensor shape (e.g., (8, 3, 32, 32) for a batch size 8, RGB image 32x32 px).
         self.device = torch_device()
 
         # Load model
@@ -237,11 +227,10 @@ class Train:
         self.best_accuracy = 0.0
         self.best_epoch = 0
         self.save_path = None
-
+        
         # System information (collected once at initialization)
         self.system_info = get_system_info()
         self.layer_analysis = layer_analysis
-
 
     def _get_loss_function(self):
         """Build loss function based on the task or use model's custom criterion."""
@@ -276,7 +265,7 @@ class Train:
                     else:
                         outputs = self.model(inputs)
                         loss = self.loss_fn(outputs, labels)
-
+                    
                     total_loss += loss.item()
                     num_batches += 1
                 except Exception as e:
@@ -312,12 +301,10 @@ class Train:
             return module.create_metric(self.out_shape)
 
         except (ModuleNotFoundError, AttributeError) as e:
-            raise ValueError(
-                f"Metric '{metric_name}' not found. Ensure a corresponding file and function exist. Ensure the metric module has create_metric()") \
+            raise ValueError(f"Metric '{metric_name}' not found. Ensure a corresponding file and function exist. Ensure the metric module has create_metric()") \
                 from e
 
-    def train_n_eval(self, epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set,
-                     save_path: Union[str, Path] = None):
+    def train_n_eval(self, epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set, save_path: Union[str, Path] = None):
         """ Training and evaluation with comprehensive metrics tracking """
 
         # Set save_path if not provided (for non-code training)
@@ -410,6 +397,7 @@ class Train:
                     layer_result = analyzer.full_analysis(
                         self.train_loader, self.loss_fn, num_batches=1)
 
+
                     layer_table = analyzer.build_layer_table(layer_result)
 
                     layer_summary = analyzer.summarize(layer_result)
@@ -419,6 +407,8 @@ class Train:
                     print(
                         f"  Layer result keys/errors: { {k: v.get('error') if isinstance(v, dict) and 'error' in v else 'ok' for k, v in layer_result.items()} }"
                     )
+
+
 
                     print(f"  Layer analysis saved (epoch {epoch})")
 
@@ -432,23 +422,21 @@ class Train:
 
             if not good(accuracy, self.minimum_accuracy, duration):
                 if 'caption' in self.task:
-                    print(
-                        f"[WARN] Accuracy {accuracy} is below the minimum accepted accuracy {self.minimum_accuracy}. Continuing training...")
+                    print(f"[WARN] Accuracy {accuracy} is below the minimum accepted accuracy {self.minimum_accuracy}. Continuing training...")
                 else:
                     raise AccuracyException(accuracy, duration,
                                             f"Accuracy is too low: {accuracy}."
                                             f" The minimum accepted accuracy for the '{self.config[1]}"
                                             f"' dataset is {self.minimum_accuracy}.")
 
+
             if save_pth_weights or save_onnx_weights:
-                save_if_best(self.model, self.model_name, accuracy, save_pth_weights, save_onnx_weights, train_set,
-                             self.num_workers, save_path=save_path)
+                save_if_best(self.model, self.model_name, accuracy, save_pth_weights, save_onnx_weights, train_set, self.num_workers, save_path=save_path)
 
             # Build extended parameters with new metrics
-
             only_prm = {k: v for k, v in self.prm.items() if k not in {'uid', 'duration', 'accuracy', 'epoch'}}
             # Use 'lr' as the canonical learning-rate key to avoid duplication with 'learning_rate'
-
+            
             # Collect current resource usage
             resource_usage = get_current_resource_usage()
             # Create train_stat group with new parameters
@@ -499,10 +487,8 @@ class Train:
                     if layer_stat_group is not None
                     else {}
                 ),
-            } | {
-                                f'metric_{k}': v
-                                for k, v in all_metric_results.items()
-                            })
+            }
+                            | {f'metric_{k}': v for k, v in all_metric_results.items()})
 
             # Keep layer statistics local to this epoch.
             self.prm.pop('layer_stat', None)
@@ -530,7 +516,7 @@ class Train:
                             prm,
                             nn_code=getattr(self, 'nn_code', None)
                         )
-
+                        
                         if layer_table:
                             DB_Write.save_layer_stat(
                                 epoch,
@@ -572,10 +558,10 @@ class Train:
     def _save_training_summary(self):
         """Save comprehensive training summary"""
         import json
-
+        
         # Get final resource usage
         final_resource_usage = get_current_resource_usage()
-
+        
         summary = {
             'config': {
                 'task': self.config[0],
@@ -620,6 +606,8 @@ class Train:
         except Exception as e:
             print(f"[WARN] Failed to save training summary: {e}")
 
+
+
     def eval(self, test_loader):
         """Evaluation with standardized metric interface - supports multiple metrics"""
         if debug:
@@ -646,14 +634,13 @@ class Train:
 
         # Collect results from ALL metrics
         all_results = {name: fn.result() for name, fn in self.metric_fns.items()}
-
+        
         # Return primary metric (first one) for accuracy comparison, and all results
         primary_accuracy = all_results[self.primary_metric]
         return primary_accuracy, all_results
 
 
-def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Union[str, None] = None,
-              save_path: Union[str, None] = None, export_onnx=False,
+def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Union[str, None] = None, save_path: Union[str, None] = None, export_onnx=False,
               epoch_limit_minutes=default_epoch_limit_minutes, layer_analysis=False, transform_dir=None):
     """
     train the model with the given code and hyperparameters and evaluate it.
@@ -705,8 +692,7 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             is_code=True)
         trainer.nn_code = nn_code
         epoch = prm['epoch']
-        accuracy, accuracy_to_time, duration = trainer.train_n_eval(epoch, epoch_limit_minutes, False, export_onnx,
-                                                                    train_set, save_path=save_path)
+        accuracy, accuracy_to_time, duration = trainer.train_n_eval(epoch, epoch_limit_minutes, False, export_onnx, train_set, save_path=save_path)
         if save_to_db:
             # If the result meets the requirements, save the model to the database.
             if good(accuracy, minimum_accuracy, duration):

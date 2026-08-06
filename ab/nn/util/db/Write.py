@@ -83,7 +83,7 @@ def init_population():
 def code_to_db(cursor, table_name, code=None, code_file=None, force_name = None):
     # If the model does not exist, insert it with a new UUID
     if code_file:
-        nm = code_file.stem
+        nm = code_file.stem 
     elif force_name is None:
         nm = uuid4(code)
     else:
@@ -301,63 +301,29 @@ def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
     prm = dict(prm)
 
     # Extract grouped training diagnostics before prm-table insert
+    train_stat = prm.pop('train_stat', {})
+    prm.pop('layer_stat', None)
 
-    # Extract grouped data before scalar parameter insertion.
-    train_stat = prm.pop("train_stat", {})
-    prm.pop("layer_stat", None)
+    transform = prm['transform']
+    uid = prm.pop('uid')
+    extra_main_column_values = [prm.pop(nm, None) for nm in extra_main_columns]
 
-    transform = prm["transform"]
-    uid = prm.pop("uid")
+    # Only normal hyperparameters go into prm table
+    for nm in param_tables:
+        populate_prm_table(nm, cursor, prm, uid)
 
-    extra_main_column_values = [
-        prm.pop(name, None)
-        for name in extra_main_columns
-
-    ]
-
-    # Only ordinary scalar hyperparameters go into parameter tables.
-    for table_name in param_tables:
-        populate_prm_table(
-            table_name,
-            cursor,
-            prm,
-            uid,
-        )
-
-
-    all_values = [
-        transform,
-        uid,
-        *config_ext,
-        *extra_main_column_values,
-    ]
-
-
+    all_values = [transform, uid, *config_ext, *extra_main_column_values]
     stat_id = uuid4(all_values)
 
-    cursor.execute(
-        f"""
-        INSERT OR IGNORE INTO stat (
-            id,
-            transform,
-            prm,
-            {', '.join(main_columns_ext + extra_main_columns)}
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (stat_id, *all_values),
-    )
+    cursor.execute(f"""
+    INSERT OR IGNORE INTO stat (id, transform, prm, {', '.join(main_columns_ext + extra_main_columns)})
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (stat_id, *all_values))
 
-    # Save grouped training diagnostics.
-    save_train_stat(
-        cursor,
-        stat_id,
-        train_stat,
-    )
+    # Save train_stat row linked 1:1 to stat.id
+    save_train_stat(cursor, stat_id, train_stat)
 
     return stat_id
-
-
 
 
 @_serialized_db_write
@@ -389,16 +355,10 @@ def json_train_to_db():
                         for single_metric in metric.split(','):
                             populate_code_table('metric', cursor, name=single_metric.strip())
 
-                        if trial["transform"]:
-                            populate_code_table("transform", cursor, name=trial["transform"])
-
-                        extracted_train_stat = (
-                            trial.get("train_stat")
-                            if isinstance(trial.get("train_stat"), dict)
-                            else {}
-                        )
-
-                        raw_layer_stat = trial.get("layer_stat")
+                        if trial['transform']:
+                            populate_code_table('transform', cursor, name=trial['transform'])
+                        extracted_train_stat = trial.get('train_stat') if isinstance(trial.get('train_stat'), dict) else {}
+                        raw_layer_stat = trial.get('layer_stat')
                         extracted_layer_stat = (
                             raw_layer_stat
                             if isinstance(raw_layer_stat, dict)
@@ -415,24 +375,15 @@ def json_train_to_db():
                                 file=sys.stderr,
                             )
 
-                        trial = {
-                            k: v
-                            for k, v in trial.items()
-                            if not isinstance(v, (dict, list))
-                        }
-
+                        trial = {k: v for k, v in trial.items() if not isinstance(v, (dict, list))}
                         if extracted_train_stat:
-                            trial["train_stat"] = extracted_train_stat
+                            trial['train_stat'] = extracted_train_stat
 
-                        stat_id = save_stat(
-                            sub_config + (epoch,),
-                            trial,
-                            cursor,
-                        )
+                        stat_id = save_stat(sub_config + (epoch,), trial, cursor)
 
                         if extracted_layer_stat:
                             try:
-                                layers = extracted_layer_stat.get("layers")
+                                layers = extracted_layer_stat.get('layers')
 
                                 if not isinstance(layers, list):
                                     raise ValueError(
@@ -444,7 +395,7 @@ def json_train_to_db():
                                     for row in layers
                                     if (
                                         not isinstance(row, dict)
-                                        or not row.get("name")
+                                        or not row.get('name')
                                     )
                                 )
 
@@ -743,27 +694,11 @@ def save_nn_stat(nn_name: str, prm_id: str, stats: dict):
         return False
 
 @_serialized_db_write
-def save_layer_stat(
-    epoch: int,
-    table: dict,
-    stat_id: str,
-    metric: str = None,
-):
-    """
-    Public wrapper for live-training callers.
-    """
-
+def save_layer_stat(epoch: int, table: dict, stat_id: str, metric: str = None):
+    """Save per-layer analysis into layer_stat and per_layer_stat."""
     conn, cursor = sql_conn()
-
     try:
-        _save_layer_stat(
-            cursor=cursor,
-            epoch=epoch,
-            table=table,
-            stat_id=stat_id,
-            metric=metric,
-        )
-
+        _save_layer_stat(cursor, epoch, table, stat_id, metric)
         conn.commit()
     finally:
         conn.close()
