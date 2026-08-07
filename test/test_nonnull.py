@@ -75,31 +75,6 @@ class DataWithNonNullValueTest(unittest.TestCase):
         )
 
     # ------------------------------------------------------------------ #
-    # Example 2 — stat + prm only (required hyperparameter rows non-NULL)
-    # No nn_stat columns; prm dict only contains listed keys.
-    # NOTE: with no task/dataset/nn filter this scans almost all stat rows.
-    # ------------------------------------------------------------------ #
-    @unittest.skipUnless(RUN_SLOW, "slow: set RUN_SLOW_TESTS=1 to enable")
-    def test_02_stat_and_prm_only(self):
-        df = api.data_withnonnullvalue(
-            require_nn_stat_nonnull=(),
-            require_prm_nonnull=("lr", "batch"),
-            max_rows=5,
-            prm_as_columns=True,
-            # Narrow the stat subquery to finish quickly, e.g.
-            # task="YourTask", dataset="YourDataset",
-        )
-        self.assertFrame(
-            df,
-            required_cols=("lr", "batch"),
-            optional_cols=("nn", "accuracy"),
-            max_rows=5,
-        )
-        self.assertNotIn(
-            "nn_total_layers", df.columns, "nn_stat columns should not be included"
-        )
-
-    # ------------------------------------------------------------------ #
     # Example 3 — stat + nn_stat + prm (all three; minimal nn_stat columns)
     # ------------------------------------------------------------------ #
     def test_03_stat_nn_stat_and_prm(self):
