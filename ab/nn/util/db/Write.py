@@ -177,12 +177,132 @@ def save_train_stat(cursor, stat_id: str, train_stat: dict):
         values,
     )
 
+def _layer_snapshot_to_table(layer_stat: dict) -> dict:
+    """
+    Convert direct layer_stat["layers"] JSON data into the table format
+    expected by _save_layer_stat().
+    """
+    if not isinstance(layer_stat, dict):
+        return {}
+
+    layers = layer_stat.get("layers")
+    if not isinstance(layers, list):
+        return {}
+
+    return {
+        row["name"]: {
+            key: value
+            for key, value in row.items()
+            if key != "name"
+        }
+        for row in layers
+        if isinstance(row, dict) and row.get("name")
+    }
+
+def _save_layer_stat(
+    cursor,
+    epoch: int,
+    table: dict,
+    stat_id: str,
+    metric: str = None,
+):
+    """
+    Save one layer-analysis snapshot using an existing database cursor.
+    """
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS layer_stat
+        (
+            id TEXT PRIMARY KEY,
+            layer_name TEXT,
+            layer_type TEXT,
+            stat_id TEXT
+        )
+        """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS per_layer_stat
+        (
+            id TEXT,
+            stat_id TEXT,
+            layer_type TEXT,
+            ww_alpha REAL,
+            grad_norm REAL,
+            dead_frac REAL,
+            taylor_imp REAL,
+            cka_redund REAL,
+            eff_rank REAL,
+            rank_ratio REAL,
+            sensitivity REAL,
+            PRIMARY KEY (id, stat_id)
+        )
+        """
+    )
+
+    for layer_name, row in table.items():
+        layer_stat_id = uuid4(
+            [
+                stat_id,
+                layer_name,
+                str(epoch),
+            ]
+        )
+
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO layer_stat
+                (id, layer_name, layer_type, stat_id)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                layer_stat_id,
+                layer_name,
+                row.get("layer_type"),
+                stat_id,
+            ),
+        )
+
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO per_layer_stat (
+                id,
+                stat_id,
+                layer_type,
+                ww_alpha,
+                grad_norm,
+                dead_frac,
+                taylor_imp,
+                cka_redund,
+                eff_rank,
+                rank_ratio,
+                sensitivity
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                layer_stat_id,
+                stat_id,
+                row.get("layer_type"),
+                row.get("ww_alpha"),
+                row.get("grad_norm"),
+                row.get("dead_frac"),
+                row.get("taylor_imp"),
+                row.get("cka_redund"),
+                row.get("eff_rank"),
+                row.get("rank_ratio"),
+                row.get("sensitivity"),
+            ),
+        )
 
 def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
     prm = dict(prm)
 
     # Extract grouped training diagnostics before prm-table insert
     train_stat = prm.pop('train_stat', {})
+    prm.pop('layer_stat', None)
 
     transform = prm['transform']
     uid = prm.pop('uid')
@@ -238,11 +358,73 @@ def json_train_to_db():
                         if trial['transform']:
                             populate_code_table('transform', cursor, name=trial['transform'])
                         extracted_train_stat = trial.get('train_stat') if isinstance(trial.get('train_stat'), dict) else {}
+                        raw_layer_stat = trial.get('layer_stat')
+                        extracted_layer_stat = (
+                            raw_layer_stat
+                            if isinstance(raw_layer_stat, dict)
+                            else {}
+                        )
+
+                        if (
+                            raw_layer_stat is not None
+                            and not isinstance(raw_layer_stat, dict)
+                        ):
+                            print(
+                                f"Warning: skipping invalid layer_stat in "
+                                f"{model_stat_file}: expected an object.",
+                                file=sys.stderr,
+                            )
+
                         trial = {k: v for k, v in trial.items() if not isinstance(v, (dict, list))}
                         if extracted_train_stat:
                             trial['train_stat'] = extracted_train_stat
 
-                        save_stat(sub_config + (epoch,), trial, cursor)
+                        stat_id = save_stat(sub_config + (epoch,), trial, cursor)
+
+                        if extracted_layer_stat:
+                            try:
+                                layers = extracted_layer_stat.get('layers')
+
+                                if not isinstance(layers, list):
+                                    raise ValueError(
+                                        'layer_stat["layers"] must be a list'
+                                    )
+
+                                invalid_rows = sum(
+                                    1
+                                    for row in layers
+                                    if (
+                                        not isinstance(row, dict)
+                                        or not row.get('name')
+                                    )
+                                )
+
+                                if invalid_rows:
+                                    print(
+                                        f"Warning: skipping {invalid_rows} invalid "
+                                        f"layer row(s) in {model_stat_file}.",
+                                        file=sys.stderr,
+                                    )
+
+                                layer_table = _layer_snapshot_to_table(
+                                    extracted_layer_stat
+                                )
+
+                                if layer_table:
+                                    _save_layer_stat(
+                                        cursor=cursor,
+                                        epoch=epoch,
+                                        table=layer_table,
+                                        stat_id=stat_id,
+                                        metric=metric,
+                                    )
+
+                            except Exception as e:
+                                print(
+                                    f"Warning: skipping invalid layer_stat in "
+                                    f"{model_stat_file}: {e}",
+                                    file=sys.stderr,
+                                )
             except Exception as e:
                 print(f"Warning: skipping JSON file {model_stat_file}: {e}", file=sys.stderr)
     close_conn(conn)
@@ -511,70 +693,12 @@ def save_nn_stat(nn_name: str, prm_id: str, stats: dict):
         print(f"Error saving NN statistics to database: {e}")
         return False
 
+@_serialized_db_write
 def save_layer_stat(epoch: int, table: dict, stat_id: str, metric: str = None):
     """Save per-layer analysis into layer_stat and per_layer_stat."""
     conn, cursor = sql_conn()
     try:
-        cursor.execute("""
-                       CREATE TABLE IF NOT EXISTS layer_stat
-                       (
-                           id TEXT PRIMARY KEY,
-                           layer_name TEXT,
-                           layer_type TEXT,
-                           stat_id TEXT
-                       )
-                       """)
-        cursor.execute("""
-                       CREATE TABLE IF NOT EXISTS per_layer_stat
-                       (
-                           id TEXT,
-                           stat_id TEXT,
-                           layer_type TEXT,
-                           ww_alpha REAL,
-                           grad_norm REAL,
-                           dead_frac REAL,
-                           taylor_imp REAL,
-                           cka_redund REAL,
-                           eff_rank REAL,
-                           rank_ratio REAL,
-                           sensitivity REAL,
-                           PRIMARY KEY (id, stat_id)
-                       )
-                       """)
-
-        for layer_name, row in table.items():
-            layer_stat_id = uuid4([stat_id, layer_name])
-
-            cursor.execute("""
-                INSERT OR IGNORE INTO layer_stat (id, layer_name, layer_type, stat_id)
-                VALUES (?, ?, ?, ?)
-            """, (
-                layer_stat_id,
-                layer_name,
-                row.get('layer_type'),
-                stat_id,
-            ))
-
-            cursor.execute("""
-                INSERT OR REPLACE INTO per_layer_stat (
-                    id, stat_id, layer_type,
-                    ww_alpha, grad_norm, dead_frac,
-                    taylor_imp, cka_redund, eff_rank, rank_ratio, sensitivity
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                layer_stat_id,
-                stat_id,
-                row.get('layer_type'),
-                row.get('ww_alpha'),
-                row.get('grad_norm'),
-                row.get('dead_frac'),
-                row.get('taylor_imp'),
-                row.get('cka_redund'),
-                row.get('eff_rank'),
-                row.get('rank_ratio'),
-                row.get('sensitivity'),
-            ))
-
+        _save_layer_stat(cursor, epoch, table, stat_id, metric)
         conn.commit()
     finally:
         conn.close()

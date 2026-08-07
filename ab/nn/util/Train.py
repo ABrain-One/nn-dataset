@@ -231,7 +231,6 @@ class Train:
         # System information (collected once at initialization)
         self.system_info = get_system_info()
         self.layer_analysis = layer_analysis
-        self._layer_data = {}
 
     def _get_loss_function(self):
         """Build loss function based on the task or use model's custom criterion."""
@@ -462,6 +461,20 @@ class Train:
                 'gpu_memory_usage_percent': resource_usage.get('gpu_memory_usage_percent'),
             }
 
+            layer_stat_group = None
+            if layer_summary or layer_result or layer_table:
+                layer_stat_group = {
+                    'summary': layer_summary,
+                    'layers': [
+                        {
+                            'name': name,
+                            **row,
+                        }
+                        for name, row in layer_table.items()
+                    ],
+                    'raw_analysis': layer_result,
+                }
+
             prm = merge_prm(self.prm, {
                 'uid': uuid4(only_prm),
                 'duration': duration,
@@ -469,25 +482,25 @@ class Train:
                 'accuracy': accuracy,
                 'epoch_max': epoch_max,
                 'train_stat': train_stat_group,
+                **(
+                    {'layer_stat': layer_stat_group}
+                    if layer_stat_group is not None
+                    else {}
+                ),
             }
                             | {f'metric_{k}': v for k, v in all_metric_results.items()})
+
+            # Keep layer statistics local to this epoch.
+            self.prm.pop('layer_stat', None)
 
             # Build JSON export once
             prm_json = dict(prm)
 
-            # Make layer statistics human-readable without losing information
-            if layer_summary or layer_result or layer_table:
-                prm_json["layer_stat"] = {
-                    "summary": layer_summary,
-                    "layers": [
-                        {
-                            "name": name,
-                            **row,
-                        }
-                        for name, row in layer_table.items()
-                    ],
-                    "raw_analysis": layer_result,
-                }
+            # merge_prm sorts keys alphabetically. Reinsert layer_stat
+            # so it appears after train_stat in the saved JSON.
+            layer_stat_json = prm_json.pop('layer_stat', None)
+            if layer_stat_json is not None:
+                prm_json['layer_stat'] = layer_stat_json
 
             if self.save_to_db:
                 if self.is_code:
