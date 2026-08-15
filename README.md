@@ -242,7 +242,7 @@ If recently added dependencies are missing in the <a href='https://hub.docker.co
 
 ## Citation
 
-If you find the LEMUR Neural Network Dataset to be useful for your research, please consider citing our <a target='_blank' href='https://arxiv.org/pdf/2504.10552'>article</a>:
+If you find the LEMUR Neural Network Dataset to be useful for your research, please consider citing our articles <a target='_blank' href='https://arxiv.org/pdf/2504.10552'>NN Dataset</a> and <a target='_blank' href='https://openaccess.thecvf.com/content/CVPR2026W/CVPR-NAS26/papers/Uzun_LEMUR_2_Unlocking_Neural_Network_Diversity_for_AI_CVPRW_2026_paper.pdf'>LEMUR 2</a>:
 ```bibtex
 @article{ABrain.NN-Dataset,
   title={LEMUR Neural Network Dataset: Towards Seamless AutoML},
