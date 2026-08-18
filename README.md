@@ -6,7 +6,7 @@ LEMUR - Learning, Evaluation, and Modeling for Unified Research
 
 <img src='https://abrain.one/img/lemur-nn-whit.jpg' width='25%'/>
 
-The original open-source version of the <a href='https://github.com/ABrain-One/nn-dataset'>LEMUR dataset</a> was developed by <strong>Arash Torabi Goodarzi, Roman Kochnev</strong> and <strong>Zofia Antonina Bentyn</strong> at the Computer Vision Laboratory, University of Würzburg, Germany, under the supervision and technical guidance of <strong>Dr. Dmitry Ignatov</strong>, building upon his foundational work
+The original open-source version of the <a href='https://github.com/ABrain-One/NN-Dataset'>LEMUR dataset</a> was developed by <strong>Arash Torabi Goodarzi, Roman Kochnev</strong> and <strong>Zofia Antonina Bentyn</strong> at the Computer Vision Laboratory, University of Würzburg, Germany, under the supervision and technical guidance of <strong>Dr. Dmitry Ignatov</strong>, building upon his foundational work
 
 ## Contents
 
