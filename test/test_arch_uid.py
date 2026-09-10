@@ -5,10 +5,15 @@ should not change architectural identity; `DIFF` means it must. A row that does
 not behave as marked is a property the certificate does not actually have.
 
 Usage:
-    python test_arch_uid.py          # or: pytest test_arch_uid.py
+    python test_arch_uid.py              # verbose, one line per case
+    python -m unittest test_arch_uid -v
+    pytest test_arch_uid.py
 """
 
 from __future__ import annotations
+
+import re
+import unittest
 
 from ab.nn.util.ArchUID import arch_similarity, arch_uid
 
@@ -326,7 +331,6 @@ CASES = [
 ]
 
 
-
 CHAIN = """
 class H(nn.Module):
     def __init__(self, c, n):
@@ -362,44 +366,51 @@ SIM_CASES = [
 ]
 
 
-def test_arch_uid_invariance():
-    """Every SAME/DIFF case and every graded range must hold."""
-    bad = [l for e, l, a, b in CASES if (arch_uid(a) == arch_uid(b)) != (e == "SAME")]
-    bad += [l for l, a, b, lo, hi in SIM_CASES if not lo <= arch_similarity(a, b) <= hi]
-    assert not bad, bad
+# --------------------------------------------------------------------------
+# unittest: one generated test method per case, so every row is reported
+# individually (with its label as the description under -v).
+# --------------------------------------------------------------------------
+
+def _slug(text: str) -> str:
+    return re.sub(r"\W+", "_", text).strip("_").lower()[:60]
 
 
-def main():
-    print(f"{'expect':<8}{'result':<10}{'ok':<5}case")
-    print("-" * 78)
-    fails = []
-    for expect, label, a, b in CASES:
-        same = arch_uid(a) == arch_uid(b)
-        got = "SAME" if same else "DIFF"
-        ok = (got == expect)
-        if not ok:
-            fails.append(label)
-        print(f"{expect:<8}{got:<10}{'yes' if ok else 'NO':<5}{label}")
+def _make_uid_test(expect, label, a, b):
+    def test(self):
+        ua, ub = arch_uid(a), arch_uid(b)
+        if expect == "SAME":
+            self.assertEqual(ua, ub, f"expected SAME, got DIFF: {label}")
+        else:
+            self.assertNotEqual(ua, ub, f"expected DIFF, got SAME: {label}")
+    test.__doc__ = f"[{expect}] {label}"
+    return test
 
-    print("-" * 78)
-    print("graded measure  arch_similarity()  -- reporting only, never gates identity")
-    print(f"{'range':<14}{'value':<10}{'ok':<5}case")
-    for label, a, b, lo, hi in SIM_CASES:
+
+def _make_sim_test(label, a, b, lo, hi):
+    def test(self):
         v = arch_similarity(a, b)
-        ok = lo <= v <= hi
-        if not ok:
-            fails.append(label)
-        print(f"{f'{lo:.2f}-{hi:.2f}':<14}{v:<10.3f}{'yes' if ok else 'NO':<5}{label}")
+        self.assertTrue(lo <= v <= hi,
+                        f"arch_similarity={v:.3f} outside [{lo:.2f}, {hi:.2f}]: {label}")
+    test.__doc__ = f"[{lo:.2f}-{hi:.2f}] {label}"
+    return test
 
-    total = len(CASES) + len(SIM_CASES)
-    print("-" * 78)
-    if fails:
-        print(f"{len(fails)} of {total} cases do not hold:")
-        for f in fails:
-            print(f"  - {f}")
-    else:
-        print(f"all {total} cases hold")
+
+class TestArchUID(unittest.TestCase):
+    """Every SAME/DIFF case must hold for the architecture certificate."""
+
+
+class TestArchSimilarity(unittest.TestCase):
+    """Graded measure -- reporting only, never gates identity."""
+
+
+for _i, (_expect, _label, _a, _b) in enumerate(CASES):
+    setattr(TestArchUID, f"test_{_i:02d}_{_expect.lower()}_{_slug(_label)}",
+            _make_uid_test(_expect, _label, _a, _b))
+
+for _i, (_label, _a, _b, _lo, _hi) in enumerate(SIM_CASES):
+    setattr(TestArchSimilarity, f"test_{_i:02d}_{_slug(_label)}",
+            _make_sim_test(_label, _a, _b, _lo, _hi))
 
 
 if __name__ == "__main__":
-    main()
+    unittest.main(verbosity=2)
