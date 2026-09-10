@@ -597,9 +597,9 @@ class Train:
             'epoch_details': [asdict(e) for e in self.epoch_history]
         }
 
-        summary_path = Path(self.save_path) / 'training_summary.json'
+        summary_path = out_dir / 'training_summary.json'
         try:
-            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            out_dir.mkdir(parents=True, exist_ok=True)
             with open(summary_path, 'w') as f:
                 json.dump(summary, f, indent=2)
             print(f"Training summary saved to {summary_path}")
