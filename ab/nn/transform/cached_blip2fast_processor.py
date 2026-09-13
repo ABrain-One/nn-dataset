@@ -1,9 +1,9 @@
 """NN-Dataset transform backed by validated BLIP-2/Q-Former cache shards.
 
 ``transform(norm)`` returns ``None`` to activate NN-Dataset's cached-captioning
-branch. Cache creation is intentionally not automatic: a missing or corrupt
-split produces an actionable error and can never recursively reload COCO or
-silently substitute training data for validation data.
+branch. A missing or corrupt split auto-extracts the full COCO split in place
+(see ``_auto_build_split`` below) rather than silently substituting training
+data for validation data or serving a partial/truncated split.
 """
 
 from __future__ import annotations
@@ -24,10 +24,41 @@ from ab.nn.transform.blip2_cache_contract_v2 import (
     resolve_cache_dir,
 )
 from ab.nn.transform.blip2_cache_store_v2 import (
+    CacheIntegrityError,
+    CacheMissingError,
     CacheStore,
     LoadedShard,
     SplitIndex,
 )
+
+
+def _auto_build_split(cache_dir: Path, split: str) -> None:
+    """Extract a full split in-process; safe/idempotent if already valid.
+
+    ``build_cache`` re-checks split validity itself and no-ops when a
+    complete, correctly-sized cache already exists (see
+    ``build_blip2_cache_v2.build_cache``'s own ``force`` fast-path), so this
+    is always called on a cache-miss/integrity-error without extra state.
+    """
+    from ab.nn.tools.build_blip2_cache_v2 import build_cache
+    from ab.nn.util.Const import data_dir
+
+    coco_dir = Path(data_dir) / "coco"
+    print(
+        f"[BLIP-2 cache v2] '{split}' split under {cache_dir} is missing or "
+        f"incomplete — auto-extracting the full COCO {split} split from "
+        f"{coco_dir} now. This runs once per machine and can take a while."
+    )
+    build_cache(
+        split=split,
+        cache_dir=cache_dir,
+        coco_dir=coco_dir,
+        batch_size=32,
+        shard_samples=16_000,
+        num_workers=0,
+        device_name="auto",
+        force=False,
+    )
 from ab.nn.util.hf.download_utils import ensure_hf_model
 
 
@@ -102,7 +133,11 @@ class CachedBlip2Dataset(Dataset):
 
     def _split_index(self) -> SplitIndex:
         if self._index is None:
-            self._index = self._store.index(self.split)
+            try:
+                self._index = self._store.index(self.split)
+            except (CacheMissingError, CacheIntegrityError):
+                _auto_build_split(self.cache_dir, self.split)
+                self._index = self._store.index(self.split)
         return self._index
 
     def __len__(self) -> int:
