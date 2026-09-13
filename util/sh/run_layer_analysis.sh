@@ -34,7 +34,7 @@ set -euo pipefail
 # IMAGE CLASSIFICATION
 # ============================================================
 
-# CONFIG=img-classification_cifar-10_acc_AirNet
+ CONFIG=img-classification_cifar-10_acc_AirNet
 # CONFIG=img-classification_cifar-10_acc_AirNext
 # CONFIG=img-classification_cifar-10_acc_AlexNet
  #CONFIG=img-classification_cifar-10_acc_BagNet
@@ -42,7 +42,7 @@ set -euo pipefail
 # CONFIG=img-classification_cifar-10_acc_BayesianNet-1
 # CONFIG=img-classification_cifar-10_acc_ConvNeXt
 # CONFIG=img-classification_cifar-10_acc_ConvNeXtTransformer
- CONFIG=img-classification_cifar-10_acc_DPN68
+ #CONFIG=img-classification_cifar-10_acc_DPN68
 # CONFIG=img-classification_cifar-10_acc_DPN107
 # CONFIG=img-classification_cifar-10_acc_DPN131
 # CONFIG=img-classification_cifar-10_acc_DarkNet
@@ -126,7 +126,6 @@ from ab.nn.util.db.Util import get_ab_nn_attr
 
 CONFIG = sys.argv[1]
 EPOCH_MAX = int(os.environ.get("EPOCH_MAX", "50"))
-
 
 ANALYSIS_EPOCHS = tuple(
     epoch
@@ -366,7 +365,6 @@ def run_training(
         save_to_db=True,
         layer_analysis=True,
     )
-
 
     original_save_results = DB_Write.save_results
     original_save_layer_stat = DB_Write.save_layer_stat
@@ -778,8 +776,8 @@ for epoch in range(
     )
 
     if canonical_path.is_file():
-        # Existing non-checkpoint history is preserved
-        # byte-for-byte.
+        # Keep the original behavior:
+        # existing non-analysis epochs are skipped.
         if epoch not in ANALYSIS_EPOCH_SET:
             continue
 
@@ -806,38 +804,10 @@ for epoch in range(
                 "to append, sort, or guess"
             )
 
-        before = copy.deepcopy(
-            records[match_index]
+
+        records[match_index] = copy.deepcopy(
+            staged_records[epoch]
         )
-
-        records[match_index]["layer_stat"] = (
-            copy.deepcopy(
-                staged_records[epoch]["layer_stat"]
-            )
-        )
-
-        after_without_layer = {
-            key: value
-            for key, value
-            in records[match_index].items()
-            if key != "layer_stat"
-        }
-
-        before_without_layer = {
-            key: value
-            for key, value
-            in before.items()
-            if key != "layer_stat"
-        }
-
-        if (
-            after_without_layer
-            != before_without_layer
-        ):
-            fail(
-                "Non-layer historical data changed "
-                f"while preparing {canonical_path}"
-            )
 
         prepared[canonical_path] = records
 
@@ -1115,7 +1085,6 @@ updated_epochs = [
     for path in prepared
     if existed_before[path]
 ]
-
 
 shutil.rmtree(
     stage_dir

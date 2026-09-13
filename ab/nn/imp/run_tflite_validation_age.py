@@ -39,7 +39,7 @@ except ImportError:
 REPO_ID = "Arun03k/checkpoints-epoch-50"
 LOCAL_MODEL_DIR = os.path.join("ab", "nn", "nn")
 OUTPUT_FOLDER = "ab/nn/stat/run/age-regression_utkface_mae_MobileAgeNet"
-FINAL_REPORT_FILE = "ab/nn/imp/TFLITE_REPORT_AGE_EPOCH50.json"
+FINAL_REPORT_FILE = "ab/nn/stat/imp/TFLITE_REPORT_AGE_EPOCH50.json"
 TEST_BATCH_LIMIT = 20
 
 from ab.nn.loader.utkface import loader as utk_loader
