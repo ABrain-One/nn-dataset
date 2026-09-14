@@ -46,11 +46,17 @@ def export(cache_dir: str | Path, source: str = GPT2_MODEL_ID) -> Path:
     tokenizer = runtime / GPT2_TOKENIZER_DIR_NAME
 
     if not (decoder / "config.json").is_file():
-        model = AutoModelForCausalLM.from_pretrained(source, local_files_only=True)
+        try:
+            model = AutoModelForCausalLM.from_pretrained(source, local_files_only=True)
+        except Exception:
+            model = AutoModelForCausalLM.from_pretrained(source, local_files_only=False)
         model.save_pretrained(decoder, safe_serialization=True)
         del model
     if not (tokenizer / "tokenizer_config.json").is_file():
-        value = GPT2TokenizerFast.from_pretrained(source, local_files_only=True)
+        try:
+            value = GPT2TokenizerFast.from_pretrained(source, local_files_only=True)
+        except Exception:
+            value = GPT2TokenizerFast.from_pretrained(source, local_files_only=False)
         value.save_pretrained(tokenizer)
 
     records = _runtime_records(runtime)

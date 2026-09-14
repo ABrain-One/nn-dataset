@@ -238,7 +238,7 @@ def main():
     parser.add_argument("--coco-root", type=Path, required=True)
     parser.add_argument("--cache-dir", type=Path, default=None)
     parser.add_argument("--split", choices=("train", "val"), required=True)
-    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--shard-size", type=int, default=256)
     parser.add_argument("--allow-cpu", action="store_true")
     parser.add_argument(

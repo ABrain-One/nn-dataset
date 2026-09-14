@@ -39,6 +39,7 @@ def _auto_build_split(cache_dir: Path, split: str) -> None:
     """
     from ab.nn.util.Const import data_dir
     from ab.nn.tools.build_blip2_cached import build as build_cache_split
+    from ab.nn.tools.prepare_blip2_gpt2_runtime import export as export_gpt2_runtime
 
     coco_root = data_dir / "coco"
     print(
@@ -46,7 +47,8 @@ def _auto_build_split(cache_dir: Path, split: str) -> None:
         f"limited smoke build — auto-extracting the full COCO {split} split from "
         f"{coco_root} now. This runs once per machine and can take a while."
     )
-    build_cache_split(coco_root, cache_dir, split, batch_size=1, shard_size=256, limit=None)
+    build_cache_split(coco_root, cache_dir, split, batch_size=32, shard_size=256, limit=None)
+    export_gpt2_runtime(cache_dir)
 
 
 class CachedCaptionDataset(Dataset):
