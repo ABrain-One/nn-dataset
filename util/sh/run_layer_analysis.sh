@@ -34,7 +34,7 @@ set -euo pipefail
 # IMAGE CLASSIFICATION
 # ============================================================
 
- CONFIG=img-classification_cifar-10_acc_AirNet
+ CONFIG="${1:-img-classification_cifar-10_acc_AirNet}"
 # CONFIG=img-classification_cifar-10_acc_AirNext
 # CONFIG=img-classification_cifar-10_acc_AlexNet
  #CONFIG=img-classification_cifar-10_acc_BagNet
@@ -311,6 +311,73 @@ def validate_direct_layer_stat(
             f"Epoch {epoch} contains duplicate layer names "
             f"in {path}"
         )
+
+def clean_invalid_layer_stat_fields(
+    records,
+    *,
+    epoch,
+    path,
+    protected_index=None,
+):
+    for index, record in enumerate(records):
+        if index == protected_index or "layer_stat" not in record:
+            continue
+
+        try:
+            validate_direct_layer_stat(
+                record["layer_stat"],
+                epoch=epoch,
+                path=path,
+            )
+        except RuntimeError:
+            del record["layer_stat"]
+
+    return records
+
+def prepare_layer_stat_writeback(
+    records,
+    parameters,
+    staged_record,
+    *,
+    epoch,
+    path,
+):
+    """Write the staged layer snapshot to the first parameter match."""
+    matching_indices = [
+        index
+        for index, record in enumerate(records)
+        if matches_parameters(record, parameters)
+    ]
+
+    if not matching_indices:
+        fail(
+            f"Existing checkpoint {path} has no exact-parameter record; "
+            "refusing to append, sort, or guess"
+        )
+
+    validate_direct_layer_stat(
+        staged_record.get("layer_stat"),
+        epoch=epoch,
+        path=path,
+    )
+
+    target_index = matching_indices[0]
+    updated_records = copy.deepcopy(records)
+    updated_records[target_index]["layer_stat"] = copy.deepcopy(
+        staged_record["layer_stat"]
+    )
+
+    updated_records = clean_invalid_layer_stat_fields(
+        updated_records,
+        epoch=epoch,
+        path=path,
+        protected_index=target_index,
+    )
+
+    return (
+        updated_records,
+        target_index,
+    )
 
 def run_training(
     task,
@@ -776,37 +843,31 @@ for epoch in range(
     )
 
     if canonical_path.is_file():
-        # Keep the original behavior:
-        # existing non-analysis epochs are skipped.
-        if epoch not in ANALYSIS_EPOCH_SET:
-            continue
-
         records = copy.deepcopy(
             original_records[canonical_path]
         )
 
-        match_index = next(
-            (
-                index
-                for index, record in enumerate(records)
-                if matches_parameters(
-                    record,
-                    parameters,
-                )
-            ),
-            None,
-        )
-
-        if match_index is None:
-            fail(
-                f"Existing checkpoint {canonical_path} "
-                "has no exact-parameter record; refusing "
-                "to append, sort, or guess"
+        if epoch not in ANALYSIS_EPOCH_SET:
+            cleaned_records = clean_invalid_layer_stat_fields(
+                records,
+                epoch=epoch,
+                path=canonical_path,
             )
 
+            if cleaned_records != original_records[canonical_path]:
+                prepared[canonical_path] = cleaned_records
 
-        records[match_index] = copy.deepcopy(
-            staged_records[epoch]
+            continue
+
+        (
+            records,
+            match_index,
+        ) = prepare_layer_stat_writeback(
+            records,
+            parameters,
+            staged_records[epoch],
+            epoch=epoch,
+            path=canonical_path,
         )
 
         prepared[canonical_path] = records
