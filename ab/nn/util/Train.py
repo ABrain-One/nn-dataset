@@ -9,7 +9,6 @@ from typing import List, Optional
 from typing import Union
 
 from torch.cuda import OutOfMemoryError
-from tqdm.auto import tqdm
 
 import ab.nn.util.CodeEval as codeEvaluator
 import ab.nn.util.db.Write as DB_Write
@@ -255,12 +254,7 @@ class Train:
         num_batches = 0
 
         with torch.no_grad():
-            for inputs, labels in tqdm(
-                data_loader,
-                desc="Validation loss",
-                leave=True,
-                dynamic_ncols=True,
-            ):
+            for inputs, labels in data_loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 try:
                     # SOTA Fix: For captioning models that return loss when labels are provided
@@ -630,12 +624,7 @@ class Train:
             metric_fn.reset()
 
         with torch.no_grad():
-            for inputs, labels in tqdm(
-                test_loader,
-                desc="Evaluation",
-                leave=True,
-                dynamic_ncols=True,
-            ):
+            for inputs, labels in test_loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 outputs = self.model(inputs)
 

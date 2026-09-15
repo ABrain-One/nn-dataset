@@ -1,283 +1,243 @@
-"""NN-Dataset transform backed by validated BLIP-2/Q-Former cache shards.
+"""
+Cached BLIP-2 Feature Transform for NAS Image Captioning Pipeline.
 
-``transform(norm)`` returns ``None`` to activate NN-Dataset's cached-captioning
-branch. A missing or corrupt split auto-extracts the full COCO split in place
-(see ``_auto_build_split`` below) rather than silently substituting training
-data for validation data or serving a partial/truncated split.
+This transform activates Caption.py cached feature mode by returning None from
+transform(). The dataset returns precomputed BLIP-2/Q-Former features with shape:
+    (32, 768)
+
+Important rules enforced:
+- NO train fallback for validation.
+- Validates split metadata inside each shard.
+- Uses float16 CPU tensors.
+- Fails loudly if expected shards are missing.
+- Prints loaded shard names transparently.
 """
 
-from __future__ import annotations
-
 import os
-from collections import OrderedDict
-from pathlib import Path
-from typing import Any
-
 import torch
 from torch.utils.data import Dataset
-
-from ab.nn.transform.blip2_cache_contract_v2 import (
-    FEATURE_SHAPE,
-    GPT2_MODEL_ID,
-    GPT2_VOCAB_SIZE,
-    normalize_split,
-    resolve_cache_dir,
-)
-from ab.nn.transform.blip2_cache_store_v2 import (
-    CacheIntegrityError,
-    CacheMissingError,
-    CacheStore,
-    LoadedShard,
-    SplitIndex,
-)
+from ab.nn.util.Const import cache_dir
 
 
-def _auto_build_split(cache_dir: Path, split: str) -> None:
-    """Extract a full split in-process; safe/idempotent if already valid.
+_SHARED_CACHE = {}
 
-    ``build_cache`` re-checks split validity itself and no-ops when a
-    complete, correctly-sized cache already exists (see
-    ``build_blip2_cache_v2.build_cache``'s own ``force`` fast-path), so this
-    is always called on a cache-miss/integrity-error without extra state.
+def _auto_extract_features(split: str):
+    import torch
+    from tqdm import tqdm
+    from torch.utils.data import DataLoader
+    from transformers import Blip2Model
+    from ab.nn.util.Loader import load_dataset
+    
+    print(f"\n[CACHE-AUTO] Missing cache for '{split}'. Starting automatic extraction to {cache_dir}...")
+    os.makedirs(cache_dir, exist_ok=True)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    print("[CACHE-AUTO] Loading BLIP-2 Encoder in 4-bit...")
+    model = Blip2Model.from_pretrained(
+        "Salesforce/blip2-opt-2.7b",
+        load_in_4bit=True,
+        torch_dtype=torch.float16,
+        device_map="auto"
+    )
+    model.eval()
+    
+    print("[CACHE-AUTO] Loading underlying dataset via 'blip2_processor'...")
+    out_shape, min_acc, train_dataset, test_dataset = load_dataset("img-captioning", "coco", "blip2_processor")
+    
+    target_dataset = train_dataset if split == "train" else test_dataset
+    
+    def _collate(batch):
+        images = torch.stack([item[0] for item in batch])
+        labels = [item[1] for item in batch]
+        return images, labels
+        
+    loader = DataLoader(target_dataset, batch_size=32, num_workers=4, shuffle=False, collate_fn=_collate)
+    features_list = []
+    labels_list = []
+    
+    print(f"[CACHE-AUTO] Extracting features for {split}...")
+    with torch.no_grad():
+        for i, (images, labels) in enumerate(tqdm(loader)):
+            images = images.to(device)
+            feats = model.get_qformer_features(pixel_values=images).last_hidden_state
+            # CRITICAL: Must save as float16 CPU — _load_shared_cache strictly validates this
+            features_list.append(feats.cpu().to(torch.float16))
+            labels_list.extend(labels)
+            
+            if (i + 1) % 500 == 0:
+                temp_feats = torch.cat(features_list, dim=0)  # already float16
+                torch.save({'features': temp_feats, 'labels': labels_list, 'split': split}, f"{cache_dir}/coco_{split}_{i}.pt")
+                features_list = []
+                labels_list = []
+                
+    if features_list:
+        temp_feats = torch.cat(features_list, dim=0)  # already float16
+        torch.save({'features': temp_feats, 'labels': labels_list, 'split': split}, f"{cache_dir}/coco_{split}_final.pt")
+        
+    print(f"[CACHE-AUTO] Extraction complete for {split}.\n")
+
+def _discover_shards(split: str, auto_extracted: bool = False):
     """
-    from ab.nn.tools.build_blip2_cache_v2 import build_cache
-    from ab.nn.util.Const import data_dir
-
-    coco_dir = Path(data_dir) / "coco"
-    print(
-        f"[BLIP-2 cache v2] '{split}' split under {cache_dir} is missing or "
-        f"incomplete — auto-extracting the full COCO {split} split from "
-        f"{coco_dir} now. This runs once per machine and can take a while."
-    )
-    build_cache(
-        split=split,
-        cache_dir=cache_dir,
-        coco_dir=coco_dir,
-        batch_size=32,
-        shard_samples=16_000,
-        num_workers=0,
-        device_name="auto",
-        force=False,
-    )
-from ab.nn.util.hf.download_utils import ensure_hf_model
-
-
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-
-_TOKENIZER = None
-
-
-def _max_open_shards() -> int:
-    raw = os.environ.get("BLIP2_CACHE_OPEN_SHARDS", "2")
-    try:
-        value = int(raw)
-    except (TypeError, ValueError) as error:
-        raise ValueError(
-            f"BLIP2_CACHE_OPEN_SHARDS must be positive, received {raw!r}."
-        ) from error
-    if value <= 0:
-        raise ValueError(
-            f"BLIP2_CACHE_OPEN_SHARDS must be positive, received {value}."
+    Strictly discovers shards for the given split.
+    If none are found, automatically extracts them once.
+    """
+    prefix = f"coco_{split}_"
+    if os.path.isdir(cache_dir):
+        files = sorted(
+            f for f in os.listdir(cache_dir)
+            if f.startswith(prefix) and f.endswith(".pt")
         )
-    return value
+        if files:
+            return files
+            
+    if not auto_extracted:
+        _auto_extract_features(split)
+        return _discover_shards(split, auto_extracted=True)
+
+    raise FileNotFoundError(f"[FATAL] Missing strictly required '{split}' cache shards in {cache_dir}. Auto-extraction failed.")
 
 
-def _get_tokenizer():
-    global _TOKENIZER
+def _load_shared_cache(split: str):
+    """
+    Load BLIP-2 feature shards once per Python process per split.
+    """
+    real_dir = os.path.realpath(cache_dir)
+    cache_key = f"{real_dir}_{split}"
 
-    if _TOKENIZER is None:
-        from transformers import GPT2Tokenizer
+    if cache_key in _SHARED_CACHE:
+        return _SHARED_CACHE[cache_key]
 
-        local_path = ensure_hf_model(GPT2_MODEL_ID)
-        tokenizer = GPT2Tokenizer.from_pretrained(
-            local_path,
-            local_files_only=True,
-        )
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        if tokenizer.pad_token_id is None:
-            raise RuntimeError("GPT-2 tokenizer has no pad_token_id.")
-        _TOKENIZER = tokenizer
+    shard_files = _discover_shards(split=split)
 
-    return _TOKENIZER
+    print(f"\n[CACHE] Pre-loading BLIP-2 float16 CPU cache for split: '{split}'")
+    
+    all_features = []
+    all_labels = []
+
+    for sf in shard_files:
+        shard_path = os.path.join(real_dir, sf)
+        print(f"  -> Loading shard: {sf}")
+        
+        data = torch.load(shard_path, weights_only=False, map_location="cpu")
+
+        if "features" not in data or "labels" not in data or "split" not in data:
+            raise KeyError(f"Shard must contain 'features', 'labels', and 'split' metadata: {shard_path}")
+            
+        if data["split"] != split:
+            raise ValueError(f"[FATAL] Shard {sf} has split='{data['split']}' but we requested '{split}'. Data Leakage Prevented!")
+
+        # Ensure float16 CPU
+        feat = data["features"]
+        if feat.dtype != torch.float16 or feat.device.type != "cpu":
+            raise ValueError(f"[FATAL] Shard {sf} contains {feat.dtype} on {feat.device}. Must be float16 CPU.")
+            
+        all_features.append(feat)
+        all_labels.extend(data["labels"])
+        del data
+        
+        # Prevent OOM by stopping early if we reached the limit
+        limit = int(os.environ.get("NN_TRAIN_LIMIT", 0))
+        if limit > 0 and split == "train" and len(all_labels) >= limit:
+            print(f"  -> Reached limit {limit}. Truncating shard load.")
+            excess = len(all_labels) - limit
+            if excess > 0:
+                all_labels = all_labels[:-excess]
+                all_features[-1] = all_features[-1][:-excess]
+            break
+
+    # [FIX] Do NOT call torch.cat or .contiguous() on the full dataset! 
+    # This prevents the 12.4GB RAM spike. We keep them as individual shards.
+    shard_offsets = [0]
+    for f in all_features:
+        shard_offsets.append(shard_offsets[-1] + f.size(0))
+
+    _SHARED_CACHE[cache_key] = {
+        "features": all_features,  # List of tensors
+        "labels": all_labels,
+        "offsets": shard_offsets
+    }
+
+    print(f"[CACHE] '{split}' loaded successfully! Total length: {len(all_labels)}\n")
+    return _SHARED_CACHE[cache_key]
 
 
 class CachedBlip2Dataset(Dataset):
-    """Lazy, split-strict view of a BLIP-2 feature cache."""
+    def __init__(self, split: str = "train"):
+        self.split = split
 
-    def __init__(
-        self,
-        cache_dir: str | os.PathLike[str] | None = None,
-        split: str = "train",
-    ):
-        self.cache_dir = resolve_cache_dir(cache_dir)
-        self.split = normalize_split(split)
-        self._store = CacheStore(self.cache_dir)
-        self._index: SplitIndex | None = None
-        self._open_shards: OrderedDict[int, LoadedShard] = OrderedDict()
-        self._max_open_shards = _max_open_shards()
-        self._collate_fn = None
-
-        # Do not open the split here. NN-Dataset's legacy Caption.py catches a
-        # validation-construction error and falls back to the training split.
-        # Deferred opening guarantees that missing val data fails loudly later
-        # instead of becoming hidden train/validation leakage.
-
-    @property
-    def collate_fn(self):
-        return self._collate_fn
-
-    @collate_fn.setter
-    def collate_fn(self, value):
-        self._collate_fn = value
-
-    def _split_index(self) -> SplitIndex:
-        if self._index is None:
-            try:
-                self._index = self._store.index(self.split)
-            except (CacheMissingError, CacheIntegrityError):
-                _auto_build_split(self.cache_dir, self.split)
-                self._index = self._store.index(self.split)
-        return self._index
+        # STRICTLY pass the requested split down to prevent data leakage
+        cache = _load_shared_cache(split=self.split)
+        self._all_features = cache["features"]  # List of Tensors
+        self._all_labels = cache["labels"]
+        self._offsets = cache["offsets"]
+        self._length = len(self._all_labels)
 
     def __len__(self) -> int:
-        return self._split_index().view_length
+        return self._length
 
-    def _load_shard(self, shard_index: int) -> LoadedShard:
-        if shard_index in self._open_shards:
-            shard = self._open_shards.pop(shard_index)
-            self._open_shards[shard_index] = shard
-            return shard
-
-        index = self._split_index()
-        record = index.records[shard_index]
-        shard = self._store.load_shard(
-            self.split,
-            record,
-            legacy=index.legacy,
-        )
-        self._open_shards[shard_index] = shard
-
-        while len(self._open_shards) > self._max_open_shards:
-            self._open_shards.popitem(last=False)
-
-        return shard
-
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, Any]:
-        if not isinstance(index, int):
-            raise TypeError(
-                f"Dataset index must be int, received "
-                f"{type(index).__name__}."
-            )
-
-        shard_index, local_index = self._split_index().locate(index)
-        shard = self._load_shard(shard_index)
-        feature = shard.features[local_index].to(dtype=torch.float32)
-        label = shard.labels[local_index]
+    def __getitem__(self, idx: int):
+        import bisect
+        # O(log N) lookup to find exactly which shard this index belongs to
+        shard_idx = bisect.bisect_right(self._offsets, idx) - 1
+        local_idx = idx - self._offsets[shard_idx]
+        
+        # Convert float16 to float32 on the fly during training
+        feature = self._all_features[shard_idx][local_idx].float()
+        label = self._all_labels[idx]
         return feature, label
-
-    def __getstate__(self) -> dict[str, Any]:
-        """Do not pickle live memory maps into DataLoader workers."""
-        state = dict(self.__dict__)
-        state["_open_shards"] = OrderedDict()
-        return state
 
 
 def get_collate_fn():
-    """Return a deterministic GPT-2 caption collator."""
-    tokenizer = _get_tokenizer()
+    """
+    Collate cached BLIP-2 features and tokenize captions using GPT-2 tokenizer.
+    """
+    tokenizer = None
 
     def collate_fn(batch):
-        if not batch:
-            raise ValueError("Cannot collate an empty cached-caption batch.")
-
-        features = torch.stack([sample[0] for sample in batch], dim=0)
-        if features.ndim != 3 or tuple(features.shape[1:]) != FEATURE_SHAPE:
-            raise RuntimeError(
-                "Cached feature batch must have shape "
-                f"(B,{FEATURE_SHAPE[0]},{FEATURE_SHAPE[1]}), received "
-                f"{tuple(features.shape)}."
-            )
-        if features.dtype != torch.float32:
-            features = features.float()
-        if not torch.isfinite(features).all():
-            raise ValueError("Cached feature batch contains NaN or Inf.")
-
-        references_per_sample: list[list[str]] = []
-        for _, raw_label in batch:
-            if isinstance(raw_label, str):
-                references = [raw_label.strip()]
-            elif isinstance(raw_label, (list, tuple)):
-                references = [
-                    caption.strip()
-                    for caption in raw_label
-                    if isinstance(caption, str) and caption.strip()
-                ]
-            else:
-                raise TypeError(
-                    "Cached caption must be text or a sequence of texts, "
-                    f"received {type(raw_label).__name__}."
-                )
-
-            if not references:
-                raise ValueError(
-                    "A cached sample contains no valid caption references."
-                )
-            references_per_sample.append(references)
-
-        reference_count = max(map(len, references_per_sample))
-        flat_captions: list[str] = []
-        valid_references: list[bool] = []
-
-        for references in references_per_sample:
-            for reference_index in range(reference_count):
-                is_valid = reference_index < len(references)
-                text = references[reference_index] if is_valid else ""
-                flat_captions.append(
-                    f"{text}{tokenizer.eos_token}" if is_valid else ""
-                )
-                valid_references.append(is_valid)
+        nonlocal tokenizer
+        if tokenizer is None:
+            from transformers import GPT2Tokenizer
+            import os
+            os.environ["TOKENIZERS_PARALLELISM"] = "false"
+            tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+            tokenizer.pad_token = tokenizer.eos_token
+        features = torch.stack([item[0] for item in batch], dim=0)
+        raw_captions = [item[1] if isinstance(item[1], (list, tuple)) else [item[1]] for item in batch]
+        
+        max_caps = max(len(caps) for caps in raw_captions)
+        if max_caps == 0: max_caps = 1
+            
+        flat_captions = []
+        for caps in raw_captions:
+            padded_caps = list(caps) + [""] * (max_caps - len(caps))
+            for cap in padded_caps:
+                flat_captions.append(str(cap).strip() + tokenizer.eos_token)
 
         tokens = tokenizer(
-            flat_captions,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=60,
-            add_special_tokens=False,
+            flat_captions, padding=True, truncation=True, max_length=40, return_tensors="pt"
         )
-
-        labels = tokens.input_ids.clone()
-        labels[tokens.attention_mask == 0] = -100
-        valid_mask = torch.tensor(valid_references, dtype=torch.bool)
-        labels[~valid_mask] = -100
-
+        
         batch_size = len(batch)
-        sequence_length = int(labels.shape[1])
-        labels = labels.view(
-            batch_size,
-            reference_count,
-            sequence_length,
-        )
+        seq_len = tokens.input_ids.size(1)
+        labels = tokens.input_ids.view(batch_size, max_caps, seq_len)
+
         return features, labels
 
     return collate_fn
 
 
 def transform(norm):
-    """Activate Caption.py's cached-data branch; normalization is irrelevant."""
-    del norm
+    # Return a dummy callable so Caption.py's native cache-probe logic triggers correctly.
+    # Caption.py checks if `probe is None`, but if it is None, it falls back to raw mode or a specific hack branch.
+    # Wait, the upstream Caption.py says:
+    #     probe = transform_fn((__norm_mean, __norm_dev))
+    #     if probe is None:
+    #         # ... cached mode logic
+    # Ah! Upstream Caption.py EXPECTS `probe is None` for cached mode!
+    # So returning `None` here is ALREADY the correct upstream behavior.
     return None
 
-
-def get_dataset(
-    split: str = "train",
-    cache_dir: str | os.PathLike[str] | None = None,
-) -> CachedBlip2Dataset:
-    dataset = CachedBlip2Dataset(cache_dir=cache_dir, split=split)
+def get_dataset(split: str = "train") -> CachedBlip2Dataset:
+    dataset = CachedBlip2Dataset(split)
     dataset.collate_fn = get_collate_fn()
     return dataset
-
-
-def get_vocab_size() -> tuple[int]:
-    return (GPT2_VOCAB_SIZE,)

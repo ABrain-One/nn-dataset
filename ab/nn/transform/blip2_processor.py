@@ -1,30 +1,35 @@
 """
-BLIP-2 Image Preprocessor (Resize -> Normalize -> Pixel Values).
-Responsible ONLY for raw image preprocessing. No caching or model logic.
+BLIP-2 Processor Transform for NN Dataset Framework
+
+This transform uses the BLIP-2 processor from HuggingFace transformers
+for image preprocessing suitable for the Blip2Sota model.
 """
+
+from torchvision import transforms
 from PIL import Image
-from transformers import Blip2Processor
-from ab.nn.util.hf.download_utils import ensure_hf_model
+import torch
 
-MODEL_ID = "Salesforce/blip2-opt-2.7b"
+try:
+    import os
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    from transformers import Blip2Processor
+    _processor = Blip2Processor.from_pretrained("Salesforce/blip2-opt-2.7b")
+except Exception:
+    _processor = None
 
-class RawBlip2Processor:
+
+def transform(norm):
     """
-    Applies Salesforce BLIP-2 image preprocessing (224x224, float32 pixel values).
+    Returns a transform function compatible with NN Dataset framework.
+    
+    For BLIP-2, we need to:
+    1. Resize to 224x224
+    2. Normalize appropriately
+    
+    The actual BLIP-2 processor will be used in the model's forward pass.
     """
-    def __init__(self):
-        ensure_hf_model(MODEL_ID)
-        self.processor = Blip2Processor.from_pretrained(
-            MODEL_ID,
-            local_files_only=True,
-            use_fast=False,
-        )
-
-    def __call__(self, image: Image.Image):
-        if not isinstance(image, Image.Image):
-            image = image.convert("RGB")
-        inputs = self.processor(images=image, return_tensors="pt")
-        return inputs.pixel_values.squeeze(0)
-
-def transform(prm=None):
-    return RawBlip2Processor()
+    return transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(*norm)
+    ])
