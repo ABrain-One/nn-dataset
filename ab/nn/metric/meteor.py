@@ -1,17 +1,10 @@
 """Decoded-word METEOR metric for single- and multi-reference captions."""
 
+import nltk
 from nltk.corpus import wordnet
 from nltk.translate.meteor_score import meteor_score
 
 from ab.nn.metric.caption_text import decoded_batch
-
-
-class _NoWordNet:
-    """Deterministic fallback when optional NLTK WordNet data is absent."""
-
-    @staticmethod
-    def synsets(_word):
-        return []
 
 
 class MeteorMetric:
@@ -21,8 +14,10 @@ class MeteorMetric:
             wordnet.ensure_loaded()
             self.wordnet = wordnet
         except LookupError:
-            # Never initiate an implicit network download during evaluation.
-            self.wordnet = _NoWordNet()
+            # Use the same metric definition on a fresh installation.
+            nltk.download("wordnet", quiet=True, raise_on_error=True)
+            wordnet.ensure_loaded()
+            self.wordnet = wordnet
         self.reset()
 
     def reset(self):
@@ -31,7 +26,8 @@ class MeteorMetric:
     def __call__(self, predictions, labels):
         hypotheses, references = decoded_batch(predictions, labels)
         for hypothesis, sample_references in zip(hypotheses, references):
-            if not hypothesis or not sample_references:
+            if not hypothesis:
+                self.scores.append(0.0)
                 continue
             self.scores.append(
                 meteor_score(

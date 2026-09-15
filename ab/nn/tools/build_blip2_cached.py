@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
+from filelock import FileLock
 import torch
 from PIL import Image
 from pycocotools.coco import COCO
@@ -22,7 +24,29 @@ from ab.nn.captioning.blip2.contract import (
     CACHE_VERSION, FEATURE_DTYPE, FEATURE_SHAPE, MANIFEST_NAME, MODEL_ID, MODEL_REVISION,
     OPT_DIR_NAME, OPT_TOKENIZER_DIR_NAME, PROJECTION_NAME, RUNTIME_DIR_NAME, atomic_json,
     resolve_cache_dir, sha256_file,
+    validate_runtime,
 )
+
+
+def prepare_coco(root: Path, split: str):
+    """Prepare missing COCO inputs; keep existing extracted datasets in place."""
+    if split not in {"train", "val"}:
+        raise ValueError("split must be 'train' or 'val'")
+    from torchvision.datasets.utils import download_and_extract_archive
+
+    root.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(root / ".blip2-coco.lock")):
+        annotation = root / "annotations" / f"captions_{split}2017.json"
+        if not annotation.is_file():
+            download_and_extract_archive(
+                "http://images.cocodataset.org/annotations/annotations_trainval2017.zip",
+                str(root), filename="annotations_trainval2017.zip",
+            )
+        if not (root / f"{split}2017").is_dir():
+            download_and_extract_archive(
+                f"http://images.cocodataset.org/zips/{split}2017.zip",
+                str(root), filename=f"{split}2017.zip",
+            )
 
 
 class CocoImages(Dataset):
@@ -93,10 +117,18 @@ def _export_runtime(cache_dir, model, processor, manifest):
     opt_tokenizer_dir = runtime_dir / OPT_TOKENIZER_DIR_NAME
     runtime_dir.mkdir(parents=True, exist_ok=True)
 
-    if not (opt_dir / "config.json").is_file():
-        model.language_model.save_pretrained(opt_dir, safe_serialization=True)
-    if not (opt_tokenizer_dir / "tokenizer_config.json").is_file():
-        processor.tokenizer.save_pretrained(opt_tokenizer_dir)
+    if manifest.get("runtime", {}).get("complete"):
+        validate_runtime(cache_dir, manifest)
+        return
+    # A config alone is not proof of a finished weights export.
+    with TemporaryDirectory(prefix=".opt-export-", dir=cache_dir) as temporary:
+        stage = Path(temporary)
+        model.language_model.save_pretrained(stage / OPT_DIR_NAME, safe_serialization=True)
+        processor.tokenizer.save_pretrained(stage / OPT_TOKENIZER_DIR_NAME)
+        for name, destination in ((OPT_DIR_NAME, opt_dir), (OPT_TOKENIZER_DIR_NAME, opt_tokenizer_dir)):
+            if destination.exists():
+                os.replace(destination, stage / (name + ".previous"))
+            os.replace(stage / name, destination)
 
     records = []
     for path in sorted(runtime_dir.rglob("*")):
@@ -119,6 +151,15 @@ def build(
     allow_cpu: bool = False,
     limit: int | None = None,
 ):
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(cache_dir / ".build.lock")):
+        return _build(Path(root), cache_dir, split, batch_size, shard_size, allow_cpu, limit)
+
+
+def _build(root, cache_dir, split, batch_size, shard_size, allow_cpu, limit):
+    if split not in {"train", "val"}:
+        raise ValueError("split must be 'train' or 'val'")
     if batch_size < 1 or shard_size < 1:
         raise ValueError("batch-size and shard-size must be positive")
     if limit is not None and limit < 1:
@@ -127,6 +168,12 @@ def build(
     manifest = _manifest(cache_dir)
     existing = manifest.get("splits", {}).get(split, {})
     completed = sum(int(item["samples"]) for item in existing.get("shards", []))
+    for record in existing.get("shards", []):
+        path = cache_dir / record["filename"]
+        if (not path.is_file() or path.stat().st_size != record["size_bytes"]
+                or sha256_file(path) != record["sha256"]):
+            raise RuntimeError(f"Cannot resume a missing or corrupt cache shard: {path}")
+    prepare_coco(root, split)
     dataset = CocoImages(root, split)
     target_size = len(dataset) if limit is None else min(len(dataset), limit)
     if completed > target_size:
@@ -149,7 +196,17 @@ def build(
                 "Build the cache on a larger GPU and copy the validated cache."
             )
     dtype = torch.float16 if device.type == "cuda" else torch.float32
-    processor = AutoProcessor.from_pretrained(MODEL_ID, revision=MODEL_REVISION)
+    annotation_hash = sha256_file(root / "annotations" / f"captions_{split}2017.json")
+    previous_hash = existing.get("annotation_sha256")
+    if previous_hash and previous_hash != annotation_hash:
+        raise RuntimeError("COCO annotations changed; use a separate cache directory.")
+    sessions = list(existing.get("extraction_sessions", []))
+    sessions.append({"start_sample": completed, "target_samples": target_size,
+                     "batch_size": batch_size, "shard_size": shard_size,
+                     "torch_version": str(torch.__version__), "device": str(device),
+                     "compute_dtype": str(dtype), "processor_use_fast": False})
+    provenance = {"annotation_sha256": annotation_hash, "extraction_sessions": sessions}
+    processor = AutoProcessor.from_pretrained(MODEL_ID, revision=MODEL_REVISION, use_fast=False)
     model = Blip2ForConditionalGeneration.from_pretrained(
         MODEL_ID, revision=MODEL_REVISION, dtype=dtype, low_cpu_mem_usage=True,
     ).to(device)
@@ -159,6 +216,9 @@ def build(
     _export_runtime(cache_dir, model, processor, manifest)
 
     projection_path = cache_dir / PROJECTION_NAME
+    previous_projection = manifest.get("projection", {}).get("sha256")
+    if previous_projection and (not projection_path.is_file() or sha256_file(projection_path) != previous_projection):
+        raise RuntimeError("Cached language projection is missing or corrupt; refusing to replace it.")
     if not projection_path.is_file():
         temporary = projection_path.with_suffix(f".tmp.{os.getpid()}")
         torch.save({key: value.detach().cpu() for key, value in model.language_projection.state_dict().items()}, temporary)
@@ -186,7 +246,7 @@ def build(
         torch.save({"features": features, "captions": captions, "image_ids": ids}, temporary)
         os.replace(temporary, destination)
         records.append({"filename": filename, "samples": count, "size_bytes": destination.stat().st_size, "sha256": sha256_file(destination)})
-        manifest["splits"][split] = {"complete": False, "samples": sum(r["samples"] for r in records), "shards": records}
+        manifest["splits"][split] = {"complete": False, "samples": sum(r["samples"] for r in records), "shards": records, **provenance}
         atomic_json(cache_dir / MANIFEST_NAME, manifest)
         feature_buffer = [remainder] if len(remainder) else []
         caption_buffer, id_buffer = caption_buffer[count:], id_buffer[count:]
@@ -229,6 +289,7 @@ def build(
         "source_samples": len(dataset),
         "limited": target_size != len(dataset),
         "shards": records,
+        **provenance,
     }
     atomic_json(cache_dir / MANIFEST_NAME, manifest)
 

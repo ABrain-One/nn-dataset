@@ -11,6 +11,8 @@ from .contract import CacheError, RUNTIME_DIR_NAME, read_manifest, resolve_cache
 from .environment import validate_environment
 
 GPT2_MODEL_ID = "gpt2"
+# The snapshot already used locally; pinning does not upgrade the model.
+GPT2_MODEL_REVISION = "607a30d783dfa663caf39e06633721c8d4cfcd7e"
 GPT2_VOCAB_SIZE = 50_257
 GPT2_DECODER_DIR_NAME = "gpt2-decoder"
 GPT2_TOKENIZER_DIR_NAME = "gpt2-tokenizer"
@@ -21,12 +23,15 @@ def gpt2_runtime_paths(cache_dir: str | Path | None = None) -> tuple[Path, Path]
     manifest = read_manifest(root)
     runtime = validate_runtime(root, manifest)
     record = manifest.get("gpt2_runtime")
+    if record is None:
+        # GPT-2 is needed only for this model, including with an OPT-only cache.
+        from ab.nn.tools.prepare_blip2_gpt2_runtime import export
+        export(root)
+        manifest = read_manifest(root)
+        runtime = validate_runtime(root, manifest)
+        record = manifest.get("gpt2_runtime")
     if not isinstance(record, dict) or record.get("model_id") != GPT2_MODEL_ID:
-        raise CacheError(
-            "Portable GPT-2 runtime is missing. Run "
-            "`python -m ab.nn.tools.prepare_blip2_gpt2_runtime --cache-dir ...` "
-            "on a machine that already has GPT-2 locally."
-        )
+        raise CacheError("Portable GPT-2 runtime has an incompatible model identifier.")
     decoder = runtime / GPT2_DECODER_DIR_NAME
     tokenizer = runtime / GPT2_TOKENIZER_DIR_NAME
     if not (decoder / "config.json").is_file() or not tokenizer.is_dir():

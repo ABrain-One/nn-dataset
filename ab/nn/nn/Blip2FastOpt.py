@@ -10,11 +10,18 @@ from __future__ import annotations
 
 import torch
 
+from ab.nn.captioning.blip2.text import caption_training_batch
+
 from ab.nn.nn.Blip2Cached import Net as BaselineNet
 from ab.nn.nn.Blip2Cached import supported_hyperparameters
 
 
 class Net(BaselineNet):
+    def train_setup(self, prm):
+        super().train_setup(prm)
+        from ab.nn.captioning.blip2.provenance import record_training_provenance
+        record_training_provenance(self, prm, self.opt)
+
     def __init__(self, in_shape, out_shape, prm, device):
         options = dict(prm or {})
         # OPT is frozen, but gradients still pass through it to the projection.
@@ -59,25 +66,10 @@ class Net(BaselineNet):
         return targets
 
     def _loss(self, features, labels):
-        texts = [self.prompt + text.strip() for text in self._reference_text(labels)]
-        encoded = self.opt_tokenizer(
-            texts,
-            padding=True,
-            truncation=True,
-            max_length=self.max_text_length,
-            return_tensors="pt",
+        ids, mask, targets = caption_training_batch(
+            self.opt_tokenizer, self.prompt, self._reference_text(labels),
+            self.max_text_length, self.device, add_special_tokens=True,
         )
-        prompt = self.opt_tokenizer(
-            self.prompt,
-            truncation=True,
-            max_length=self.max_text_length,
-            return_tensors="pt",
-        )
-        ids = encoded.input_ids.to(self.device)
-        mask = encoded.attention_mask.to(self.device)
-        prompt_length = int(prompt.attention_mask[0].sum().item())
-        targets = self._caption_targets(ids, mask, prompt_length)
-
         visual = self.projection(features).to(self.dtype)
         text = self.opt.get_input_embeddings()(ids).to(self.dtype)
         embeddings = torch.cat((visual, text), dim=1)

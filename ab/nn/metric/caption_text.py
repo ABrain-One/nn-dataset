@@ -62,4 +62,8 @@ def decoded_batch(predictions: torch.Tensor, labels: torch.Tensor):
             if tokens:
                 decoded.append(tokens)
         references.append(decoded)
+    if len(hypotheses) != len(references):
+        raise ValueError("Caption prediction and reference batch sizes differ.")
+    if any(not sample for sample in references):
+        raise ValueError("Every evaluated image must have a nonempty reference caption.")
     return hypotheses, references

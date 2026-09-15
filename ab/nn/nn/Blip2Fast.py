@@ -10,6 +10,8 @@ from __future__ import annotations
 import random
 
 import torch
+
+from ab.nn.captioning.blip2.text import caption_training_batch
 import torch.nn as nn
 
 from ab.nn.captioning.blip2.contract import FEATURE_SHAPE
@@ -114,22 +116,10 @@ class Net(nn.Module):
         return self.gpt2_tokenizer.batch_decode(clean, skip_special_tokens=True)
 
     def _loss(self, features, labels):
-        eos = self.gpt2_tokenizer.eos_token
-        texts = [self.prompt + text.strip() + eos for text in self._reference_text(labels)]
-        encoded = self.gpt2_tokenizer(
-            texts,
-            padding=True,
-            truncation=True,
-            max_length=self.max_text_length,
-            add_special_tokens=False,
-            return_tensors="pt",
+        ids, mask, targets = caption_training_batch(
+            self.gpt2_tokenizer, self.prompt, self._reference_text(labels),
+            self.max_text_length, self.device, add_special_tokens=False,
         )
-        prompt = self.gpt2_tokenizer(
-            self.prompt, add_special_tokens=False, return_tensors="pt"
-        )
-        ids = encoded.input_ids.to(self.device)
-        mask = encoded.attention_mask.to(self.device)
-        targets = self._caption_targets(ids, mask, prompt.attention_mask[0].sum().item())
         visual = self.visual_projection(features)
         text = self.gpt2.get_input_embeddings()(ids)
         embeddings = torch.cat((visual, text), dim=1)
@@ -171,6 +161,8 @@ class Net(nn.Module):
             raise ValueError("lr must be in (0, 1].")
         parameters = list(self.visual_projection.parameters()) + list(self.gpt2.parameters())
         self.optimizer = torch.optim.AdamW(parameters, lr=learning_rate, weight_decay=0.01)
+        from ab.nn.captioning.blip2.provenance import record_training_provenance
+        record_training_provenance(self, prm, self.gpt2)
 
     def learn(self, train_data):
         if self.optimizer is None:

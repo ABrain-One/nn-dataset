@@ -138,8 +138,6 @@ class CiderMetric:
     def __call__(self, preds, labels):
         hypotheses, references = decoded_batch(preds, labels)
         for hypothesis, sample_references in zip(hypotheses, references):
-            if not hypothesis or not sample_references:
-                continue
             self.predictions.append(" ".join(hypothesis))
             self.references.append(
                 [" ".join(reference) for reference in sample_references]

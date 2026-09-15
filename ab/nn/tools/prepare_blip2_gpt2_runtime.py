@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from filelock import FileLock
 
 from ab.nn.captioning.blip2.environment import validate_environment
 
@@ -12,6 +16,7 @@ validate_environment()
 from transformers import AutoModelForCausalLM, GPT2TokenizerFast
 
 from ab.nn.captioning.blip2.contract import (
+    CacheError,
     RUNTIME_DIR_NAME,
     atomic_json,
     read_manifest,
@@ -22,6 +27,7 @@ from ab.nn.captioning.blip2.contract import (
 from ab.nn.captioning.blip2.gpt2 import (
     GPT2_DECODER_DIR_NAME,
     GPT2_MODEL_ID,
+    GPT2_MODEL_REVISION,
     GPT2_TOKENIZER_DIR_NAME,
 )
 
@@ -40,29 +46,46 @@ def _runtime_records(runtime: Path):
 
 def export(cache_dir: str | Path, source: str = GPT2_MODEL_ID) -> Path:
     root = resolve_cache_dir(cache_dir)
+    with FileLock(str(root / ".build.lock")):
+        return _export(root, source)
+
+
+def _export(root: Path, source: str) -> Path:
     manifest = read_manifest(root)
     runtime = validate_runtime(root, manifest)
-    decoder = runtime / GPT2_DECODER_DIR_NAME
-    tokenizer = runtime / GPT2_TOKENIZER_DIR_NAME
-
-    if not (decoder / "config.json").is_file():
+    if manifest.get("gpt2_runtime"):
+        if manifest["gpt2_runtime"].get("model_id") != GPT2_MODEL_ID:
+            raise CacheError("Portable GPT-2 runtime has an incompatible model identifier.")
+        # Never overwrite a validated bundle, including historical revisions.
+        return root
+    options = {"revision": GPT2_MODEL_REVISION} if source == GPT2_MODEL_ID else {}
+    # Finish both exports before publishing anything into the runtime bundle.
+    with TemporaryDirectory(prefix=".gpt2-export-", dir=root) as temporary:
+        stage = Path(temporary)
         try:
-            model = AutoModelForCausalLM.from_pretrained(source, local_files_only=True)
-        except Exception:
-            model = AutoModelForCausalLM.from_pretrained(source, local_files_only=False)
-        model.save_pretrained(decoder, safe_serialization=True)
+            model = AutoModelForCausalLM.from_pretrained(source, local_files_only=True, **options)
+        except OSError:
+            model = AutoModelForCausalLM.from_pretrained(source, local_files_only=False, **options)
+        model.save_pretrained(stage / GPT2_DECODER_DIR_NAME, safe_serialization=True)
         del model
-    if not (tokenizer / "tokenizer_config.json").is_file():
         try:
-            value = GPT2TokenizerFast.from_pretrained(source, local_files_only=True)
-        except Exception:
-            value = GPT2TokenizerFast.from_pretrained(source, local_files_only=False)
-        value.save_pretrained(tokenizer)
+            value = GPT2TokenizerFast.from_pretrained(source, local_files_only=True, **options)
+        except OSError:
+            value = GPT2TokenizerFast.from_pretrained(source, local_files_only=False, **options)
+        value.save_pretrained(stage / GPT2_TOKENIZER_DIR_NAME)
+        for name in (GPT2_DECODER_DIR_NAME, GPT2_TOKENIZER_DIR_NAME):
+            destination = runtime / name
+            if destination.exists():
+                # Only unregistered remnants of an interrupted export reach here.
+                os.replace(destination, stage / (name + ".previous"))
+            os.replace(stage / name, destination)
 
     records = _runtime_records(runtime)
     manifest["runtime"] = {"complete": True, "files": records}
     manifest["gpt2_runtime"] = {
         "model_id": GPT2_MODEL_ID,
+        "source": source,
+        "model_revision": options.get("revision"),
         "decoder": GPT2_DECODER_DIR_NAME,
         "tokenizer": GPT2_TOKENIZER_DIR_NAME,
     }
