@@ -187,16 +187,24 @@ def loader(transform_fn, task):
         
         if hasattr(transform_module, 'get_dataset'):
             train_dataset = transform_module.get_dataset(split='train')
-            try:
-                val_dataset = transform_module.get_dataset(split='val')
-            except Exception:
-                val_dataset = transform_module.get_dataset(split='train')
+            # Validation must remain split-strict. Falling back to train data
+            # silently leaks training samples into evaluation and makes results
+            # irreproducible across machines.
+            val_dataset = transform_module.get_dataset(split='val')
+
+            # A cached transform owns its serialization/tokenization contract.
+            # Preserve its collator; use the legacy one only when absent.
+            if getattr(train_dataset, 'collate_fn', None) is None:
+                train_dataset.collate_fn = gpt2_collate_fn
+            if getattr(val_dataset, 'collate_fn', None) is None:
+                val_dataset.collate_fn = gpt2_collate_fn
             
-            # Use GPT2 collate for transformer compatibility
-            train_dataset.collate_fn = gpt2_collate_fn
-            val_dataset.collate_fn = gpt2_collate_fn
-            
-            return (50257,), MINIMUM_ACCURACY, train_dataset, val_dataset
+            # Cached transforms own their token vocabulary. BLIP2Cached uses
+            # OPT's 50,272 decoder classes; hard-coding GPT-2's 50,257 here
+            # leaves stale metadata and can silently accept incompatible IDs.
+            if not hasattr(transform_module, 'get_vocab_size'):
+                raise ImportError(f"get_vocab_size() missing in {mod_name}")
+            return transform_module.get_vocab_size(), MINIMUM_ACCURACY, train_dataset, val_dataset
         else:
             raise ImportError(f"get_dataset() missing in {mod_name}")
 

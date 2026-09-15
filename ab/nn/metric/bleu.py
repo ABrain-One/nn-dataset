@@ -1,5 +1,5 @@
-import torch
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+from ab.nn.metric.caption_text import decoded_batch
 
 class BLEUMetric:
     def __init__(self, out_shape=None):
@@ -13,29 +13,14 @@ class BLEUMetric:
         self.scores4 = []  # BLEU-4
 
     def __call__(self, preds, labels):
-        # Accepts logits [batch, seq, vocab] or token ids [batch, seq]
-        if preds.dim() == 3:
-            pred_ids = torch.argmax(preds, -1).cpu().tolist()
-        elif preds.dim() == 2:
-            pred_ids = preds.cpu().tolist()
-        else:
-            raise ValueError(f"Preds shape not supported for BLEUMetric: {preds.shape}")
-        # All references for each sample
-        if labels.dim() == 3:
-            targets = labels.cpu().tolist()
-        else:
-            targets = [[t] for t in labels.cpu().tolist()]
-        for p, refs in zip(pred_ids, targets):
-            hyp = [w for w in p if w != 0]
-            filtered_refs = [[w for w in r if w != 0] for r in refs]
-            filtered_refs = [ref for ref in filtered_refs if len(ref) > 0]
-            if not filtered_refs:
-                print("[BLEUMetric WARN] Empty reference for sample; this should not happen often.")
+        hypotheses, targets = decoded_batch(preds, labels)
+        for hyp, references in zip(hypotheses, targets):
+            if not references:
                 continue
-            self.scores1.append(sentence_bleu(filtered_refs, hyp, weights=(1, 0, 0, 0), smoothing_function=self.smooth))
-            self.scores2.append(sentence_bleu(filtered_refs, hyp, weights=(0.5, 0.5, 0, 0), smoothing_function=self.smooth))
-            self.scores3.append(sentence_bleu(filtered_refs, hyp, weights=(0.33, 0.33, 0.33, 0), smoothing_function=self.smooth))
-            self.scores4.append(sentence_bleu(filtered_refs, hyp, weights=(0.25, 0.25, 0.25, 0.25), smoothing_function=self.smooth))
+            self.scores1.append(sentence_bleu(references, hyp, weights=(1, 0, 0, 0), smoothing_function=self.smooth))
+            self.scores2.append(sentence_bleu(references, hyp, weights=(0.5, 0.5, 0, 0), smoothing_function=self.smooth))
+            self.scores3.append(sentence_bleu(references, hyp, weights=(0.33, 0.33, 0.33, 0), smoothing_function=self.smooth))
+            self.scores4.append(sentence_bleu(references, hyp, weights=(0.25, 0.25, 0.25, 0.25), smoothing_function=self.smooth))
 
     def result(self):
         # Return BLEU-4 for Optuna/pipeline
