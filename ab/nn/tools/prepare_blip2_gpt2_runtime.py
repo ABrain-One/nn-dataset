@@ -9,10 +9,6 @@ from tempfile import TemporaryDirectory
 
 from filelock import FileLock
 
-from ab.nn.captioning.blip2.environment import validate_environment
-
-validate_environment()
-
 from transformers import AutoModelForCausalLM, GPT2TokenizerFast
 
 from ab.nn.captioning.blip2.contract import (

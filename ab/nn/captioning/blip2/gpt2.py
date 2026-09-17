@@ -8,7 +8,6 @@ from pathlib import Path
 import torch
 
 from .contract import CacheError, RUNTIME_DIR_NAME, read_manifest, resolve_cache_dir, validate_runtime
-from .environment import validate_environment
 
 GPT2_MODEL_ID = "gpt2"
 # The snapshot already used locally; pinning does not upgrade the model.
@@ -46,7 +45,6 @@ def tokenizer(cache_dir: str | Path | None = None):
     root = resolve_cache_dir(cache_dir)
     key = str(root)
     if key not in _TOKENIZERS:
-        validate_environment()
         from transformers import GPT2TokenizerFast
 
         _, path = gpt2_runtime_paths(root)

@@ -140,8 +140,6 @@ _TOKENIZERS = {}
 def _tokenizer(cache_dir: Path):
     key = str(cache_dir)
     if key not in _TOKENIZERS:
-        from .environment import validate_environment
-        validate_environment()
         from transformers import AutoTokenizer
         from .contract import OPT_TOKENIZER_DIR_NAME, RUNTIME_DIR_NAME
         path = cache_dir / RUNTIME_DIR_NAME / OPT_TOKENIZER_DIR_NAME

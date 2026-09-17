@@ -14,10 +14,6 @@ from pycocotools.coco import COCO
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
-from ab.nn.captioning.blip2.environment import validate_environment
-
-validate_environment()
-
 from transformers import AutoProcessor, Blip2ForConditionalGeneration
 
 from ab.nn.captioning.blip2.contract import (

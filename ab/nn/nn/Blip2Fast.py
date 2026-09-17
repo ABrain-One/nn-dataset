@@ -15,10 +15,7 @@ from ab.nn.captioning.blip2.text import caption_training_batch
 import torch.nn as nn
 
 from ab.nn.captioning.blip2.contract import FEATURE_SHAPE
-from ab.nn.captioning.blip2.environment import validate_environment
 from ab.nn.captioning.blip2.gpt2 import GPT2_VOCAB_SIZE, gpt2_runtime_paths
-
-validate_environment()
 
 from transformers import AutoModelForCausalLM, GPT2TokenizerFast
 

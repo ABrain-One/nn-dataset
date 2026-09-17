@@ -12,10 +12,6 @@ import random
 import torch
 import torch.nn as nn
 
-from ab.nn.captioning.blip2.environment import validate_environment
-
-validate_environment()
-
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from ab.nn.captioning.blip2.contract import (
