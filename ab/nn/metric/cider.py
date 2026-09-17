@@ -1,8 +1,8 @@
 
 import numpy as np
-import torch
 from collections import defaultdict
 import copy
+from ab.nn.metric.caption_text import decoded_batch
 
 # Embed the Scorer class directly to ensure self-contained file
 class CiderScorer(object):
@@ -136,33 +136,12 @@ class CiderMetric:
         return " ".join(words)
 
     def __call__(self, preds, labels):
-        # preds: [B, T, V] or [B, T]
-        if preds.dim() == 3:
-            pred_ids = torch.argmax(preds, -1).cpu().tolist()
-        else:
-            pred_ids = preds.cpu().tolist()
-            
-        if labels.dim() == 3:
-            # Multi-ref or just reshaped? Usually [B, NumRef, T]
-            # But standard loader gives [B, T] for single caption training
-            # We will handle [B, T]
-            label_ids = labels[:, 0, :].cpu().tolist()
-        else:
-            label_ids = labels.cpu().tolist()
-
-        # We assume idx2word is available via dependency injection or we need to pass it
-        # For now, we will store raw IDs if we can't decode, but Cider needs strings.
-        # This assumes the caller will set vocab or we use simple space-joined IDs as tokens (works for stats)
-        
-        for p, t in zip(pred_ids, label_ids):
-            # If idx2word is not set, we can't really compute valid CIDEr unless we treat IDs as words
-            # Treat IDs as words is valid for n-gram overlap
-            
-            hyp_str = " ".join(str(x) for x in p if x != 0) # 0 is usually PAD
-            ref_str = " ".join(str(x) for x in t if x != 0)
-            
-            self.predictions.append(hyp_str)
-            self.references.append([ref_str]) # List of refs
+        hypotheses, references = decoded_batch(preds, labels)
+        for hypothesis, sample_references in zip(hypotheses, references):
+            self.predictions.append(" ".join(hypothesis))
+            self.references.append(
+                [" ".join(reference) for reference in sample_references]
+            )
 
     def result(self):
         if not self.predictions:
@@ -187,4 +166,3 @@ class CiderMetric:
 
 def create_metric(out_shape=None):
     return CiderMetric(out_shape)
-
