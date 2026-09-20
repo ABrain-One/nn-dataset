@@ -446,6 +446,7 @@ class Train:
                 'train_accuracy': train_accuracy,
                 'gradient_norm': grad_norm,
                 'samples_per_second': samples_per_second,
+                'epoch_max': epoch_max,
                 'best_accuracy': self.best_accuracy,
                 'best_epoch': self.best_epoch,
                 'cpu_count': self.system_info.get('cpu_count'),

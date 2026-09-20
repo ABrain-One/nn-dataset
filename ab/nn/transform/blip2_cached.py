@@ -1,7 +1,7 @@
 """NN-Dataset transform adapter for the clean cached BLIP-2 pipeline."""
 
-from ab.nn.captioning.blip2.cache import CachedCaptionDataset
-from ab.nn.captioning.blip2.contract import OPT_VOCAB_SIZE
+from ab.nn.util.captioning.blip2.cache import CachedCaptionDataset
+from ab.nn.util.captioning.blip2.contract import OPT_VOCAB_SIZE
 
 
 def transform(norm=None):

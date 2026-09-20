@@ -14,7 +14,7 @@ import torch.nn as nn
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from ab.nn.captioning.blip2.contract import (
+from ab.nn.util.captioning.blip2.contract import (
     FEATURE_SHAPE,
     OPT_DIR_NAME,
     OPT_TOKENIZER_DIR_NAME,
@@ -34,7 +34,7 @@ def supported_hyperparameters():
     # Only numeric/searchable training parameters belong here. Portable
     # projection selection is configured explicitly through prm/environment;
     # listing string paths here makes Optuna invent invalid float values.
-    return {"lr", "batch"}
+    return {"lr"}
 
 
 class Net(nn.Module):

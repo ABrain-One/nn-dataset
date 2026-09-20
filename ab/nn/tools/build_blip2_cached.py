@@ -14,9 +14,10 @@ from pycocotools.coco import COCO
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
+import transformers
 from transformers import AutoProcessor, Blip2ForConditionalGeneration
 
-from ab.nn.captioning.blip2.contract import (
+from ab.nn.util.captioning.blip2.contract import (
     CACHE_VERSION, FEATURE_DTYPE, FEATURE_SHAPE, MANIFEST_NAME, MODEL_ID, MODEL_REVISION,
     OPT_DIR_NAME, OPT_TOKENIZER_DIR_NAME, PROJECTION_NAME, RUNTIME_DIR_NAME, atomic_json,
     resolve_cache_dir, sha256_file,
@@ -202,7 +203,17 @@ def _build(root, cache_dir, split, batch_size, shard_size, allow_cpu, limit):
                      "torch_version": str(torch.__version__), "device": str(device),
                      "compute_dtype": str(dtype), "processor_use_fast": False})
     provenance = {"annotation_sha256": annotation_hash, "extraction_sessions": sessions}
-    processor = AutoProcessor.from_pretrained(MODEL_ID, revision=MODEL_REVISION, use_fast=False)
+    # Transformers 5 replaced ``use_fast=False`` for image processors with an
+    # explicit backend.  Select the public API for the installed major release
+    # without restricting NN Dataset to one exact dependency version.
+    processor_options = (
+        {"backend": "pil"}
+        if int(transformers.__version__.split(".", 1)[0]) >= 5
+        else {"use_fast": False}
+    )
+    processor = AutoProcessor.from_pretrained(
+        MODEL_ID, revision=MODEL_REVISION, **processor_options
+    )
     model = Blip2ForConditionalGeneration.from_pretrained(
         MODEL_ID, revision=MODEL_REVISION, dtype=dtype, low_cpu_mem_usage=True,
     ).to(device)

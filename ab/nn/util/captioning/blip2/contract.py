@@ -36,8 +36,12 @@ def resolve_cache_dir(value: str | os.PathLike[str] | None = None) -> Path:
     configured = value or os.environ.get("BLIP2_CACHE_DIR")
     if configured:
         return Path(configured).expanduser().resolve()
-    root = Path(__file__).resolve().parents[4]
-    return (root / "out" / "blip2-coco-cache-v1").resolve()
+    # Follow NN Dataset's own output-root contract.  In particular, do not
+    # infer a repository root from this module's directory depth: that breaks
+    # as soon as the package is installed or this module is moved.
+    from ab.nn.util.Const import out_dir
+
+    return (out_dir / "blip2-coco-cache-v1").resolve()
 
 
 def resolve_projection_path(
