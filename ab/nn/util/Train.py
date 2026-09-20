@@ -254,8 +254,11 @@ class Train:
         generation.  Their unavailable diagnostic loss remains ``None`` rather
         than being guessed from model-specific logits or hidden-state tuples.
         """
-        loss_provider = getattr(self.model, 'compute_loss', None)
-        if 'caption' in self.task and not callable(loss_provider):
+        is_caption = 'caption' in self.task
+        loss_provider = (
+            getattr(self.model, 'compute_loss', None) if is_caption else None
+        )
+        if is_caption and not callable(loss_provider):
             return None
 
         self.model.eval()
@@ -338,7 +341,10 @@ class Train:
                 train_accuracy, train_loss = 0.0, learn_res
             # Models with an explicit loss provider opt into loss tracking.
             # Legacy caption models keep their historical learn-only contract.
-            tracks_loss = callable(getattr(self.model, 'compute_loss', None))
+            tracks_loss = (
+                'caption' in self.task
+                and callable(getattr(self.model, 'compute_loss', None))
+            )
             if (train_loss is None or train_loss == 0.0) and (
                 tracks_loss or 'caption' not in self.task
             ):
