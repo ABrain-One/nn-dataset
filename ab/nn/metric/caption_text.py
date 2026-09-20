@@ -23,8 +23,14 @@ def decode_ids(values: Iterable[int]) -> str:
         return " ".join(
             tokenizer.decode(ids, skip_special_tokens=True).split()
         ).strip()
-    # Generic deterministic fallback for non-cached caption pipelines.
-    return " ".join(str(value) for value in ids)
+    idx2word = GLOBAL_CAPTION_VOCAB.get("idx2word")
+    if idx2word is not None:
+        special = {"<PAD>", "<SOS>", "<BOS>", "<EOS>", "<UNK>"}
+        return " ".join(
+            word for value in ids
+            if (word := idx2word.get(value, "")) and word not in special
+        ).strip()
+    raise RuntimeError("No caption decoder is configured for the active dataset.")
 
 
 def words(values: Iterable[int]) -> list[str]:

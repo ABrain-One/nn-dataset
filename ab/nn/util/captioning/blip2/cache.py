@@ -152,6 +152,7 @@ def _tokenizer(cache_dir: Path):
         _TOKENIZERS[key] = tokenizer
     # Restore this even on a cache hit: another model may have set GPT-2.
     from ab.nn.loader.coco_.Caption import GLOBAL_CAPTION_VOCAB
+    GLOBAL_CAPTION_VOCAB.clear()
     GLOBAL_CAPTION_VOCAB["tokenizer"] = _TOKENIZERS[key]
     return _TOKENIZERS[key]
 

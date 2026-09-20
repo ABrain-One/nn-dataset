@@ -101,6 +101,7 @@ def collate_cached_gpt2_captions(batch, *, cache_dir: str | Path):
     # Metrics are shared, but the token-ID contract is model-specific.
     from ab.nn.loader.coco_.Caption import GLOBAL_CAPTION_VOCAB
 
+    GLOBAL_CAPTION_VOCAB.clear()
     GLOBAL_CAPTION_VOCAB["tokenizer"] = value
     return features, labels
 

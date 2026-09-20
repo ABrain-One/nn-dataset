@@ -1,4 +1,4 @@
-"""Crash-resistant BLIP-2 captioner trained from cached Q-Former features.
+"""Internal OPT decoder base for the public ``Blip2FastOpt`` model.
 
 The cache builder owns the expensive vision/Q-Former model.  This module loads
 only the frozen OPT decoder and the small pretrained BLIP-2 language projection.
@@ -30,14 +30,7 @@ from ab.nn.util.captioning.blip2.contract import (
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 
-def supported_hyperparameters():
-    # Only numeric/searchable training parameters belong here. Portable
-    # projection selection is configured explicitly through prm/environment;
-    # listing string paths here makes Optuna invent invalid float values.
-    return {"lr"}
-
-
-class Net(nn.Module):
+class OptCaptionerBase(nn.Module):
     def __init__(self, in_shape, out_shape, prm, device):
         super().__init__()
         self.device = torch.device(device)
@@ -53,18 +46,18 @@ class Net(nn.Module):
             raise ValueError(f"Expected cached input ending in {FEATURE_SHAPE}, got {in_shape}.")
         if out_shape and int(out_shape[0]) != OPT_VOCAB_SIZE:
             raise ValueError(
-                f"Blip2Cached requires OPT token IDs ({OPT_VOCAB_SIZE}) from its matching transform."
+                f"Blip2FastOpt requires OPT token IDs ({OPT_VOCAB_SIZE}) from its matching transform."
             )
         if self.device.type != "cuda" and not bool(self.prm.get("allow_cpu", False)):
             raise RuntimeError(
-                "Blip2Cached refused to load OPT-2.7B on CPU because it can exhaust "
+                "Blip2FastOpt refused to load OPT-2.7B on CPU because it can exhaust "
                 "system RAM. Use a CUDA GPU or explicitly set allow_cpu=true."
             )
         if self.device.type == "cuda":
             total_gib = torch.cuda.get_device_properties(self.device).total_memory / (1024 ** 3)
             if total_gib < 8:
                 raise RuntimeError(
-                    f"Blip2Cached requires at least 8 GiB VRAM; detected {total_gib:.1f} GiB."
+                    f"Blip2FastOpt requires at least 8 GiB VRAM; detected {total_gib:.1f} GiB."
                 )
 
         cache_dir = resolve_cache_dir(self.prm.get("cache_dir"))
@@ -206,6 +199,10 @@ class Net(nn.Module):
     def forward(self, features, captions=None):
         features = self._features(features)
         return self._loss(features, captions) if captions is not None else self._generate(features)
+
+    def compute_loss(self, features, labels):
+        """Return the scalar teacher-forcing loss expected by the NN trainer."""
+        return self(features, labels)
 
     def train_setup(self, prm):
         self.prm.update(prm or {})

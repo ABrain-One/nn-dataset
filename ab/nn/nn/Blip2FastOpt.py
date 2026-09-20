@@ -12,11 +12,14 @@ import torch
 
 from ab.nn.util.captioning.blip2.text import caption_training_batch
 
-from ab.nn.nn.Blip2Cached import Net as BaselineNet
-from ab.nn.nn.Blip2Cached import supported_hyperparameters
+from ab.nn.util.captioning.blip2.opt import OptCaptionerBase
 
 
-class Net(BaselineNet):
+def supported_hyperparameters():
+    return {"lr"}
+
+
+class Net(OptCaptionerBase):
     def train_setup(self, prm):
         super().train_setup(prm)
 

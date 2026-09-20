@@ -154,6 +154,10 @@ class Net(nn.Module):
         features = self._features(features)
         return self._loss(features, captions) if captions is not None else self._generate(features)
 
+    def compute_loss(self, features, labels):
+        """Return the scalar teacher-forcing loss expected by the NN trainer."""
+        return self(features, labels)
+
     def train_setup(self, prm):
         self.prm.update(prm or {})
         learning_rate = float(self.prm.get("lr", 1e-4))
