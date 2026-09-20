@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 from functools import partial
-import os
 from pathlib import Path
 
 import torch
 
 from .contract import CacheError, RUNTIME_DIR_NAME, read_manifest, resolve_cache_dir, validate_runtime
-
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 GPT2_MODEL_ID = "gpt2"
 # The snapshot already used locally; pinning does not upgrade the model.
@@ -98,11 +95,12 @@ def collate_cached_gpt2_captions(batch, *, cache_dir: str | Path):
         token_ids[~attention_mask[offset:offset + size]] = -100
         labels[sample, :size] = token_ids
         offset += size
-    # Metrics are shared, but the token-ID contract is model-specific.
-    from ab.nn.loader.coco_.Caption import GLOBAL_CAPTION_VOCAB
+    # Keep BLIP token IDs out of the raw COCO vocabulary shared by legacy
+    # caption models. ContextVar also prevents concurrent executions in
+    # separate contexts from replacing each other's decoder.
+    from .context import select_tokenizer
 
-    GLOBAL_CAPTION_VOCAB.clear()
-    GLOBAL_CAPTION_VOCAB["tokenizer"] = value
+    select_tokenizer(value)
     return features, labels
 
 

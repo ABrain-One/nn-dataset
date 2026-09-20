@@ -213,6 +213,8 @@ def loader(transform_fn, task):
 
     # Explicitly select the raw COCO vocabulary decoder. A BLIP model may have
     # installed a Hugging Face tokenizer earlier in the same process.
+    from ab.nn.util.captioning.blip2.context import clear_tokenizer
+    clear_tokenizer()
     GLOBAL_CAPTION_VOCAB.clear()
     GLOBAL_CAPTION_VOCAB['word2idx'] = word2idx
     GLOBAL_CAPTION_VOCAB['idx2word'] = idx2word

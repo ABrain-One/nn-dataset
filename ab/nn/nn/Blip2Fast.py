@@ -7,8 +7,6 @@ part is a normalized visual bridge plus GPT-2.
 
 from __future__ import annotations
 
-import random
-
 import torch
 
 from ab.nn.util.captioning.blip2.text import caption_training_batch
@@ -33,10 +31,6 @@ class Net(nn.Module):
         self.device = torch.device(device)
         self.prm = dict(prm or {})
         seed = int(self.prm.get("seed", 42))
-        random.seed(seed)
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
         self._reference_generator = torch.Generator(device="cpu")
         self._reference_generator.manual_seed(seed)
 
@@ -65,11 +59,15 @@ class Net(nn.Module):
         if int(self.gpt2.config.vocab_size) != GPT2_VOCAB_SIZE:
             raise RuntimeError("Portable GPT-2 decoder has an incompatible vocabulary.")
         hidden = int(self.gpt2.get_input_embeddings().embedding_dim)
-        self.visual_projection = nn.Sequential(
-            nn.Linear(FEATURE_SHAPE[1], hidden),
-            nn.LayerNorm(hidden),
-            nn.GELU(),
-        ).to(self.device, dtype=torch.float32)
+        # Initialize the trainable bridge reproducibly without changing the
+        # process-wide RNG used by models trained before or after this one.
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(seed)
+            self.visual_projection = nn.Sequential(
+                nn.Linear(FEATURE_SHAPE[1], hidden),
+                nn.LayerNorm(hidden),
+                nn.GELU(),
+            ).to(self.device, dtype=torch.float32)
         self.optimizer = None
         self.max_text_length = int(self.prm.get("max_text_length", 50))
         self.max_new_tokens = int(self.prm.get("max_new_tokens", 24))

@@ -7,7 +7,6 @@ only the frozen OPT decoder and the small pretrained BLIP-2 language projection.
 from __future__ import annotations
 
 import os
-import random
 
 import torch
 import torch.nn as nn
@@ -27,20 +26,12 @@ from ab.nn.util.captioning.blip2.contract import (
     validate_runtime,
 )
 
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-
-
 class OptCaptionerBase(nn.Module):
     def __init__(self, in_shape, out_shape, prm, device):
         super().__init__()
         self.device = torch.device(device)
         self.prm = dict(prm or {})
         self.optimizer = None
-        seed = int(self.prm.get("seed", 42))
-        random.seed(seed)
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
 
         if in_shape and tuple(in_shape[-2:]) != FEATURE_SHAPE:
             raise ValueError(f"Expected cached input ending in {FEATURE_SHAPE}, got {in_shape}.")

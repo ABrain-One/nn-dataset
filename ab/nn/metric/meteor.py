@@ -1,6 +1,5 @@
 """Decoded-word METEOR metric for single- and multi-reference captions."""
 
-import nltk
 from nltk.corpus import wordnet
 from nltk.translate.meteor_score import meteor_score
 
@@ -13,11 +12,12 @@ class MeteorMetric:
         try:
             wordnet.ensure_loaded()
             self.wordnet = wordnet
-        except LookupError:
-            # Use the same metric definition on a fresh installation.
-            nltk.download("wordnet", quiet=True, raise_on_error=True)
-            wordnet.ensure_loaded()
-            self.wordnet = wordnet
+        except LookupError as error:
+            raise RuntimeError(
+                "METEOR requires the NLTK WordNet corpus. Install it during "
+                "environment setup with `python -m nltk.downloader wordnet`; "
+                "training does not download dependencies at runtime."
+            ) from error
         self.reset()
 
     def reset(self):

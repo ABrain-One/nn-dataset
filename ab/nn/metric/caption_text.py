@@ -8,6 +8,7 @@ import torch
 from nltk.tokenize import TreebankWordTokenizer
 
 from ab.nn.loader.coco_.Caption import GLOBAL_CAPTION_VOCAB
+from ab.nn.util.captioning.blip2.context import active_tokenizer
 
 _WORDS = TreebankWordTokenizer()
 
@@ -18,7 +19,7 @@ def _valid_ids(values: Iterable[int]) -> list[int]:
 
 def decode_ids(values: Iterable[int]) -> str:
     ids = _valid_ids(values)
-    tokenizer = GLOBAL_CAPTION_VOCAB.get("tokenizer")
+    tokenizer = active_tokenizer()
     if tokenizer is not None:
         return " ".join(
             tokenizer.decode(ids, skip_special_tokens=True).split()

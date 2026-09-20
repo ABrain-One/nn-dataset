@@ -150,10 +150,10 @@ def _tokenizer(cache_dir: Path):
         )
         tokenizer.pad_token = tokenizer.eos_token
         _TOKENIZERS[key] = tokenizer
-    # Restore this even on a cache hit: another model may have set GPT-2.
-    from ab.nn.loader.coco_.Caption import GLOBAL_CAPTION_VOCAB
-    GLOBAL_CAPTION_VOCAB.clear()
-    GLOBAL_CAPTION_VOCAB["tokenizer"] = _TOKENIZERS[key]
+    # Restore this even on a cache hit: another BLIP model may have selected
+    # GPT-2 in the current execution context.
+    from .context import select_tokenizer
+    select_tokenizer(_TOKENIZERS[key])
     return _TOKENIZERS[key]
 
 
