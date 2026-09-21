@@ -52,6 +52,7 @@ def data(only_best_accuracy: bool = False,
          epoch: Optional[int] = None,
          max_rows: Optional[int] = None,
          nn_prefixes: Optional[tuple] = None,
+         min_accuracy: Optional[float] = None,
          sql: Optional[JoinConf] = None,
          unique_nn: bool = False,
          include_nn_stats: bool = False,
@@ -110,12 +111,20 @@ def data(only_best_accuracy: bool = False,
       - 'nn_uses_moduledict': bool    (uses ModuleDict)
       - 'nn_stats_meta': dict         (additional metadata as JSON)
       - 'nn_stats_error': str         (error message if statistics failed)
+
+    - min_accuracy: if set, only rows with accuracy >= min_accuracy are returned.
+      Applied as a SQL WHERE condition (not a post-hoc DataFrame filter), so it
+      composes correctly with max_rows -- the LIMIT is applied to the already-
+      filtered set, not the other way around.
     """
 
     # Build filtering conditions based on provided parameters.
     params, where_clause = sql_where([task, dataset, metric, nn, epoch])
     if nn_prefixes:
         where_clause += ' AND (' + ' OR '.join([f"nn LIKE '{prefix}%'" for prefix in nn_prefixes]) + ')'
+    if min_accuracy is not None:
+        where_clause += (' WHERE ' if not where_clause else ' AND ') + 's.accuracy >= ?'
+        params = list(params) + [min_accuracy]
 
     source = f'(SELECT s.* FROM stat s {where_clause})'
     if unique_nn:
