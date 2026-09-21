@@ -903,6 +903,27 @@ def arch_similarity(a: str, b: str, iters=3) -> float:
     return len(la & lb) / len(la | lb)
 
 
+def is_model_code(src) -> bool:
+    """Is this source text a LEMUR model, rather than some other thing we hash?
+
+    Needed because almost any string is parseable Python: a list of literals, a
+    dictionary, a bare name and a number all parse, so "did it raise?" cannot
+    distinguish model code from a statistics key. The dataset contract does: a
+    model defines `class Net` and a `train_setup` function, and nothing else we
+    store does. Measured over the whole corpus this accepts every model and no
+    transform, metric, parameter set or statistics key.
+    """
+    if not isinstance(src, str) or "class Net" not in src or "train_setup" not in src:
+        return False
+    try:
+        tree = ast.parse(textwrap.dedent(src))
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return False
+    return (any(isinstance(n, ast.ClassDef) and n.name == "Net" for n in ast.walk(tree))
+            and any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and n.name == "train_setup" for n in ast.walk(tree)))
+
+
 def arch_uid(src: str) -> str:
     """Exact architectural certificate for a model given as source text."""
     return wl_hash(source_graph(src))

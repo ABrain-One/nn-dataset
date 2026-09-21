@@ -91,18 +91,39 @@ def code_to_db(cursor, table_name, code=None, code_file=None, force_name = None)
     if not code:
         with open(code_file, 'r', encoding='utf-8') as file:
             code = file.read()
-    id_val = uuid4(code)
     # Check if the model exists in the database
     cursor.execute(f"SELECT code FROM {table_name} WHERE name = ?", (nm,))
     existing_entry = cursor.fetchone()
+    # The identifier is computed only where a row is actually written. This
+    # function is reached once per recorded run rather than once per model, and
+    # identifying an architecture is no longer a few microseconds, so hashing
+    # before the existence check would dominate the import.
     if existing_entry:
         # If model exists, update the code if it has changed
         existing_code = existing_entry[0]
         if existing_code != code:
             print(f"Updating code for model: {nm}")
-            cursor.execute("UPDATE nn SET code = ?, id = ? WHERE name = ?", (code, id_val, nm))
+            # The table was hard-coded to `nn` here, so updating a changed
+            # transform or metric wrote to the wrong table.
+            cursor.execute(f"UPDATE {table_name} SET code = ?, id = ? WHERE name = ?",
+                           (code, uuid4(code), nm))
     else:
-        cursor.execute(f"INSERT INTO {table_name} (name, code, id) VALUES (?, ?, ?)", (nm, code, id_val))
+        id_val = uuid4(code)
+        if table_name == 'nn':
+            # `id` identifies the architecture, so the same network arriving under
+            # a second name is a duplicate. The database is built from the file
+            # system and anyone can add a file, so this is the only place that
+            # sees every model however it arrived. The stored model is kept and
+            # its name returned, which attaches the newcomer's statistics to it.
+            # The existing row is never deleted: every statistics table references
+            # nn(name) ON DELETE CASCADE, so removing it would discard that
+            # model's recorded history.
+            cursor.execute("SELECT name FROM nn WHERE id = ?", (id_val,))
+            stored = cursor.fetchone()
+            if stored:
+                return stored[0]
+        cursor.execute(f"INSERT INTO {table_name} (name, code, id) VALUES (?, ?, ?)",
+                       (nm, code, id_val))
     return nm
 
 
@@ -112,8 +133,13 @@ def populate_code_table(table_name, cursor, name=None):
     """
     code_dir = nn_path(table_name)
     code_files = [code_dir / f"{name}.py"] if name else [Path(f) for f in code_dir.iterdir() if f.is_file() and f.suffix == '.py' and f.name != '__init__.py']
+    resolved = None
     for code_file in code_files:
-        code_to_db(cursor, table_name, code_file=code_file)
+        resolved = code_to_db(cursor, table_name, code_file=code_file)
+    # The name under which the code is actually stored, which differs from the
+    # one asked for when this architecture was already present. Callers must use
+    # it, or they write statistics against a model that was never inserted.
+    return resolved
     # print(f"{table_name} added/updated in the `{table_name}` table: {[f.stem for f in code_files]}")
 
 
@@ -349,8 +375,9 @@ def json_train_to_db():
             try:
                 with open(model_stat_file, 'r', encoding='utf-8', errors='replace') as f:
                     for trial in json.load(f):
-                        _, _, metric, nn = sub_config = conf_to_names(sub_config_str)
-                        populate_code_table('nn', cursor, name=nn)
+                        task, dataset, metric, nn = conf_to_names(sub_config_str)
+                        nn = populate_code_table('nn', cursor, name=nn) or nn
+                        sub_config = (task, dataset, metric, nn)
                         # Handle comma-separated metrics (e.g., "bleu,meteor,cider")
                         for single_metric in metric.split(','):
                             populate_code_table('metric', cursor, name=single_metric.strip())
@@ -504,9 +531,13 @@ def save_results(config_ext: tuple[str, str, str, str, int], prm: dict, *, nn_co
     _, _, metric, nn = config_ext[:4]
 
     if nn_code is None:
-        populate_code_table('nn', cursor, name=nn)
+        stored = populate_code_table('nn', cursor, name=nn)
     else:
-        code_to_db(cursor, 'nn', code=nn_code, force_name=nn)
+        stored = code_to_db(cursor, 'nn', code=nn_code, force_name=nn)
+    # This architecture may already be stored under another name; the statistics
+    # belong to the model that is in the database.
+    if stored and stored != nn:
+        config_ext = config_ext[:3] + (stored,) + tuple(config_ext[4:])
 
     for single_metric in metric.split(','):
         populate_code_table('metric', cursor, name=single_metric.strip())
