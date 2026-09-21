@@ -49,6 +49,9 @@ def init_db():
     # Create all tables with code
     for nm in code_tables:
         create_code_table(nm, cursor)
+    # `nn.id` identifies the architecture and is looked up on every insert to
+    # reject a model that is already stored under another name.
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nn_id ON nn(id)")
 
     # Create all tables with parameters
     for nm in param_tables:
