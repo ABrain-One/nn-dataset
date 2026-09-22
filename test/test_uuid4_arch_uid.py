@@ -135,6 +135,26 @@ def test_duplicate_model_is_not_added_twice():
         con.close()
 
 
+def test_identifying_a_model_emits_no_warnings():
+    """Contributed code sometimes contains an invalid escape sequence, and Python
+    reports that while compiling. Identifying a model must not relay the model's
+    own warnings, or a dataset import prints one line per offending file."""
+    import warnings
+    from ab.nn.util.Util import uuid4
+
+    odd = MODEL.replace(
+        "def supported_hyperparameters():",
+        'BAD = "a \\| b"          # invalid escape sequence, on purpose\n\n\ndef supported_hyperparameters():')
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        identifier = uuid4(odd)
+    assert not caught, [str(c.message) for c in caught]
+    assert identifier and len(identifier) == 32
+    # and a real syntax error is still a syntax error, not silently swallowed
+    from ab.nn.util.ArchUID import is_model_code
+    assert is_model_code("class Net(:\n    def train_setup(s): pass\n") is False
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

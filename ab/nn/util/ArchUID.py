@@ -28,6 +28,7 @@ import ast
 import hashlib
 import re
 import textwrap
+import warnings
 from collections import defaultdict
 
 import numpy as np
@@ -41,6 +42,22 @@ NODE_BUDGET = 20000    # stop expanding once a graph is this large (nested loops
 def _hp_repr(hp: dict) -> str:
     """Canonical text of a node's parameter bag, independent of insertion order."""
     return repr(sorted((k, sorted(v)) for k, v in hp.items()))
+
+
+def _parse(src: str) -> ast.AST:
+    """Parse model source without letting the model's own warnings escape.
+
+    Contributed code sometimes contains an invalid escape sequence, usually in a
+    docstring or a regular expression. Python reports those while compiling, so
+    identifying twenty thousand models would print one warning per offending
+    file, in the middle of the dataset import. The warning belongs to the model
+    rather than to identifying it, and it is reported as DeprecationWarning on
+    some Python versions and SyntaxWarning on others, so both are silenced here.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return ast.parse(textwrap.dedent(src))
 
 
 def _bucket(s: str, d: int) -> int:
@@ -674,7 +691,7 @@ def source_graph(src: str) -> _Graph:
     covered. Attribute reads leave placeholders that are wired to their producers
     afterwards, so nothing depends on declaration order.
     """
-    tree = ast.parse(textwrap.dedent(src))
+    tree = _parse(src)
     g, attrs, uses = _Graph(), {}, {}
 
     # Attributes are scoped per class. A single shared namespace merges
@@ -916,7 +933,7 @@ def is_model_code(src) -> bool:
     if not isinstance(src, str) or "class Net" not in src or "train_setup" not in src:
         return False
     try:
-        tree = ast.parse(textwrap.dedent(src))
+        tree = _parse(src)
     except (SyntaxError, ValueError, RecursionError, MemoryError):
         return False
     return (any(isinstance(n, ast.ClassDef) and n.name == "Net" for n in ast.walk(tree))
