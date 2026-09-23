@@ -71,7 +71,7 @@ def read_manifest(cache_dir: Path) -> dict[str, Any]:
     if not path.is_file():
         raise CacheError(
             f"BLIP-2 cache manifest is missing: {path}. Build it with "
-            "`python -m ab.nn.tools.build_blip2_cached --help`."
+            "`python -m ab.nn.util.captioning.tools.build_blip2_cached --help`."
         )
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
