@@ -10,17 +10,18 @@ from __future__ import annotations
 
 import torch
 
-from ab.nn.captioning.blip2.text import caption_training_batch
+from ab.nn.util.captioning.blip2.text import caption_training_batch
 
-from ab.nn.nn.Blip2Cached import Net as BaselineNet
-from ab.nn.nn.Blip2Cached import supported_hyperparameters
+from ab.nn.util.captioning.blip2.opt import OptCaptionerBase
 
 
-class Net(BaselineNet):
+def supported_hyperparameters():
+    return {"lr"}
+
+
+class Net(OptCaptionerBase):
     def train_setup(self, prm):
         super().train_setup(prm)
-        from ab.nn.captioning.blip2.provenance import record_training_provenance
-        record_training_provenance(self, prm, self.opt)
 
     def __init__(self, in_shape, out_shape, prm, device):
         options = dict(prm or {})

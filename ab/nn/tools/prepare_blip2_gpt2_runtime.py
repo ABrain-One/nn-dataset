@@ -9,9 +9,9 @@ from tempfile import TemporaryDirectory
 
 from filelock import FileLock
 
-from transformers import AutoModelForCausalLM, GPT2TokenizerFast
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from ab.nn.captioning.blip2.contract import (
+from ab.nn.util.captioning.blip2.contract import (
     CacheError,
     RUNTIME_DIR_NAME,
     atomic_json,
@@ -20,7 +20,7 @@ from ab.nn.captioning.blip2.contract import (
     sha256_file,
     validate_runtime,
 )
-from ab.nn.captioning.blip2.gpt2 import (
+from ab.nn.util.captioning.blip2.gpt2 import (
     GPT2_DECODER_DIR_NAME,
     GPT2_MODEL_ID,
     GPT2_MODEL_REVISION,
@@ -65,9 +65,13 @@ def _export(root: Path, source: str) -> Path:
         model.save_pretrained(stage / GPT2_DECODER_DIR_NAME, safe_serialization=True)
         del model
         try:
-            value = GPT2TokenizerFast.from_pretrained(source, local_files_only=True, **options)
+            value = AutoTokenizer.from_pretrained(
+                source, use_fast=True, local_files_only=True, **options
+            )
         except OSError:
-            value = GPT2TokenizerFast.from_pretrained(source, local_files_only=False, **options)
+            value = AutoTokenizer.from_pretrained(
+                source, use_fast=True, local_files_only=False, **options
+            )
         value.save_pretrained(stage / GPT2_TOKENIZER_DIR_NAME)
         for name in (GPT2_DECODER_DIR_NAME, GPT2_TOKENIZER_DIR_NAME):
             destination = runtime / name

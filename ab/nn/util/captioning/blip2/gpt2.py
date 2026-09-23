@@ -45,10 +45,12 @@ def tokenizer(cache_dir: str | Path | None = None):
     root = resolve_cache_dir(cache_dir)
     key = str(root)
     if key not in _TOKENIZERS:
-        from transformers import GPT2TokenizerFast
+        from transformers import AutoTokenizer
 
         _, path = gpt2_runtime_paths(root)
-        value = GPT2TokenizerFast.from_pretrained(str(path), local_files_only=True)
+        value = AutoTokenizer.from_pretrained(
+            str(path), use_fast=True, local_files_only=True
+        )
         value.pad_token = value.eos_token
         _TOKENIZERS[key] = value
     return _TOKENIZERS[key]
@@ -58,27 +60,48 @@ def collate_cached_gpt2_captions(batch, *, cache_dir: str | Path):
     if not batch:
         raise ValueError("Cannot collate an empty batch.")
     features = torch.stack([item[0] for item in batch])
-    references = [item[1] for item in batch]
-    count = max(len(value) for value in references)
-    texts, valid = [], []
-    for values in references:
+    references = []
+    for _, values in batch:
+        if not isinstance(values, (list, tuple)):
+            raise CacheError("Cache captions must be a list or tuple of strings.")
         clean = [str(text).strip() for text in values if str(text).strip()]
         if not clean:
             raise CacheError("A cache sample has no caption.")
-        for position in range(count):
-            present = position < len(clean)
-            texts.append(clean[position] if present else "")
-            valid.append(present)
-    value = tokenizer(cache_dir)
-    encoded = value(texts, padding=True, truncation=True, max_length=50, return_tensors="pt")
-    labels = encoded.input_ids
-    labels[encoded.attention_mask == 0] = -100
-    labels[~torch.tensor(valid, dtype=torch.bool)] = -100
-    # Metrics are shared, but the token-ID contract is model-specific.
-    from ab.nn.loader.coco_.Caption import GLOBAL_CAPTION_VOCAB
+        references.append(clean)
 
-    GLOBAL_CAPTION_VOCAB["tokenizer"] = value
-    return features, labels.view(len(batch), count, -1)
+    # Tokenize real captions only.  Passing synthetic empty strings through a
+    # tokenizer made the missing-reference sentinel dependent on Transformers
+    # internals and caused all--100 rows on newer releases.
+    count = max(map(len, references))
+    texts = [text for values in references for text in values]
+    value = tokenizer(cache_dir)
+    encoded = value(
+        texts, padding=True, truncation=True, max_length=50, return_tensors="pt"
+    )
+    input_ids = torch.as_tensor(encoded["input_ids"], dtype=torch.long)
+    attention_mask = torch.as_tensor(encoded["attention_mask"], dtype=torch.bool)
+    if input_ids.ndim != 2 or input_ids.shape != attention_mask.shape:
+        raise CacheError("GPT-2 tokenizer returned an incompatible caption batch.")
+    if len(input_ids) != len(texts) or not attention_mask.any(dim=1).all():
+        raise CacheError("GPT-2 tokenizer produced an empty caption reference.")
+
+    labels = torch.full(
+        (len(batch), count, input_ids.shape[1]), -100, dtype=torch.long
+    )
+    offset = 0
+    for sample, values in enumerate(references):
+        size = len(values)
+        token_ids = input_ids[offset:offset + size].clone()
+        token_ids[~attention_mask[offset:offset + size]] = -100
+        labels[sample, :size] = token_ids
+        offset += size
+    # Keep BLIP token IDs out of the raw COCO vocabulary shared by legacy
+    # caption models. ContextVar also prevents concurrent executions in
+    # separate contexts from replacing each other's decoder.
+    from .context import select_tokenizer
+
+    select_tokenizer(value)
+    return features, labels
 
 
 def collator(cache_dir: str | Path):

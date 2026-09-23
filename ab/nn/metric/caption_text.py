@@ -8,6 +8,7 @@ import torch
 from nltk.tokenize import TreebankWordTokenizer
 
 from ab.nn.loader.coco_.Caption import GLOBAL_CAPTION_VOCAB
+from ab.nn.util.captioning.blip2.context import active_tokenizer
 
 _WORDS = TreebankWordTokenizer()
 
@@ -18,13 +19,19 @@ def _valid_ids(values: Iterable[int]) -> list[int]:
 
 def decode_ids(values: Iterable[int]) -> str:
     ids = _valid_ids(values)
-    tokenizer = GLOBAL_CAPTION_VOCAB.get("tokenizer")
+    tokenizer = active_tokenizer()
     if tokenizer is not None:
         return " ".join(
             tokenizer.decode(ids, skip_special_tokens=True).split()
         ).strip()
-    # Generic deterministic fallback for non-cached caption pipelines.
-    return " ".join(str(value) for value in ids)
+    idx2word = GLOBAL_CAPTION_VOCAB.get("idx2word")
+    if idx2word is not None:
+        special = {"<PAD>", "<SOS>", "<BOS>", "<EOS>", "<UNK>"}
+        return " ".join(
+            word for value in ids
+            if (word := idx2word.get(value, "")) and word not in special
+        ).strip()
+    raise RuntimeError("No caption decoder is configured for the active dataset.")
 
 
 def words(values: Iterable[int]) -> list[str]:

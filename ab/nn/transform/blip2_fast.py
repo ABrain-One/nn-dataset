@@ -3,8 +3,8 @@
 Returns precomputed BLIP-2 features with GPT-2 collated captions.
 """
 
-from ab.nn.captioning.blip2.cache import CachedCaptionDataset
-from ab.nn.captioning.blip2.gpt2 import GPT2_VOCAB_SIZE, collator
+from ab.nn.util.captioning.blip2.cache import CachedCaptionDataset
+from ab.nn.util.captioning.blip2.gpt2 import GPT2_VOCAB_SIZE, collator
 
 
 def transform(norm=None):

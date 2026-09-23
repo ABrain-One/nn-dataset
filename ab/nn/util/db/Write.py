@@ -327,7 +327,11 @@ def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
     prm = dict(prm)
 
     # Extract grouped training diagnostics before prm-table insert
-    train_stat = prm.pop('train_stat', {})
+    train_stat = dict(prm.pop('train_stat', {}) or {})
+    if train_stat.get('epoch_max') is None:
+        epoch_max = prm.get('epoch_max')
+        if epoch_max is not None:
+            train_stat['epoch_max'] = epoch_max
     prm.pop('layer_stat', None)
 
     transform = prm['transform']

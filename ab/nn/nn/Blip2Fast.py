@@ -7,21 +7,22 @@ part is a normalized visual bridge plus GPT-2.
 
 from __future__ import annotations
 
-import random
-
 import torch
 
-from ab.nn.captioning.blip2.text import caption_training_batch
+from ab.nn.util.captioning.blip2.text import caption_training_batch
 import torch.nn as nn
 
-from ab.nn.captioning.blip2.contract import FEATURE_SHAPE
-from ab.nn.captioning.blip2.gpt2 import GPT2_VOCAB_SIZE, gpt2_runtime_paths
+from ab.nn.util.captioning.blip2.contract import FEATURE_SHAPE
+from ab.nn.util.captioning.blip2.gpt2 import GPT2_VOCAB_SIZE, gpt2_runtime_paths
 
-from transformers import AutoModelForCausalLM, GPT2TokenizerFast
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 def supported_hyperparameters():
-    return {"lr", "batch"}
+    # The NN trainer searches batch size through its dedicated categorical
+    # range. Declaring it here would make the generic fallback suggest a
+    # float in [0, 1] before that batch-size logic runs.
+    return {"lr"}
 
 
 class Net(nn.Module):
@@ -30,10 +31,6 @@ class Net(nn.Module):
         self.device = torch.device(device)
         self.prm = dict(prm or {})
         seed = int(self.prm.get("seed", 42))
-        random.seed(seed)
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
         self._reference_generator = torch.Generator(device="cpu")
         self._reference_generator.manual_seed(seed)
 
@@ -51,8 +48,8 @@ class Net(nn.Module):
                 )
 
         decoder_path, tokenizer_path = gpt2_runtime_paths(self.prm.get("cache_dir"))
-        self.gpt2_tokenizer = GPT2TokenizerFast.from_pretrained(
-            str(tokenizer_path), local_files_only=True
+        self.gpt2_tokenizer = AutoTokenizer.from_pretrained(
+            str(tokenizer_path), use_fast=True, local_files_only=True
         )
         self.gpt2_tokenizer.pad_token = self.gpt2_tokenizer.eos_token
         # Keep trainable GPT-2 in float32.
@@ -62,11 +59,15 @@ class Net(nn.Module):
         if int(self.gpt2.config.vocab_size) != GPT2_VOCAB_SIZE:
             raise RuntimeError("Portable GPT-2 decoder has an incompatible vocabulary.")
         hidden = int(self.gpt2.get_input_embeddings().embedding_dim)
-        self.visual_projection = nn.Sequential(
-            nn.Linear(FEATURE_SHAPE[1], hidden),
-            nn.LayerNorm(hidden),
-            nn.GELU(),
-        ).to(self.device, dtype=torch.float32)
+        # Initialize the trainable bridge reproducibly without changing the
+        # process-wide RNG used by models trained before or after this one.
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(seed)
+            self.visual_projection = nn.Sequential(
+                nn.Linear(FEATURE_SHAPE[1], hidden),
+                nn.LayerNorm(hidden),
+                nn.GELU(),
+            ).to(self.device, dtype=torch.float32)
         self.optimizer = None
         self.max_text_length = int(self.prm.get("max_text_length", 50))
         self.max_new_tokens = int(self.prm.get("max_new_tokens", 24))
@@ -151,6 +152,10 @@ class Net(nn.Module):
         features = self._features(features)
         return self._loss(features, captions) if captions is not None else self._generate(features)
 
+    def compute_loss(self, features, labels):
+        """Return the scalar teacher-forcing loss expected by the NN trainer."""
+        return self(features, labels)
+
     def train_setup(self, prm):
         self.prm.update(prm or {})
         learning_rate = float(self.prm.get("lr", 1e-4))
@@ -158,8 +163,6 @@ class Net(nn.Module):
             raise ValueError("lr must be in (0, 1].")
         parameters = list(self.visual_projection.parameters()) + list(self.gpt2.parameters())
         self.optimizer = torch.optim.AdamW(parameters, lr=learning_rate, weight_decay=0.01)
-        from ab.nn.captioning.blip2.provenance import record_training_provenance
-        record_training_provenance(self, prm, self.gpt2)
 
     def learn(self, train_data):
         if self.optimizer is None:
