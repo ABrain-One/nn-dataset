@@ -2,84 +2,46 @@
 
 from __future__ import annotations
 
-from functools import partial
+from functools import lru_cache, partial
 from pathlib import Path
-from typing import Any
 
 import torch
 
 from .contract import CacheError, read_manifest, resolve_cache_dir, validate_runtime
 
-GPT2_MODEL_ID = "gpt2"
+GPT2_MODEL_ID = "openai-community/gpt2"
 # The snapshot already used locally; pinning does not upgrade the model.
 GPT2_MODEL_REVISION = "607a30d783dfa663caf39e06633721c8d4cfcd7e"
 GPT2_VOCAB_SIZE = 50_257
 GPT2_DECODER_DIR_NAME = "gpt2-decoder"
-GPT2_TOKENIZER_DIR_NAME = "gpt2-tokenizer"
 
 
-def validate_gpt2_tokenizer(value: Any) -> Any:
-    """Validate behavior required by the cached GPT-2 caption pipeline.
+@lru_cache(maxsize=None)
+def tokenizer():
+    """Resolve the pinned GPT-2 tokenizer as a regular HF dependency."""
+    from transformers import AutoTokenizer
 
-    This deliberately checks capabilities instead of package versions.  In
-    particular, Transformers 5 can construct an empty trainable tokenizer from
-    files that older releases interpreted as a pretrained tokenizer.
-    """
-    try:
-        vocabulary_size = len(value)
-        eos_token_id = value.eos_token_id
-        probe = value.encode("A photo of a dog.", add_special_tokens=False)
-    except Exception as error:
-        raise CacheError("Portable GPT-2 tokenizer cannot encode text.") from error
-    if vocabulary_size != GPT2_VOCAB_SIZE:
+    value = AutoTokenizer.from_pretrained(
+        GPT2_MODEL_ID,
+        revision=GPT2_MODEL_REVISION,
+        use_fast=True,
+    )
+    value.pad_token = value.pad_token or value.eos_token
+    probe = value("a cat", add_special_tokens=False).input_ids
+    if not probe:
         raise CacheError(
-            "Portable GPT-2 tokenizer has an incompatible vocabulary: "
-            f"expected {GPT2_VOCAB_SIZE}, found {vocabulary_size}."
+            "The pinned GPT-2 tokenizer produced no token IDs; report this "
+            "Transformers/tokenizer contract failure upstream."
         )
-    if eos_token_id is None or not 0 <= int(eos_token_id) < GPT2_VOCAB_SIZE:
-        raise CacheError("Portable GPT-2 tokenizer has no compatible EOS token.")
-    if not probe or any(not 0 <= int(token) < GPT2_VOCAB_SIZE for token in probe):
-        raise CacheError("Portable GPT-2 tokenizer produced an invalid probe encoding.")
-    value.pad_token = value.eos_token
+    if len(value) != GPT2_VOCAB_SIZE:
+        raise CacheError(
+            "The pinned GPT-2 tokenizer has an incompatible vocabulary: "
+            f"expected {GPT2_VOCAB_SIZE}, found {len(value)}."
+        )
     return value
 
 
-def load_tokenizer_path(path: str | Path):
-    """Load a validated GPT-2 tokenizer across Transformers tokenizer backends."""
-    from transformers import AutoTokenizer
-
-    root = Path(path)
-    errors = []
-    try:
-        return validate_gpt2_tokenizer(
-            AutoTokenizer.from_pretrained(str(root), use_fast=True, local_files_only=True)
-        )
-    except Exception as error:
-        errors.append(error)
-
-    tokenizer_json = root / "tokenizer.json"
-    if tokenizer_json.is_file():
-        try:
-            # Loading the serialized backend directly avoids version-specific
-            # AutoTokenizer class inference while retaining a public API.
-            from transformers import PreTrainedTokenizerFast
-
-            return validate_gpt2_tokenizer(
-                PreTrainedTokenizerFast(
-                    tokenizer_file=str(tokenizer_json),
-                    bos_token="<|endoftext|>",
-                    eos_token="<|endoftext|>",
-                    unk_token="<|endoftext|>",
-                    pad_token="<|endoftext|>",
-                    model_max_length=1024,
-                )
-            )
-        except Exception as error:
-            errors.append(error)
-    raise CacheError("Portable GPT-2 tokenizer is empty or incompatible.") from errors[-1]
-
-
-def gpt2_runtime_paths(cache_dir: str | Path | None = None) -> tuple[Path, Path]:
+def gpt2_decoder_path(cache_dir: str | Path | None = None) -> Path:
     root = resolve_cache_dir(cache_dir)
     manifest = read_manifest(root)
     runtime = validate_runtime(root, manifest)
@@ -91,36 +53,12 @@ def gpt2_runtime_paths(cache_dir: str | Path | None = None) -> tuple[Path, Path]
         manifest = read_manifest(root)
         runtime = validate_runtime(root, manifest)
         record = manifest.get("gpt2_runtime")
-    if not isinstance(record, dict) or record.get("model_id") != GPT2_MODEL_ID:
+    if not isinstance(record, dict) or record.get("model_id") not in {"gpt2", GPT2_MODEL_ID}:
         raise CacheError("Portable GPT-2 runtime has an incompatible model identifier.")
     decoder = runtime / GPT2_DECODER_DIR_NAME
-    tokenizer = runtime / GPT2_TOKENIZER_DIR_NAME
-    if not (decoder / "config.json").is_file() or not tokenizer.is_dir():
+    if not (decoder / "config.json").is_file():
         raise CacheError("Portable GPT-2 runtime is incomplete.")
-    return decoder, tokenizer
-
-
-_TOKENIZERS = {}
-
-
-def tokenizer(cache_dir: str | Path | None = None):
-    root = resolve_cache_dir(cache_dir)
-    key = str(root)
-    if key not in _TOKENIZERS:
-        _, path = gpt2_runtime_paths(root)
-        try:
-            value = load_tokenizer_path(path)
-        except CacheError:
-            # A previously published manifest may describe a tokenizer that a
-            # newer backend serialized as empty.  Repair only the small GPT-2
-            # runtime; COCO features and the OPT runtime remain untouched.
-            from ab.nn.util.captioning.tools.prepare_blip2_gpt2_runtime import export
-
-            export(root)
-            _, path = gpt2_runtime_paths(root)
-            value = load_tokenizer_path(path)
-        _TOKENIZERS[key] = value
-    return _TOKENIZERS[key]
+    return decoder
 
 
 def collate_cached_gpt2_captions(batch, *, cache_dir: str | Path):
@@ -141,7 +79,7 @@ def collate_cached_gpt2_captions(batch, *, cache_dir: str | Path):
     # internals and caused all--100 rows on newer releases.
     count = max(map(len, references))
     texts = [text for values in references for text in values]
-    value = tokenizer(cache_dir)
+    value = tokenizer()
     token_rows = []
     for text in texts:
         try:
