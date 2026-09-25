@@ -2,58 +2,63 @@
 
 from __future__ import annotations
 
-from functools import partial
+from functools import lru_cache, partial
 from pathlib import Path
 
 import torch
 
-from .contract import CacheError, RUNTIME_DIR_NAME, read_manifest, resolve_cache_dir, validate_runtime
+from .contract import CacheError, read_manifest, resolve_cache_dir, validate_runtime
 
-GPT2_MODEL_ID = "gpt2"
+GPT2_MODEL_ID = "openai-community/gpt2"
 # The snapshot already used locally; pinning does not upgrade the model.
 GPT2_MODEL_REVISION = "607a30d783dfa663caf39e06633721c8d4cfcd7e"
 GPT2_VOCAB_SIZE = 50_257
 GPT2_DECODER_DIR_NAME = "gpt2-decoder"
-GPT2_TOKENIZER_DIR_NAME = "gpt2-tokenizer"
 
 
-def gpt2_runtime_paths(cache_dir: str | Path | None = None) -> tuple[Path, Path]:
+@lru_cache(maxsize=None)
+def tokenizer():
+    """Resolve the pinned GPT-2 tokenizer as a regular HF dependency."""
+    from transformers import AutoTokenizer
+
+    value = AutoTokenizer.from_pretrained(
+        GPT2_MODEL_ID,
+        revision=GPT2_MODEL_REVISION,
+        use_fast=True,
+    )
+    value.pad_token = value.pad_token or value.eos_token
+    probe = value("a cat", add_special_tokens=False).input_ids
+    if not probe:
+        raise CacheError(
+            "The pinned GPT-2 tokenizer produced no token IDs; report this "
+            "Transformers/tokenizer contract failure upstream."
+        )
+    if len(value) != GPT2_VOCAB_SIZE:
+        raise CacheError(
+            "The pinned GPT-2 tokenizer has an incompatible vocabulary: "
+            f"expected {GPT2_VOCAB_SIZE}, found {len(value)}."
+        )
+    return value
+
+
+def gpt2_decoder_path(cache_dir: str | Path | None = None) -> Path:
     root = resolve_cache_dir(cache_dir)
     manifest = read_manifest(root)
     runtime = validate_runtime(root, manifest)
     record = manifest.get("gpt2_runtime")
     if record is None:
         # GPT-2 is needed only for this model, including with an OPT-only cache.
-        from ab.nn.tools.prepare_blip2_gpt2_runtime import export
+        from ab.nn.util.captioning.tools.prepare_blip2_gpt2_runtime import export
         export(root)
         manifest = read_manifest(root)
         runtime = validate_runtime(root, manifest)
         record = manifest.get("gpt2_runtime")
-    if not isinstance(record, dict) or record.get("model_id") != GPT2_MODEL_ID:
+    if not isinstance(record, dict) or record.get("model_id") not in {"gpt2", GPT2_MODEL_ID}:
         raise CacheError("Portable GPT-2 runtime has an incompatible model identifier.")
     decoder = runtime / GPT2_DECODER_DIR_NAME
-    tokenizer = runtime / GPT2_TOKENIZER_DIR_NAME
-    if not (decoder / "config.json").is_file() or not tokenizer.is_dir():
+    if not (decoder / "config.json").is_file():
         raise CacheError("Portable GPT-2 runtime is incomplete.")
-    return decoder, tokenizer
-
-
-_TOKENIZERS = {}
-
-
-def tokenizer(cache_dir: str | Path | None = None):
-    root = resolve_cache_dir(cache_dir)
-    key = str(root)
-    if key not in _TOKENIZERS:
-        from transformers import AutoTokenizer
-
-        _, path = gpt2_runtime_paths(root)
-        value = AutoTokenizer.from_pretrained(
-            str(path), use_fast=True, local_files_only=True
-        )
-        value.pad_token = value.eos_token
-        _TOKENIZERS[key] = value
-    return _TOKENIZERS[key]
+    return decoder
 
 
 def collate_cached_gpt2_captions(batch, *, cache_dir: str | Path):
@@ -74,26 +79,31 @@ def collate_cached_gpt2_captions(batch, *, cache_dir: str | Path):
     # internals and caused all--100 rows on newer releases.
     count = max(map(len, references))
     texts = [text for values in references for text in values]
-    value = tokenizer(cache_dir)
-    encoded = value(
-        texts, padding=True, truncation=True, max_length=50, return_tensors="pt"
-    )
-    input_ids = torch.as_tensor(encoded["input_ids"], dtype=torch.long)
-    attention_mask = torch.as_tensor(encoded["attention_mask"], dtype=torch.bool)
-    if input_ids.ndim != 2 or input_ids.shape != attention_mask.shape:
-        raise CacheError("GPT-2 tokenizer returned an incompatible caption batch.")
-    if len(input_ids) != len(texts) or not attention_mask.any(dim=1).all():
-        raise CacheError("GPT-2 tokenizer produced an empty caption reference.")
+    value = tokenizer()
+    token_rows = []
+    for text in texts:
+        try:
+            ids = value.encode(
+                text, add_special_tokens=False, truncation=True, max_length=50
+            )
+        except Exception as error:
+            raise CacheError("GPT-2 tokenizer could not encode a caption reference.") from error
+        if not ids:
+            raise CacheError("GPT-2 tokenizer produced an empty caption reference.")
+        if any(not 0 <= int(token) < GPT2_VOCAB_SIZE for token in ids):
+            raise CacheError("GPT-2 tokenizer produced an out-of-range token ID.")
+        token_rows.append(torch.tensor(ids, dtype=torch.long))
+
+    width = max(map(len, token_rows))
 
     labels = torch.full(
-        (len(batch), count, input_ids.shape[1]), -100, dtype=torch.long
+        (len(batch), count, width), -100, dtype=torch.long
     )
     offset = 0
     for sample, values in enumerate(references):
         size = len(values)
-        token_ids = input_ids[offset:offset + size].clone()
-        token_ids[~attention_mask[offset:offset + size]] = -100
-        labels[sample, :size] = token_ids
+        for position, token_ids in enumerate(token_rows[offset:offset + size]):
+            labels[sample, position, :len(token_ids)] = token_ids
         offset += size
     # Keep BLIP token IDs out of the raw COCO vocabulary shared by legacy
     # caption models. ContextVar also prevents concurrent executions in

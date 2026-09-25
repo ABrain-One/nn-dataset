@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 
 from filelock import FileLock
 
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM
 
 from ab.nn.util.captioning.blip2.contract import (
     CacheError,
@@ -24,7 +24,6 @@ from ab.nn.util.captioning.blip2.gpt2 import (
     GPT2_DECODER_DIR_NAME,
     GPT2_MODEL_ID,
     GPT2_MODEL_REVISION,
-    GPT2_TOKENIZER_DIR_NAME,
 )
 
 
@@ -50,12 +49,14 @@ def _export(root: Path, source: str) -> Path:
     manifest = read_manifest(root)
     runtime = validate_runtime(root, manifest)
     if manifest.get("gpt2_runtime"):
-        if manifest["gpt2_runtime"].get("model_id") != GPT2_MODEL_ID:
+        if manifest["gpt2_runtime"].get("model_id") not in {"gpt2", GPT2_MODEL_ID}:
             raise CacheError("Portable GPT-2 runtime has an incompatible model identifier.")
-        # Never overwrite a validated bundle, including historical revisions.
-        return root
+        decoder_dir = runtime / GPT2_DECODER_DIR_NAME
+        if (decoder_dir / "config.json").is_file():
+            # The tokenizer is a separately pinned Hugging Face dependency.
+            return root
     options = {"revision": GPT2_MODEL_REVISION} if source == GPT2_MODEL_ID else {}
-    # Finish both exports before publishing anything into the runtime bundle.
+    # Finish the decoder export before publishing it into the runtime bundle.
     with TemporaryDirectory(prefix=".gpt2-export-", dir=root) as temporary:
         stage = Path(temporary)
         try:
@@ -64,21 +65,11 @@ def _export(root: Path, source: str) -> Path:
             model = AutoModelForCausalLM.from_pretrained(source, local_files_only=False, **options)
         model.save_pretrained(stage / GPT2_DECODER_DIR_NAME, safe_serialization=True)
         del model
-        try:
-            value = AutoTokenizer.from_pretrained(
-                source, use_fast=True, local_files_only=True, **options
-            )
-        except OSError:
-            value = AutoTokenizer.from_pretrained(
-                source, use_fast=True, local_files_only=False, **options
-            )
-        value.save_pretrained(stage / GPT2_TOKENIZER_DIR_NAME)
-        for name in (GPT2_DECODER_DIR_NAME, GPT2_TOKENIZER_DIR_NAME):
-            destination = runtime / name
-            if destination.exists():
-                # Only unregistered remnants of an interrupted export reach here.
-                os.replace(destination, stage / (name + ".previous"))
-            os.replace(stage / name, destination)
+        destination = runtime / GPT2_DECODER_DIR_NAME
+        if destination.exists():
+            # Only unregistered remnants of an interrupted export reach here.
+            os.replace(destination, stage / (GPT2_DECODER_DIR_NAME + ".previous"))
+        os.replace(stage / GPT2_DECODER_DIR_NAME, destination)
 
     records = _runtime_records(runtime)
     manifest["runtime"] = {"complete": True, "files": records}
@@ -87,7 +78,6 @@ def _export(root: Path, source: str) -> Path:
         "source": source,
         "model_revision": options.get("revision"),
         "decoder": GPT2_DECODER_DIR_NAME,
-        "tokenizer": GPT2_TOKENIZER_DIR_NAME,
     }
     atomic_json(root / "manifest.json", manifest)
     return root

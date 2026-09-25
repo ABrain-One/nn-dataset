@@ -13,9 +13,9 @@ from ab.nn.util.captioning.blip2.text import caption_training_batch
 import torch.nn as nn
 
 from ab.nn.util.captioning.blip2.contract import FEATURE_SHAPE
-from ab.nn.util.captioning.blip2.gpt2 import GPT2_VOCAB_SIZE, gpt2_runtime_paths
+from ab.nn.util.captioning.blip2.gpt2 import GPT2_VOCAB_SIZE, gpt2_decoder_path, tokenizer
 
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM
 
 
 def supported_hyperparameters():
@@ -47,11 +47,8 @@ class Net(nn.Module):
                     f"Trainable GPT-2 requires at least 12 GiB VRAM; found {total_gib:.1f} GiB."
                 )
 
-        decoder_path, tokenizer_path = gpt2_runtime_paths(self.prm.get("cache_dir"))
-        self.gpt2_tokenizer = AutoTokenizer.from_pretrained(
-            str(tokenizer_path), use_fast=True, local_files_only=True
-        )
-        self.gpt2_tokenizer.pad_token = self.gpt2_tokenizer.eos_token
+        decoder_path = gpt2_decoder_path(self.prm.get("cache_dir"))
+        self.gpt2_tokenizer = tokenizer()
         # Keep trainable GPT-2 in float32.
         self.gpt2 = AutoModelForCausalLM.from_pretrained(
             str(decoder_path), low_cpu_mem_usage=True, local_files_only=True

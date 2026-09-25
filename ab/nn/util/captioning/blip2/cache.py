@@ -38,7 +38,7 @@ def _auto_build_split(cache_dir: Path, split: str) -> None:
     unlimited manifest and returns immediately without importing this.
     """
     from ab.nn.util.Const import data_dir
-    from ab.nn.tools.build_blip2_cached import build as build_cache_split
+    from ab.nn.util.captioning.tools.build_blip2_cached import build as build_cache_split
 
     coco_root = data_dir / "coco"
     print(
