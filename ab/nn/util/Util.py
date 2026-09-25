@@ -8,6 +8,8 @@ import random
 import re
 import json
 from typing import Any
+
+from ab.nn.util.ArchUID import is_model_code, source_graph, wl_hash
 import os
 import platform
 import shutil
@@ -109,6 +111,26 @@ def good(result, minimum_accuracy, duration):
 
 
 def uuid4(obj):
+    """Identity of a stored object.
+
+    For neural network code this is the architecture certificate, so the same
+    network written twice receives one identity however the code is spelled.
+    Everything else keeps the original content hash.
+
+    The test is `is_model_code`, not "did arch_uid raise". Nearly every value we
+    hash is parseable Python: a list of statistics keys, a parameter dictionary,
+    a bare name and a number all parse, and a value carrying no layers produces
+    an empty graph that would hash to one certificate shared by all of them. An
+    exception based fallback therefore never triggers, and would collapse the
+    primary keys of `stat`, `run` and `tflite` onto a handful of values.
+    """
+    if is_model_code(obj):
+        try:
+            g = source_graph(obj)
+            if len(g.keys):
+                return wl_hash(g)
+        except Exception:
+            pass
     s = re.sub('\\s', '', str(obj))
     res = hashlib.md5(s.encode())
     return res.hexdigest()

@@ -6,12 +6,13 @@ from ab.nn.util.Const import default_epoch_limit_minutes
 from pandas import DataFrame
 import functools
 
+
 from ab.nn.util.db.Query import JoinConf
 
 
 @functools.lru_cache(maxsize=10)
 def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None, epoch=None, max_rows=None, sql: Optional[JoinConf] = None, nn_prefixes=None,
-         unique_nn=False, include_nn_stats=False) -> DataFrame:
+         min_accuracy: Optional[float] = None, unique_nn=False, include_nn_stats=False, include_layer_stats=False) -> DataFrame:
     """
     Get the NN model code and all related statistics as a pandas DataFrame.
 
@@ -23,6 +24,8 @@ def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None
           If False, all matching rows are returned.
       - task, dataset, metric, nn, epoch: Optional filters to restrict the results.
       - max_rows (int): Specifies the maximum number of results.
+      - min_accuracy (float): If set, only rows with accuracy >= min_accuracy are returned.
+          Applied in the SQL query, so it composes correctly with max_rows.
       - include_nn_stats (bool): If True, include NN architecture statistics in the results.
           This adds columns like 'nn_total_params', 'nn_flops', 'nn_model_size_mb', etc.
 
@@ -45,7 +48,7 @@ def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None
           'nn_stats_meta' (dict with additional metadata), 'nn_stats_error'
     """
     dt: tuple[dict, ...] = DB_Read.data(only_best_accuracy, task=task, dataset=dataset, metric=metric, nn=nn, epoch=epoch, max_rows=max_rows,
-                                        sql=sql, nn_prefixes=nn_prefixes, unique_nn=unique_nn, include_nn_stats=include_nn_stats)
+                                        sql=sql, nn_prefixes=nn_prefixes,  min_accuracy=min_accuracy, unique_nn=unique_nn, include_nn_stats=include_nn_stats, include_layer_stats=include_layer_stats)
     return DataFrame.from_records(dt)
 
 

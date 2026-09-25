@@ -152,28 +152,6 @@ def build_vocab(dataset, threshold=5):
     idx2word = {idx: word for idx, word in enumerate(vocab)}
     return word2idx, idx2word
 
-def gpt2_collate_fn(batch):
-    """Surgical Fix: Tokenize captions using GPT2 tokenizer for decoder compatibility."""
-    import torch
-    from transformers import GPT2TokenizerFast
-    tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
-    tokenizer.pad_token = tokenizer.eos_token
-
-    images = torch.stack([item[0] for item in batch], dim=0)
-    # COCO items[1] is a list of captions. Use the first one for training.
-    raw_captions = [item[1][0] if isinstance(item[1], list) and len(item[1]) > 0 else str(item[1]) for item in batch]
-
-    tokens = tokenizer(
-        raw_captions,
-        padding=True,
-        truncation=True,
-        max_length=40,
-        return_tensors="pt",
-    )
-    # Shape: (B, seq_len) -> (B, 1, seq_len) to match existing pipeline expectations if needed, 
-    # but Blip2Fast usually handles (B, seq_len) after unsqueeze.
-    return images, tokens.input_ids
-
 def loader(transform_fn, task):
     if task != 'img-captioning':
         raise Exception(f"The task '{task}' is not implemented in this file.")
@@ -187,16 +165,24 @@ def loader(transform_fn, task):
         
         if hasattr(transform_module, 'get_dataset'):
             train_dataset = transform_module.get_dataset(split='train')
-            try:
-                val_dataset = transform_module.get_dataset(split='val')
-            except Exception:
-                val_dataset = transform_module.get_dataset(split='train')
+            # Validation must remain split-strict. Falling back to train data
+            # silently leaks training samples into evaluation and makes results
+            # irreproducible across machines.
+            val_dataset = transform_module.get_dataset(split='val')
+
+            # Cached transforms own their serialization and tokenization
+            # contract. Never impose one model's tokenizer on another model.
+            if getattr(train_dataset, 'collate_fn', None) is None:
+                raise ImportError(f"train dataset from {mod_name} must provide collate_fn")
+            if getattr(val_dataset, 'collate_fn', None) is None:
+                raise ImportError(f"val dataset from {mod_name} must provide collate_fn")
             
-            # Use GPT2 collate for transformer compatibility
-            train_dataset.collate_fn = gpt2_collate_fn
-            val_dataset.collate_fn = gpt2_collate_fn
-            
-            return (50257,), MINIMUM_ACCURACY, train_dataset, val_dataset
+            # Cached transforms own their token vocabulary. Blip2FastOpt uses
+            # OPT's 50,272 decoder classes; hard-coding GPT-2's 50,257 here
+            # leaves stale metadata and can silently accept incompatible IDs.
+            if not hasattr(transform_module, 'get_vocab_size'):
+                raise ImportError(f"get_vocab_size() missing in {mod_name}")
+            return transform_module.get_vocab_size(), MINIMUM_ACCURACY, train_dataset, val_dataset
         else:
             raise ImportError(f"get_dataset() missing in {mod_name}")
 
@@ -225,6 +211,11 @@ def loader(transform_fn, task):
     val_dataset.word2idx = word2idx
     val_dataset.idx2word = idx2word
 
+    # Explicitly select the raw COCO vocabulary decoder. A BLIP model may have
+    # installed a Hugging Face tokenizer earlier in the same process.
+    from ab.nn.util.captioning.blip2.context import clear_tokenizer
+    clear_tokenizer()
+    GLOBAL_CAPTION_VOCAB.clear()
     GLOBAL_CAPTION_VOCAB['word2idx'] = word2idx
     GLOBAL_CAPTION_VOCAB['idx2word'] = idx2word
     

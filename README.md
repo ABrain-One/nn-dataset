@@ -6,7 +6,7 @@ LEMUR - Learning, Evaluation, and Modeling for Unified Research
 
 <img src='https://abrain.one/img/lemur-nn-whit.jpg' width='25%'/>
 
-The original version of the <a href='https://github.com/ABrain-One/nn-dataset'>LEMUR dataset</a> was created by <strong>Arash Torabi Goodarzi, Roman Kochnev</strong> and <strong>Zofia Antonina Bentyn</strong> at the Computer Vision Laboratory, University of Würzburg, Germany.
+The original open-source version of the <a href='https://github.com/ABrain-One/NN-Dataset'>LEMUR dataset</a> was developed by <strong>Arash Torabi Goodarzi, Roman Kochnev</strong> and <strong>Zofia Antonina Bentyn</strong> at the Computer Vision Laboratory, University of Würzburg, Germany, under the supervision and technical guidance of <strong>Dr. Dmitry Ignatov</strong>, whose foundational work established the basis for the project.
 
 ## Contents
 
@@ -242,7 +242,7 @@ If recently added dependencies are missing in the <a href='https://hub.docker.co
 
 ## Citation
 
-If you find the LEMUR Neural Network Dataset to be useful for your research, please consider citing our <a target='_blank' href='https://arxiv.org/pdf/2504.10552'>article</a>:
+If you find the LEMUR Neural Network Dataset to be useful for your research, please consider citing our articles <a target='_blank' href='https://arxiv.org/pdf/2504.10552'>NN Dataset</a> and <a target='_blank' href='https://openaccess.thecvf.com/content/CVPR2026W/CVPR-NAS26/papers/Uzun_LEMUR_2_Unlocking_Neural_Network_Diversity_for_AI_CVPRW_2026_paper.pdf'>LEMUR 2</a>:
 ```bibtex
 @article{ABrain.NN-Dataset,
   title={LEMUR Neural Network Dataset: Towards Seamless AutoML},
