@@ -102,7 +102,7 @@ def data_withnonnullvalue(
 
 
 @functools.lru_cache(maxsize=10)
-def run_data(model_name=None, device_type=None, max_rows=None, type=None) -> DataFrame:
+def run_data(model_name=None, duration=None, device_type=None, max_rows=None, type=None) -> DataFrame:
     """
     Get comprehensive runtime and tflite analytics as a pandas DataFrame.
     
@@ -112,6 +112,7 @@ def run_data(model_name=None, device_type=None, max_rows=None, type=None) -> Dat
 
     Parameters:
       - model_name (str | None): filter by model name (FK to nn.name)
+    - duration (int | None): filter by runtime duration from the pt JSON record
       - device_type (str | None): filter by device type (only applies to run table)
       - max_rows (int | None): maximum number of results
       - type (str | None): filter by runtime: "tflite" (mobile) or "pt" (workstation, PyTorch).
@@ -139,6 +140,7 @@ def run_data(model_name=None, device_type=None, max_rows=None, type=None) -> Dat
     # Get run data
     run_recs: tuple[dict, ...] = DB_Read.run_data(
         model_name=model_name, 
+        duration=duration,
         device_type=device_type, 
         max_rows=max_rows,
         type=type

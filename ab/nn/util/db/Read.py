@@ -639,6 +639,7 @@ def data_withnonnullvalue(
 
 def run_data(
         model_name: str | None = None,
+        duration: int | None = None,
         device_type: str | None = None,
         max_rows: int | None = None,
         type: str | None = None,
@@ -653,6 +654,9 @@ def run_data(
     if model_name is not None:
         filters.append('model_name = ?')
         params.append(model_name)
+    if duration is not None:
+        filters.append('duration = ?')
+        params.append(duration)
     if device_type is not None:
         filters.append('device_type = ?')
         params.append(device_type)
