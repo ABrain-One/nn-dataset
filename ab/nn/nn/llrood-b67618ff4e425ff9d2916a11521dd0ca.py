@@ -1,0 +1,117 @@
+# Auto-generated single-file for UConv
+# Dependencies are emitted in topological order (utilities first).
+# Standard library and external imports
+import torch
+import torch.nn as nn
+
+# ---- models.common.autopad ----
+def autopad(k, p=None, d=1):  # kernel, padding, dilation
+    # Pad to 'same' shape outputs
+    if d > 1:
+        k = d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]  # actual kernel-size
+    if p is None:
+        p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
+    return p
+
+# ---- models.common.Conv ----
+class Conv(nn.Module):
+    # Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation)
+    default_act = nn.SiLU()  # default activation
+
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
+        super().__init__()
+        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+
+    def forward(self, x):
+        return self.act(self.bn(self.conv(x)))
+
+    def forward_fuse(self, x):
+        return self.act(self.conv(x))
+
+# ---- UConv (target) ----
+class UConv(nn.Module):
+    def __init__(self, c1, c_=256, c2=256):  # ch_in, number of protos, number of masks
+        super().__init__()
+
+        self.cv1 = Conv(c1, c_, k=3)
+        self.cv2 = nn.Conv2d(c_, c2, 1, 1)
+        self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+
+    def forward(self, x):
+        return self.up(self.cv2(self.cv1(x)))
+
+def supported_hyperparameters():
+    return {'lr', 'momentum'}
+
+class Net(nn.Module):
+    def __init__(self, in_shape: tuple, out_shape: tuple, prm: dict, device) -> None:
+        super().__init__()
+        self.device = device
+        self.in_channels = in_shape[1]
+        self.image_size = in_shape[2]
+        self.num_classes = out_shape[0]
+        self.learning_rate = prm['lr']
+        self.momentum = prm['momentum']
+        self.features = self.build_features()
+        
+        self.uconv = UConv(c1=64, c_=128, c2=64)
+        self.classifier = nn.Linear(64 * 8 * 8, self.num_classes)
+
+    def build_features(self):
+        layers = []
+        layers += [
+            nn.Conv2d(self.in_channels, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        ]
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        x = self.features(x)
+        B, C, H, W = x.shape
+        
+        x = torch.nn.functional.adaptive_avg_pool2d(x, (4, 4))
+        B, C, H, W = x.shape
+        
+        x = self.uconv(x)
+        
+        x = x.view(x.size(0), -1)
+        x = self.classifier(x)
+        return x
+
+    def train_setup(self, prm: dict):
+        # Layerwise LR strategy: llr3_4grp_geo_splits
+        _llr_params = list(self.named_parameters())
+        _llr_n = len(_llr_params)
+        _llr_ratios = [0.5, 0.25, 0.125, 0.125]
+        _llr_mults = [0.1, 0.3, 0.6, 1]
+        _llr_groups = []
+        _llr_start = 0
+        for _llr_i, (_llr_r, _llr_m) in enumerate(zip(_llr_ratios, _llr_mults)):
+            if _llr_i < len(_llr_ratios) - 1:
+                _llr_size = max(1, round(_llr_n * _llr_r))
+            else:
+                _llr_size = _llr_n - _llr_start
+            _llr_end = min(_llr_start + _llr_size, _llr_n)
+            if _llr_start < _llr_n:
+                _llr_groups.append({'params': [p for _, p in _llr_params[_llr_start:_llr_end]], 'lr': prm.get('lr', 0.01) * _llr_m})
+            _llr_start = _llr_end
+        self.optimizer = torch.optim.SGD(_llr_groups, lr=prm['lr'], momentum=prm['momentum'])
+        self.criterion = nn.CrossEntropyLoss()
+
+    def learn(self, data_roll):
+        for data, target in data_roll:
+            data, target = data.to(self.device), target.to(self.device)
+            self.optimizer.zero_grad()
+            output = self.forward(data)
+            loss = self.criterion(output, target)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+            self.optimizer.step()
