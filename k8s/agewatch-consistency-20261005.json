@@ -1,0 +1,98 @@
+{
+  "apiVersion": "batch/v1",
+  "kind": "Job",
+  "metadata": {
+    "name": "b-a-kumar-agewatch-consistency-20261005",
+    "namespace": "b-a-kumar"
+  },
+  "spec": {
+    "backoffLimit": 0,
+    "template": {
+      "spec": {
+        "restartPolicy": "Never",
+        "securityContext": {
+          "runAsUser": 1051,
+          "runAsGroup": 1051
+        },
+        "containers": [
+          {
+            "name": "train",
+            "image": "abrainone/ai-linux:cu12.6.3-latest",
+            "imagePullPolicy": "IfNotPresent",
+            "command": [
+              "/bin/bash",
+              "-c"
+            ],
+            "args": [
+              "set -euo pipefail; cd /shared/ssd/home/b-a-kumar/nn-dataset; python3 -u /shared/ssd/home/b-a-kumar/agewatch-consistency-20261005/train_mobile_consistency.py --checkpoint /shared/ssd/home/b-a-kumar/nn-dataset/age-estimation-visualization/models/MobileAgeNet/best_model.pth --output /shared/ssd/home/b-a-kumar/agewatch-consistency-20261005/run --epochs 20 --workers 4 --batch-size 32 2>&1 | tee /shared/ssd/home/b-a-kumar/agewatch-consistency-20261005/training.log"
+            ],
+            "env": [
+              {
+                "name": "HOME",
+                "value": "/shared/ssd/home/b-a-kumar"
+              },
+              {
+                "name": "HF_HOME",
+                "value": "/shared/ssd/home/b-a-kumar/.cache/huggingface"
+              },
+              {
+                "name": "PYTHONPATH",
+                "value": "/shared/ssd/home/b-a-kumar/nn-dataset"
+              },
+              {
+                "name": "PYTHONUNBUFFERED",
+                "value": "1"
+              },
+              {
+                "name": "HF_HUB_OFFLINE",
+                "value": "1"
+              },
+              {
+                "name": "HF_DATASETS_OFFLINE",
+                "value": "1"
+              }
+            ],
+            "resources": {
+              "requests": {
+                "nvidia.com/gpu": 1,
+                "cpu": 8,
+                "memory": "30Gi"
+              },
+              "limits": {
+                "nvidia.com/gpu": 1,
+                "cpu": 8,
+                "memory": "60Gi"
+              }
+            },
+            "volumeMounts": [
+              {
+                "name": "shared-ssd",
+                "mountPath": "/shared/ssd"
+              },
+              {
+                "name": "shm",
+                "mountPath": "/dev/shm"
+              }
+            ]
+          }
+        ],
+        "volumes": [
+          {
+            "name": "shared-ssd",
+            "hostPath": {
+              "path": "/shared/ssd",
+              "type": "Directory"
+            }
+          },
+          {
+            "name": "shm",
+            "emptyDir": {
+              "medium": "Memory",
+              "sizeLimit": "8Gi"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
