@@ -25,6 +25,76 @@ def get_max_depth(module, depth=0):
     return max(get_max_depth(child, depth + 1) for child in children)
 
 
+# Backward-function names that carry learnable weights. A node whose type name
+# contains one of these counts as one "layer" on the path; everything else
+# (activations, norms, pooling, reshapes, adds) is transparent.
+_DEPTH_OPS = ('ConvolutionBackward', 'ConvolutionTransposeBackward',
+              'CudnnConvolutionBackward', 'MkldnnConvolutionBackward',
+              'SlowConvTranspose', 'ThnnConv',
+              'AddmmBackward', 'MmBackward', 'BmmBackward', 'MatmulBackward',
+              'LinearBackward')
+
+
+def _first_output_tensor(out):
+    '''First floating-point tensor inside an arbitrary model output.'''
+    if torch.is_tensor(out):
+        return out if out.is_floating_point() else None
+    if isinstance(out, dict):
+        out = list(out.values())
+    if isinstance(out, (list, tuple)):
+        for o in out:
+            t = _first_output_tensor(o)
+            if t is not None:
+                return t
+    return None
+
+
+def get_nn_depth(model, input_tensor):
+    '''Real network depth: the longest chain of weight-bearing operations from
+    input to output, measured on the autograd graph.
+
+    This is the quantity the name "ResNet-50" refers to. It differs from
+    get_max_depth, which is the nesting depth of the nn.Module tree (ResNet-50
+    nests only ~4 levels), and from total_layers, which counts modules whether
+    or not they lie on the same path. Returns -1 when the graph is unavailable,
+    e.g. the forward pass fails at this input size.
+    '''
+    was_training = model.training
+    model.eval()
+    try:
+        x = input_tensor.detach().clone().float().requires_grad_(True)
+        with torch.enable_grad():
+            out = model(x)
+        t = _first_output_tensor(out)
+        if t is None or t.grad_fn is None:
+            return -1
+        # iterative longest path over the autograd DAG; recursion overflows on
+        # deep graphs such as DenseNet
+        memo, stack = {}, [(t.grad_fn, False)]
+        while stack:
+            node, done = stack.pop()
+            if node is None:
+                continue
+            if done:
+                best = 0
+                for nxt, _ in node.next_functions:
+                    if nxt is not None:
+                        best = max(best, memo.get(nxt, 0))
+                name = type(node).__name__
+                memo[node] = best + (1 if any(k in name for k in _DEPTH_OPS) else 0)
+            elif node not in memo:
+                stack.append((node, True))
+                for nxt, _ in node.next_functions:
+                    if nxt is not None and nxt not in memo:
+                        stack.append((nxt, False))
+        return int(memo.get(t.grad_fn, 0))
+    except Exception:
+        return -1
+    finally:
+        model.train(was_training)
+
+
+
 def analyze_conv_layers(model):
     '''Analyze convolutional layers.'''
     conv_layers = [m for m in model.modules()
@@ -206,7 +276,8 @@ def analyze_model_comprehensive(model: nn.Module, nn_code: str, input_tensor) ->
             layer_types[layer_type] = layer_types.get(layer_type, 0) + 1
 
     # 4. Depth
-    max_depth = get_max_depth(model)
+    max_depth = get_max_depth(model)        # nn.Module nesting depth
+    nn_depth = get_nn_depth(model, input_tensor)  # real NN depth (longest weighted path)
 
     # 5. Activation functions
     activations = {}
@@ -271,6 +342,7 @@ def analyze_model_comprehensive(model: nn.Module, nn_code: str, input_tensor) ->
     return booleans_to_binary(({'total_layers': total_layers,
                                 'leaf_layers': leaf_layers,
                                 'max_depth': max_depth,
+                                'nn_depth': nn_depth,
                                 'total_params': total_params,
                                 'trainable_params': trainable_params,
                                 'frozen_params': frozen_params
