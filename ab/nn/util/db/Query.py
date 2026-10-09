@@ -408,6 +408,7 @@ def attach_arch_summaries(selected: list[dict]) -> None:
             "total_layers": r.get("nn_total_layers"),
             "leaf_layers": r.get("nn_leaf_layers"),
             "max_depth": r.get("nn_max_depth"),
+            "nn_depth": r.get("nn_nn_depth"),
             "flops": r.get("nn_flops"),
             "model_size_mb": r.get("nn_model_size_mb"),
             "dropout_count": r.get("nn_dropout_count"),

@@ -609,6 +609,7 @@ def save_nn_stat(nn_name: str, prm_id: str, stats: dict):
                     total_layers = ?,
                     leaf_layers = ?,
                     max_depth = ?,
+                    nn_depth = ?,
                     total_params = ?,
                     trainable_params = ?,
                     frozen_params = ?,
@@ -640,6 +641,7 @@ def save_nn_stat(nn_name: str, prm_id: str, stats: dict):
                     stats.get('total_layers'),
                     stats.get('leaf_layers'),
                     stats.get('max_depth'),
+                    stats.get('nn_depth'),
                     stats.get('total_params'),
                     stats.get('trainable_params'),
                     stats.get('frozen_params'),
@@ -687,7 +689,7 @@ def save_nn_stat(nn_name: str, prm_id: str, stats: dict):
                 cursor.execute(f"""
                 INSERT INTO {nn_stat_table} (
                     id, nn_name, prm_id,
-                    total_layers, leaf_layers, max_depth,
+                    total_layers, leaf_layers, max_depth, nn_depth,
                     total_params, trainable_params, frozen_params,
                     flops, model_size_mb, buffer_size_mb, total_memory_mb,
                     dropout_count, has_attention, has_residual_connections,
@@ -697,12 +699,13 @@ def save_nn_stat(nn_name: str, prm_id: str, stats: dict):
                     code_length, num_classes_defined, num_functions_defined,
                     uses_sequential, uses_modulelist, uses_moduledict,
                     meta_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     id_val, nn_name, prm_id,
                     stats.get('total_layers'),
                     stats.get('leaf_layers'),
                     stats.get('max_depth'),
+                    stats.get('nn_depth'),
                     stats.get('total_params'),
                     stats.get('trainable_params'),
                     stats.get('frozen_params'),

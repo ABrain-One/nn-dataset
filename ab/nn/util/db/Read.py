@@ -178,7 +178,9 @@ def data(only_best_accuracy: bool = False,
       - 'nn_frozen_params': int       (frozen parameters)
       - 'nn_total_layers': int        (total number of layers)
       - 'nn_leaf_layers': int         (number of leaf layers)
-      - 'nn_max_depth': int           (maximum depth of the model)
+      - 'nn_max_depth': int           (nesting depth of the nn.Module tree)
+      - 'nn_nn_depth': int | None     (real network depth: longest chain of
+                                       weight-bearing ops; None if unmeasurable)
       - 'nn_flops': int               (floating point operations)
       - 'nn_model_size_mb': float     (model size in MB)
       - 'nn_buffer_size_mb': float    (buffer size in MB)
@@ -245,6 +247,7 @@ def data(only_best_accuracy: bool = False,
                    ns.total_layers AS nn_total_layers,
                    ns.leaf_layers AS nn_leaf_layers,
                    ns.max_depth AS nn_max_depth,
+                   ns.nn_depth AS nn_nn_depth,
                    ns.flops AS nn_flops,
                    ns.model_size_mb AS nn_model_size_mb,
                    ns.buffer_size_mb AS nn_buffer_size_mb,
@@ -329,6 +332,7 @@ _NN_STAT_OUTPUT_TO_COL: dict[str, str] = {
     'nn_total_layers': 'total_layers',
     'nn_leaf_layers': 'leaf_layers',
     'nn_max_depth': 'max_depth',
+    'nn_nn_depth': 'nn_depth',
     'nn_flops': 'flops',
     'nn_model_size_mb': 'model_size_mb',
     'nn_buffer_size_mb': 'buffer_size_mb',
@@ -541,6 +545,7 @@ def data_withnonnullvalue(
                    ns.total_layers AS nn_total_layers,
                    ns.leaf_layers AS nn_leaf_layers,
                    ns.max_depth AS nn_max_depth,
+                   ns.nn_depth AS nn_nn_depth,
                    ns.flops AS nn_flops,
                    ns.model_size_mb AS nn_model_size_mb,
                    ns.buffer_size_mb AS nn_buffer_size_mb,
@@ -878,7 +883,7 @@ def nn_stat_data(
         cur.execute(
             f"""
             SELECT id, nn_name, prm_id,
-                   total_layers, leaf_layers, max_depth,
+                   total_layers, leaf_layers, max_depth, nn_depth,
                    total_params, trainable_params, frozen_params,
                    flops, model_size_mb, buffer_size_mb, total_memory_mb,
                    dropout_count, has_attention, has_residual_connections,

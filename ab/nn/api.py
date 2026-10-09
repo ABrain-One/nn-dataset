@@ -37,7 +37,7 @@ def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None
 
         If include_nn_stats=True, additional columns are included:
           'nn_total_params', 'nn_trainable_params', 'nn_frozen_params',
-          'nn_total_layers', 'nn_leaf_layers', 'nn_max_depth',
+          'nn_total_layers', 'nn_leaf_layers', 'nn_max_depth', 'nn_nn_depth',
           'nn_flops', 'nn_model_size_mb', 'nn_buffer_size_mb', 'nn_total_memory_mb',
           'nn_dropout_count', 'nn_has_attention', 'nn_has_residual',
           'nn_is_resnet_like', 'nn_is_vgg_like', 'nn_is_inception_like',
@@ -224,7 +224,7 @@ def nn_stat_data(nn_name=None, prm_id=None, max_rows=None) -> DataFrame:
     Returns:
       - A pandas DataFrame with columns:
         'id', 'nn_name', 'prm_id',
-        'total_layers', 'leaf_layers', 'max_depth',
+        'total_layers', 'leaf_layers', 'max_depth', 'nn_depth',
         'total_params', 'trainable_params', 'frozen_params',
         'flops', 'model_size_mb', 'buffer_size_mb', 'total_memory_mb',
         'dropout_count', 'has_attention', 'has_residual_connections',

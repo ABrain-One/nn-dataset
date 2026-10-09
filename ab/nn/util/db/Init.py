@@ -39,6 +39,21 @@ def create_param_table(name, cursor):
 
 
 
+# Columns added to nn_stat after it first shipped, as (name, declaration).
+# Appending to this tuple is all that is needed to roll a new metric out to
+# databases that already exist.
+_NN_STAT_LATE_COLUMNS = (('nn_depth', 'INTEGER'),)
+
+
+def _nn_stat_added_columns(cursor):
+    """Add any nn_stat column that a pre-existing database does not yet have."""
+    have = {row[1] for row in cursor.execute(f"PRAGMA table_info({nn_stat_table})")}
+    for name, decl in _NN_STAT_LATE_COLUMNS:
+        if name not in have:
+            cursor.execute(f"ALTER TABLE {nn_stat_table} ADD COLUMN {name} {decl}")
+            print(f"nn_stat: added column {name} {decl}")
+
+
 def init_db():
     """
     Initialize the SQLite database, create tables, and add indexes for optimized reads.
@@ -223,6 +238,7 @@ def init_db():
         total_layers INTEGER,
         leaf_layers INTEGER,
         max_depth INTEGER,
+        nn_depth INTEGER,
         total_params INTEGER,
         trainable_params INTEGER,
         frozen_params INTEGER,
@@ -252,6 +268,11 @@ def init_db():
         FOREIGN KEY (nn_name) REFERENCES nn (name) ON DELETE CASCADE
     )
     """)
+
+    # Columns added after the table first shipped. CREATE TABLE IF NOT EXISTS
+    # leaves an existing database untouched, so a new metric needs an explicit
+    # migration or it is silently missing on every database but a fresh one.
+    _nn_stat_added_columns(cursor)
 
     # Indexes for NN statistics
     cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{nn_stat_table}_nn ON {nn_stat_table} (nn_name);")
