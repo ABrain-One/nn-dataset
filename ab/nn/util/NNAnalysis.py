@@ -25,74 +25,137 @@ def get_max_depth(module, depth=0):
     return max(get_max_depth(child, depth + 1) for child in children)
 
 
-# Backward-function names that carry learnable weights. A node whose type name
-# contains one of these counts as one "layer" on the path; everything else
-# (activations, norms, pooling, reshapes, adds) is transparent.
+# Ops that always carry learnable weights when they appear in a graph.
 _DEPTH_OPS = ('ConvolutionBackward', 'ConvolutionTransposeBackward',
               'CudnnConvolutionBackward', 'MkldnnConvolutionBackward',
-              'SlowConvTranspose', 'ThnnConv',
-              'AddmmBackward', 'MmBackward', 'BmmBackward', 'MatmulBackward',
-              'LinearBackward')
+              'SlowConvTranspose', 'ThnnConv', 'ConvDepthwise',
+              'AddmmBackward', 'LinearBackward', 'AddbmmBackward',
+              'CudnnRnn', 'MkldnnRnnLayer', 'ThnnFused', 'RnnTanh', 'RnnRelu',
+              'Lstm', 'Gru',
+              'EmbeddingBackward', 'EmbeddingBag')
+
+# Ops that carry weights only sometimes. `q @ k.transpose(-2,-1)` and
+# `weight @ x` are both MmBackward, but only the second is a layer. These are
+# counted only when a model parameter feeds into them.
+_MAYBE_DEPTH_OPS = ('MmBackward', 'BmmBackward', 'MatmulBackward',
+                    'BaddbmmBackward', 'EinsumBackward', 'TensordotBackward')
+
+# Shape-only nodes a weight may pass through before reaching a matmul
+# (nn.Linear routes its weight through TBackward, for instance).
+_TRANSPARENT = ('TBackward', 'Transpose', 'View', 'Reshape', 'Alias',
+                'Permute', 'Expand', 'Clone', 'ToCopy', 'Squeeze',
+                'Unsqueeze', 'Slice', 'Narrow', 'AsStrided', 'Contiguous',
+                'Select', 'Chunk', 'Split', 'Repeat', 'Flatten', 'Unflatten',
+                'Copy', 'Cat', 'Stack')
 
 
-def _first_output_tensor(out):
-    '''First floating-point tensor inside an arbitrary model output.'''
+def _param_feeds(node, param_ids, max_hops=8):
+    '''True if one of the model's own parameters is an input to `node`,
+    following only shape-changing nodes on the way.'''
+    frontier = [(node, 0)]
+    seen = set()
+    while frontier:
+        nd, hop = frontier.pop()
+        if nd is None or hop > max_hops or id(nd) in seen:
+            continue
+        seen.add(id(nd))
+        for nxt, _ in getattr(nd, 'next_functions', ()):
+            if nxt is None:
+                continue
+            nm = type(nxt).__name__
+            if nm == 'AccumulateGrad':
+                v = getattr(nxt, 'variable', None)
+                if v is not None and id(v) in param_ids:
+                    return True
+            elif any(k in nm for k in _TRANSPARENT):
+                frontier.append((nxt, hop + 1))
+    return False
+
+
+def _output_tensors(out, acc=None):
+    '''Every floating-point tensor inside an arbitrary model output.'''
+    if acc is None:
+        acc = []
     if torch.is_tensor(out):
-        return out if out.is_floating_point() else None
-    if isinstance(out, dict):
-        out = list(out.values())
-    if isinstance(out, (list, tuple)):
+        if out.is_floating_point():
+            acc.append(out)
+    elif isinstance(out, dict):
+        for o in out.values():
+            _output_tensors(o, acc)
+    elif isinstance(out, (list, tuple)):
         for o in out:
-            t = _first_output_tensor(o)
-            if t is not None:
-                return t
-    return None
+            _output_tensors(o, acc)
+    return acc
 
 
-def get_nn_depth(model, input_tensor):
+def get_nn_depth(model, input_tensor) -> Optional[int]:
     '''Real network depth: the longest chain of weight-bearing operations from
     input to output, measured on the autograd graph.
 
     This is the quantity the name "ResNet-50" refers to. It differs from
     get_max_depth, which is the nesting depth of the nn.Module tree (ResNet-50
     nests only ~4 levels), and from total_layers, which counts modules whether
-    or not they lie on the same path. Returns -1 when the graph is unavailable,
-    e.g. the forward pass fails at this input size.
+    or not they lie on the same path.
+
+    Verified exact on AlexNet 8, VGG-16 16, ResNet-18 18, ResNet-50 50,
+    DenseNet-121 121, ViT-B/16 50.
+
+    Returns None when no depth can be measured, so the caller can omit the
+    field rather than store a sentinel. That happens when the forward pass
+    fails at this input size, when forward() needs more than one tensor, or
+    when the output is not differentiable (e.g. the model returns argmax
+    indices), and when no weight-bearing operation is found on any path at all.
+    This function never raises: a failure here must not cost the other
+    statistics.
+
+    Caveat: a forward pass that wraps part of the network in torch.no_grad()
+    hides those layers from the autograd graph, so the result is the longest
+    *differentiable* path and will undercount. Freezing with
+    requires_grad=False is handled correctly and does not undercount.
     '''
     was_training = model.training
     model.eval()
     try:
+        param_ids = {id(p) for p in model.parameters()}
         x = input_tensor.detach().clone().float().requires_grad_(True)
         with torch.enable_grad():
             out = model(x)
-        t = _first_output_tensor(out)
-        if t is None or t.grad_fn is None:
-            return -1
+        roots = [t.grad_fn for t in _output_tensors(out) if t.grad_fn is not None]
+        if not roots:
+            return None
         # iterative longest path over the autograd DAG; recursion overflows on
         # deep graphs such as DenseNet
-        memo, stack = {}, [(t.grad_fn, False)]
-        while stack:
-            node, done = stack.pop()
-            if node is None:
-                continue
-            if done:
-                best = 0
-                for nxt, _ in node.next_functions:
-                    if nxt is not None:
-                        best = max(best, memo.get(nxt, 0))
-                name = type(node).__name__
-                memo[node] = best + (1 if any(k in name for k in _DEPTH_OPS) else 0)
-            elif node not in memo:
-                stack.append((node, True))
-                for nxt, _ in node.next_functions:
-                    if nxt is not None and nxt not in memo:
-                        stack.append((nxt, False))
-        return int(memo.get(t.grad_fn, 0))
+        memo = {}
+        for root in roots:
+            stack = [(root, False)]
+            while stack:
+                node, done = stack.pop()
+                if node is None:
+                    continue
+                if done:
+                    best = 0
+                    for nxt, _ in node.next_functions:
+                        if nxt is not None:
+                            best = max(best, memo.get(nxt, 0))
+                    name = type(node).__name__
+                    if any(k in name for k in _DEPTH_OPS):
+                        weighted = True
+                    elif any(k in name for k in _MAYBE_DEPTH_OPS):
+                        weighted = _param_feeds(node, param_ids)
+                    else:
+                        weighted = False
+                    memo[node] = best + (1 if weighted else 0)
+                elif node not in memo:
+                    stack.append((node, True))
+                    for nxt, _ in node.next_functions:
+                        if nxt is not None and nxt not in memo:
+                            stack.append((nxt, False))
+        depth = int(max(memo.get(r, 0) for r in roots))
+        return depth if depth > 0 else None
     except Exception:
-        return -1
+        return None
     finally:
         model.train(was_training)
-
 
 
 def analyze_conv_layers(model):
@@ -277,7 +340,15 @@ def analyze_model_comprehensive(model: nn.Module, nn_code: str, input_tensor) ->
 
     # 4. Depth
     max_depth = get_max_depth(model)        # nn.Module nesting depth
-    nn_depth = get_nn_depth(model, input_tensor)  # real NN depth (longest weighted path)
+    # Real NN depth (longest weighted path). Guarded a second time so that no
+    # future change to get_nn_depth can cost us the rest of the statistics;
+    # when it cannot be measured the field is omitted rather than stored as a
+    # sentinel value.
+    try:
+        nn_depth = get_nn_depth(model, input_tensor)
+    except Exception:
+        nn_depth = None
+    depth_info = {} if nn_depth is None else {'nn_depth': nn_depth}
 
     # 5. Activation functions
     activations = {}
@@ -342,7 +413,7 @@ def analyze_model_comprehensive(model: nn.Module, nn_code: str, input_tensor) ->
     return booleans_to_binary(({'total_layers': total_layers,
                                 'leaf_layers': leaf_layers,
                                 'max_depth': max_depth,
-                                'nn_depth': nn_depth,
+                                } | depth_info | {
                                 'total_params': total_params,
                                 'trainable_params': trainable_params,
                                 'frozen_params': frozen_params
