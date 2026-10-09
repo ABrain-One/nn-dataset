@@ -13,10 +13,10 @@ rather than stored as a sentinel; the model keeps all its other statistics and
 is listed at the end. A stale nn_depth of -1 written by an earlier version is
 treated as absent and removed if it still cannot be measured.
 
-    python util/py/add_nn_depth.py                  # all models
-    python util/py/add_nn_depth.py --nn ResNet      # one model
-    python util/py/add_nn_depth.py --limit 50       # smoke test
-    python util/py/add_nn_depth.py --redo           # recompute nn_depth too
+    python -m util.py.add_nn_depth                  # all models
+    python -m util.py.add_nn_depth --nn ResNet      # one model
+    python -m util.py.add_nn_depth --limit 50       # smoke test
+    python -m util.py.add_nn_depth --redo           # recompute nn_depth too
 """
 import argparse
 import json
