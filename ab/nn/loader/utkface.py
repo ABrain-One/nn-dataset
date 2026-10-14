@@ -8,6 +8,7 @@ from collections import Counter
 import torch
 from torch.utils.data import Dataset, Subset
 from datasets import load_dataset
+from torchvision import transforms as T
 from ab.nn.util.Const import data_dir
 
 __norm_mean = (0.485, 0.456, 0.406)
@@ -61,6 +62,13 @@ def _stratified_split_indices(ages, train_ratio=0.70, val_ratio=0.10, seed=42):
 
 def loader(transform_fn, task):
     transform = transform_fn((__norm_mean, __norm_dev))
+    # Validation/checkpoint selection must not reuse random training augmentation.
+    # Match the deployed age model's RGB, bilinear 224x224, ImageNet input.
+    evaluation_transform = T.Compose([
+        T.Resize((224, 224), interpolation=T.InterpolationMode.BILINEAR),
+        T.ToTensor(),
+        T.Normalize(__norm_mean, __norm_dev),
+    ])
     os.makedirs(_cache_dir, exist_ok=True)
 
     dataset = load_dataset(
@@ -70,13 +78,14 @@ def loader(transform_fn, task):
     )
 
     full_dataset = _UTKFace(dataset, transform=transform)
+    evaluation_dataset = _UTKFace(full_dataset.dataset, transform=evaluation_transform)
 
     ages = [float(item['age']) for item in full_dataset.dataset]
     train_idx, val_idx, test_idx = _stratified_split_indices(ages, train_ratio=0.70, val_ratio=0.10, seed=42)
 
     train_ds = Subset(full_dataset, train_idx)
-    val_ds = Subset(full_dataset, val_idx)
-    test_ds = Subset(full_dataset, test_idx)
+    val_ds = Subset(evaluation_dataset, val_idx)
+    test_ds = Subset(evaluation_dataset, test_idx)
 
     # Attach held-out test set for final evaluation in your Train.py
     val_ds.held_out_test = test_ds
