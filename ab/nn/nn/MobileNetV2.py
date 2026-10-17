@@ -58,19 +58,80 @@ def supported_hyperparameters():
 class Net(nn.Module):
 
     def train_setup(self, prm):
+        """
+          - The augment schedule is validated with renormalize policy.
+          - The loss criterion uses reduction='none' so learn() can support both a scalar lam and a per-sample lam tensor.
+       
+        """
         self.to(self.device)
-        self.criteria = (nn.CrossEntropyLoss().to(self.device),)
+        # elementwise CE.
+        self.criteria = (nn.CrossEntropyLoss(reduction='none').to(self.device),)
         self.optimizer = torch.optim.SGD(self.parameters(), lr=prm['lr'], momentum=prm['momentum'])
+        # Cosine LR decay over the full run.
+        # For 1-epoch proxy runs T_max=1 => constant lr.
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=max(int(prm.get('epoch', 1)), 1))
+
+        self.batch_transform_fn = None
+        self.augment_configs = None
+
+        if prm.get('augment'):
+            try:
+                from ab.nn.transform.base.BatchTransform import BatchTransform as bt_mod
+                batch_transform = bt_mod.batch_transform
+                validate_schedule = getattr(bt_mod, 'validate_schedule', None)
+            except ImportError as e:
+                raise RuntimeError(f"Failed to load batch_transform: {e}")
+
+
+            config = prm.get('augment')
+            if validate_schedule is not None:
+                config, report = validate_schedule(config, policy="renormalize")
+                if config is None:
+                    raise ValueError(f"Invalid augment schedule: {report['reason']}")
+                if report['repairs']:
+                    print(f"Augment schedule repaired: {report['repairs']}")
+
+            self.batch_transform_fn = batch_transform
+            self.augment_configs = config
+            print(f"Augmentation loaded: {self.augment_configs}")
+
+
 
     def learn(self, train_data):
-        for inputs, labels in train_data:
+        """
+        loss_i = lam_i * CE(out_i, a_i) + (1 - lam_i) * CE(out_i, b_i).
+        With lam = 1.0 and target_b = target_a, reduces to standard cross-entropy.
+        """
+        total_batches = len(train_data)
+        ce = self.criteria[0]  # reduction='none' -> per-sample loss vector
+
+        for batch_idx, (inputs, labels) in enumerate(train_data):
             inputs, labels = inputs.to(self.device), labels.to(self.device)
             self.optimizer.zero_grad()
-            outputs = self(inputs)
-            loss = self.criteria[0](outputs, labels)
+
+            if self.batch_transform_fn:
+                inputs, target_a, target_b, lam = self.batch_transform_fn(
+                    inputs, labels, batch_idx, total_batches, self.augment_configs
+                )
+                outputs = self(inputs)
+                if torch.is_tensor(lam):
+                    lam = lam.to(self.device).float().clamp(0.0, 1.0)  # [B] or scalar tensor
+                loss_vec = lam * ce(outputs, target_a) + (1.0 - lam) * ce(outputs, target_b)
+                loss = loss_vec.mean()
+            else:
+                outputs = self(inputs)
+                loss = ce(outputs, labels).mean()
+
             loss.backward()
             nn.utils.clip_grad_norm_(self.parameters(), 3)
             self.optimizer.step()
+
+        # one scheduler step per epoch.
+        if getattr(self, 'scheduler', None) is not None:
+            self.scheduler.step()
+
+
 
     def __init__(self, in_shape: tuple, out_shape: tuple, prm: dict, device: torch.device) -> None:
         super().__init__()
