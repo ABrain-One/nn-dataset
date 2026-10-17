@@ -456,7 +456,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--report-path",
-        default="ab/nn/imp/TFLITE_REPORT_AGE_EPOCH50.json",
+        default="ab/nn/stat/imp/TFLITE_REPORT_AGE_EPOCH50.json",
         help="JSON report output path",
     )
     parser.add_argument(

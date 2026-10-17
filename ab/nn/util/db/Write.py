@@ -13,7 +13,7 @@ from tqdm import tqdm
 from ab.nn.util.Util import *
 from ab.nn.util.db.Init import init_db, sql_conn, close_conn
 from ab.nn.util.hf.DB_from_HF import db_from_hf
-from ab.nn.util.Const import nn_stat_table, stat_run_tflite_fp32_dir, stat_run_tflite_int8_dir, run_table, tflite_table, prun_table, stat_run_pt_dir, train_stat_table
+from ab.nn.util.Const import nn_stat_table, stat_run_tflite_fp32_dir, stat_run_tflite_int8_dir, stat_run_pt_fp32_dir, run_table, tflite_table, prun_table, stat_run_pt_dir, train_stat_table
 from ab.nn.util.db.build_nn_similarity import upsert_minhash, upsert_minhash_batch
 
 
@@ -83,7 +83,7 @@ def init_population():
 def code_to_db(cursor, table_name, code=None, code_file=None, force_name = None):
     # If the model does not exist, insert it with a new UUID
     if code_file:
-        nm = code_file.stem 
+        nm = code_file.stem
     elif force_name is None:
         nm = uuid4(code)
     else:
@@ -91,18 +91,39 @@ def code_to_db(cursor, table_name, code=None, code_file=None, force_name = None)
     if not code:
         with open(code_file, 'r', encoding='utf-8') as file:
             code = file.read()
-    id_val = uuid4(code)
     # Check if the model exists in the database
     cursor.execute(f"SELECT code FROM {table_name} WHERE name = ?", (nm,))
     existing_entry = cursor.fetchone()
+    # The identifier is computed only where a row is actually written. This
+    # function is reached once per recorded run rather than once per model, and
+    # identifying an architecture is no longer a few microseconds, so hashing
+    # before the existence check would dominate the import.
     if existing_entry:
         # If model exists, update the code if it has changed
         existing_code = existing_entry[0]
         if existing_code != code:
             print(f"Updating code for model: {nm}")
-            cursor.execute("UPDATE nn SET code = ?, id = ? WHERE name = ?", (code, id_val, nm))
+            # The table was hard-coded to `nn` here, so updating a changed
+            # transform or metric wrote to the wrong table.
+            cursor.execute(f"UPDATE {table_name} SET code = ?, id = ? WHERE name = ?",
+                           (code, uuid4(code), nm))
     else:
-        cursor.execute(f"INSERT INTO {table_name} (name, code, id) VALUES (?, ?, ?)", (nm, code, id_val))
+        id_val = uuid4(code)
+        if table_name == 'nn':
+            # `id` identifies the architecture, so the same network arriving under
+            # a second name is a duplicate. The database is built from the file
+            # system and anyone can add a file, so this is the only place that
+            # sees every model however it arrived. The stored model is kept and
+            # its name returned, which attaches the newcomer's statistics to it.
+            # The existing row is never deleted: every statistics table references
+            # nn(name) ON DELETE CASCADE, so removing it would discard that
+            # model's recorded history.
+            cursor.execute("SELECT name FROM nn WHERE id = ?", (id_val,))
+            stored = cursor.fetchone()
+            if stored:
+                return stored[0]
+        cursor.execute(f"INSERT INTO {table_name} (name, code, id) VALUES (?, ?, ?)",
+                       (nm, code, id_val))
     return nm
 
 
@@ -112,8 +133,13 @@ def populate_code_table(table_name, cursor, name=None):
     """
     code_dir = nn_path(table_name)
     code_files = [code_dir / f"{name}.py"] if name else [Path(f) for f in code_dir.iterdir() if f.is_file() and f.suffix == '.py' and f.name != '__init__.py']
+    resolved = None
     for code_file in code_files:
-        code_to_db(cursor, table_name, code_file=code_file)
+        resolved = code_to_db(cursor, table_name, code_file=code_file)
+    # The name under which the code is actually stored, which differs from the
+    # one asked for when this architecture was already present. Callers must use
+    # it, or they write statistics against a model that was never inserted.
+    return resolved
     # print(f"{table_name} added/updated in the `{table_name}` table: {[f.stem for f in code_files]}")
 
 
@@ -301,7 +327,11 @@ def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
     prm = dict(prm)
 
     # Extract grouped training diagnostics before prm-table insert
-    train_stat = prm.pop('train_stat', {})
+    train_stat = dict(prm.pop('train_stat', {}) or {})
+    if train_stat.get('epoch_max') is None:
+        epoch_max = prm.get('epoch_max')
+        if epoch_max is not None:
+            train_stat['epoch_max'] = epoch_max
     prm.pop('layer_stat', None)
 
     transform = prm['transform']
@@ -349,8 +379,9 @@ def json_train_to_db():
             try:
                 with open(model_stat_file, 'r', encoding='utf-8', errors='replace') as f:
                     for trial in json.load(f):
-                        _, _, metric, nn = sub_config = conf_to_names(sub_config_str)
-                        populate_code_table('nn', cursor, name=nn)
+                        task, dataset, metric, nn = conf_to_names(sub_config_str)
+                        nn = populate_code_table('nn', cursor, name=nn) or nn
+                        sub_config = (task, dataset, metric, nn)
                         # Handle comma-separated metrics (e.g., "bleu,meteor,cider")
                         for single_metric in metric.split(','):
                             populate_code_table('metric', cursor, name=single_metric.strip())
@@ -426,7 +457,16 @@ def json_train_to_db():
                                     file=sys.stderr,
                                 )
             except Exception as e:
-                print(f"Warning: skipping JSON file {model_stat_file}: {e}", file=sys.stderr)
+                message = f"Error: skipping JSON file {model_stat_file}: {e}"
+                print(message, file=sys.stderr)
+                with open(ab_root_path / 'error.txt', 'a') as f:
+                    print(message, file=f)
+                    f.flush()
+
+                # # Delete files that do not have the corresponding NN code. Uncomment and use this only when you are 100% sure this is the case.
+                # import shutil
+                # shutil.rmtree(model_stat_file.parent, ignore_errors=True)
+
     close_conn(conn)
     print("All statistics reloaded successfully.")
 
@@ -504,9 +544,13 @@ def save_results(config_ext: tuple[str, str, str, str, int], prm: dict, *, nn_co
     _, _, metric, nn = config_ext[:4]
 
     if nn_code is None:
-        populate_code_table('nn', cursor, name=nn)
+        stored = populate_code_table('nn', cursor, name=nn)
     else:
-        code_to_db(cursor, 'nn', code=nn_code, force_name=nn)
+        stored = code_to_db(cursor, 'nn', code=nn_code, force_name=nn)
+    # This architecture may already be stored under another name; the statistics
+    # belong to the model that is in the database.
+    if stored and stored != nn:
+        config_ext = config_ext[:3] + (stored,) + tuple(config_ext[4:])
 
     for single_metric in metric.split(','):
         populate_code_table('metric', cursor, name=single_metric.strip())
@@ -565,6 +609,7 @@ def save_nn_stat(nn_name: str, prm_id: str, stats: dict):
                     total_layers = ?,
                     leaf_layers = ?,
                     max_depth = ?,
+                    nn_depth = ?,
                     total_params = ?,
                     trainable_params = ?,
                     frozen_params = ?,
@@ -596,6 +641,7 @@ def save_nn_stat(nn_name: str, prm_id: str, stats: dict):
                     stats.get('total_layers'),
                     stats.get('leaf_layers'),
                     stats.get('max_depth'),
+                    stats.get('nn_depth'),
                     stats.get('total_params'),
                     stats.get('trainable_params'),
                     stats.get('frozen_params'),
@@ -643,7 +689,7 @@ def save_nn_stat(nn_name: str, prm_id: str, stats: dict):
                 cursor.execute(f"""
                 INSERT INTO {nn_stat_table} (
                     id, nn_name, prm_id,
-                    total_layers, leaf_layers, max_depth,
+                    total_layers, leaf_layers, max_depth, nn_depth,
                     total_params, trainable_params, frozen_params,
                     flops, model_size_mb, buffer_size_mb, total_memory_mb,
                     dropout_count, has_attention, has_residual_connections,
@@ -653,12 +699,13 @@ def save_nn_stat(nn_name: str, prm_id: str, stats: dict):
                     code_length, num_classes_defined, num_functions_defined,
                     uses_sequential, uses_modulelist, uses_moduledict,
                     meta_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     id_val, nn_name, prm_id,
                     stats.get('total_layers'),
                     stats.get('leaf_layers'),
                     stats.get('max_depth'),
+                    stats.get('nn_depth'),
                     stats.get('total_params'),
                     stats.get('trainable_params'),
                     stats.get('frozen_params'),
@@ -707,19 +754,22 @@ def save_layer_stat(epoch: int, table: dict, stat_id: str, metric: str = None):
 @_serialized_db_write
 def json_run_tflite_to_db():
     """
-    Import runtime analytics from tflite JSON files in stat/run/tflite/fp32 and stat/run/tflite/int8.
-    Adds precision_type column to indicate whether the data is from fp32 or int8.
+    Import runtime analytics from the JSON files in stat/run/tflite/fp32 and stat/run/tflite/int8
+    (mobile, type "tflite") and in stat/run/pt/fp32 (workstation, PyTorch, type "pt").
+    Adds precision_type column to indicate whether the data is from fp32 or int8, and type column
+    to indicate the runtime ("tflite" or "pt").
     """
     conn, cursor = sql_conn()
 
     tflite_dirs = [
-        (stat_run_tflite_fp32_dir, 'fp32'),
-        (stat_run_tflite_int8_dir, 'int8')
+        (stat_run_tflite_fp32_dir, 'fp32', 'tflite'),
+        (stat_run_pt_fp32_dir, 'fp32', 'pt'),
+        (stat_run_tflite_int8_dir, 'int8', 'tflite')
     ]
 
     total_files = 0
-    accuracy_maps: dict[str, dict] = {}
-    for tflite_dir, precision_type in tflite_dirs:
+    accuracy_maps: dict = {}  # per folder, as tflite/fp32 and pt/fp32 share the precision 'fp32'
+    for tflite_dir, precision_type, run_type in tflite_dirs:
         if not tflite_dir.exists():
             continue
 
@@ -727,12 +777,12 @@ def json_run_tflite_to_db():
         if map_path.exists():
             try:
                 with open(map_path, 'r', encoding='utf-8') as mf:
-                    accuracy_maps[precision_type] = json.load(mf)
+                    accuracy_maps[tflite_dir] = json.load(mf)
             except Exception as e:
                 print(f"Warning: failed to load mapping from {map_path}: {e}", file=sys.stderr)
-                accuracy_maps[precision_type] = {}
+                accuracy_maps[tflite_dir] = {}
         else:
-            accuracy_maps[precision_type] = {}
+            accuracy_maps[tflite_dir] = {}
 
         json_files = list(tflite_dir.rglob('*.json'))
         total_files += len(json_files)
@@ -741,11 +791,11 @@ def json_run_tflite_to_db():
         close_conn(conn)
         return
 
-    print(f"Importing runtime analytics from {total_files} tflite JSON files...")
+    print(f"Importing runtime analytics from {total_files} tflite and pt JSON files...")
 
     processed = 0
     with tqdm(total=total_files, desc="Importing tflite runtime data") as pbar:
-        for tflite_dir, precision_type in tflite_dirs:
+        for tflite_dir, precision_type, run_type in tflite_dirs:
             if not tflite_dir.exists():
                 continue
 
@@ -765,7 +815,7 @@ def json_run_tflite_to_db():
                     continue
 
                 model_name = data.get('model_name')
-                acc_info = accuracy_maps.get(precision_type, {}).get(model_name, {})
+                acc_info = accuracy_maps.get(tflite_dir, {}).get(model_name, {})
                 accuracy = acc_info.get('accuracy')
                 transform_code = acc_info.get('transform')
                 device_type = data.get('device_type')
@@ -795,7 +845,7 @@ def json_run_tflite_to_db():
                     'npu_duration', 'npu_min_duration', 'npu_max_duration', 'npu_std_dev', 'npu_error',
                     'total_ram_kb', 'free_ram_kb', 'available_ram_kb', 'cached_kb',
                     'in_dim_0', 'in_dim_1', 'in_dim_2', 'in_dim_3',
-                    'device_analytics_json', 'precision_type'
+                    'device_analytics_json', 'precision_type', 'type'
                 ]
 
                 placeholders = ', '.join(['?'] * len(columns))
@@ -809,7 +859,7 @@ def json_run_tflite_to_db():
                     extra_vals['npu_duration'], extra_vals['npu_min_duration'], extra_vals['npu_max_duration'], extra_vals['npu_std_dev'], extra_vals['npu_error'],
                     extra_vals['total_ram_kb'], extra_vals['free_ram_kb'], extra_vals['available_ram_kb'], extra_vals['cached_kb'],
                     extra_vals['in_dim_0'], extra_vals['in_dim_1'], extra_vals['in_dim_2'], extra_vals['in_dim_3'],
-                    analytics_json, precision_type
+                    analytics_json, precision_type, run_type
                 ]
 
                 try:
@@ -857,7 +907,7 @@ def json_prun_to_db():
 
     total_files = 0
     for pruning_dir in stat_run_pt_dir.iterdir():
-        if pruning_dir.is_dir():
+        if pruning_dir.is_dir() and pruning_dir != stat_run_pt_fp32_dir:
             for config_dir in pruning_dir.iterdir():
                 if config_dir.is_dir():
                     all_models_path = config_dir / 'all_models.json'
@@ -872,7 +922,7 @@ def json_prun_to_db():
     processed = 0
     with tqdm(total=total_files, desc="Importing pruning data") as pbar:
         for pruning_method_dir in stat_run_pt_dir.iterdir():
-            if not pruning_method_dir.is_dir():
+            if not pruning_method_dir.is_dir() or pruning_method_dir == stat_run_pt_fp32_dir:
                 continue
 
             pruning_method = pruning_method_dir.name

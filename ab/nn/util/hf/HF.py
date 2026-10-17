@@ -4,11 +4,9 @@ import shutil
 
 from huggingface_hub import HfApi, hf_hub_download
 
+# A token is needed only to upload. The LEMUR database and the checkpoints are public,
+# so downloading them works without one.
 HF_TOKEN = os.environ.get('HF_TOKEN')
-if not HF_TOKEN:
-    # Fallback for testing
-    HF_TOKEN = None
-    print('⚠️ Warning: No HF_TOKEN found. Please set environment variable.')
 
 
 def download(repo_id, filename, local_dir):
@@ -22,7 +20,11 @@ def download(repo_id, filename, local_dir):
 
 
 def upload_file(repo_id, local_file, path_in_repo, remove: bool = False, hf_token=None):
-    api = HfApi(token=hf_token or HF_TOKEN)
+    token = hf_token or HF_TOKEN
+    if not token:
+        print('⚠️ Warning: No HF_TOKEN found. Uploading to Hugging Face needs a token: '
+              'set the HF_TOKEN environment variable.')
+    api = HfApi(token=token)
     api.create_repo(repo_id=repo_id, repo_type='model', exist_ok=True)
 
     if local_file and os.path.exists(local_file):

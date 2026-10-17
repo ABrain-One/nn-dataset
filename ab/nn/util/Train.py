@@ -28,8 +28,8 @@ class EpochMetrics:
     """Stores metrics for a single epoch"""
     epoch: int
     # Loss metrics
-    train_loss: float = 0.0
-    test_loss: float = 0.0
+    train_loss: Optional[float] = None
+    test_loss: Optional[float] = None
     # Accuracy metrics
     train_accuracy: float = 0.0
     test_accuracy: float = 0.0
@@ -247,8 +247,20 @@ class Train:
             else:
                 return torch.nn.MSELoss()
 
-    def _compute_loss(self, data_loader) -> float:
-        """Compute average loss over a dataset"""
+    def _compute_loss(self, data_loader) -> Optional[float]:
+        """Compute loss when the model exposes a compatible loss contract.
+
+        Caption models that predate loss tracking only implement ``learn`` and
+        generation.  Their unavailable diagnostic loss remains ``None`` rather
+        than being guessed from model-specific logits or hidden-state tuples.
+        """
+        is_caption = 'caption' in self.task
+        loss_provider = (
+            getattr(self.model, 'compute_loss', None) if is_caption else None
+        )
+        if is_caption and not callable(loss_provider):
+            return None
+
         self.model.eval()
         total_loss = 0.0
         num_batches = 0
@@ -256,23 +268,19 @@ class Train:
         with torch.no_grad():
             for inputs, labels in data_loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
-                try:
-                    # SOTA Fix: For captioning models that return loss when labels are provided
-                    if 'caption' in self.task:
-                        # Some models need captions in a specific format (e.g. flattened)
-                        caps = labels[:, 0, :] if labels.dim() == 3 else labels
-                        loss = self.model(inputs, caps)
-                    else:
-                        outputs = self.model(inputs)
-                        loss = self.loss_fn(outputs, labels)
-                    
-                    total_loss += loss.item()
-                    num_batches += 1
-                except Exception as e:
-                    # Bug fix: Incompatible loss function or model output, abort early to prevent timeout
-                    if num_batches == 0:
-                        print(f"[_compute_loss] Exception during validation: {e}. Aborting evaluation early.")
-                    break
+                if callable(loss_provider):
+                    loss = loss_provider(inputs, labels)
+                else:
+                    outputs = self.model(inputs)
+                    loss = self.loss_fn(outputs, labels)
+                if not torch.is_tensor(loss) or loss.numel() != 1:
+                    raise TypeError(
+                        f"{self.model_name} loss provider must return one scalar tensor."
+                    )
+                if not torch.isfinite(loss):
+                    raise RuntimeError(f"{self.model_name} returned a non-finite loss.")
+                total_loss += float(loss.detach())
+                num_batches += 1
 
         return total_loss / max(num_batches, 1)
 
@@ -331,11 +339,18 @@ class Train:
                 train_accuracy, train_loss = learn_res[0], learn_res[1]
             else:
                 train_accuracy, train_loss = 0.0, learn_res
-            # Standard path fallback
-            # TASK-AWARE FALLBACK: Skip full-set eval for captioning to avoid timeouts/OOM
-            if (train_loss is None or train_loss == 0.0) and 'caption' not in self.task:
+            # Models with an explicit loss provider opt into loss tracking.
+            # Legacy caption models keep their historical learn-only contract.
+            tracks_loss = (
+                'caption' in self.task
+                and callable(getattr(self.model, 'compute_loss', None))
+            )
+            if (train_loss is None or train_loss == 0.0) and (
+                tracks_loss or 'caption' not in self.task
+            ):
                 train_loss = self._compute_loss(self.train_loader)
-                train_accuracy = self._compute_accuracy(self.train_loader)
+                if 'caption' not in self.task:
+                    train_accuracy = self._compute_accuracy(self.train_loader)
 
             # Compute gradient norm after training
             grad_norm = compute_gradient_norm(self.model)
@@ -381,7 +396,9 @@ class Train:
             self.epoch_history.append(epoch_metrics)
 
             # Print detailed metrics
-            print(f"  Train Loss: {train_loss:.4f}, Test Loss: {test_loss:.4f}")
+            train_loss_text = "N/A" if train_loss is None else f"{train_loss:.4f}"
+            test_loss_text = "N/A" if test_loss is None else f"{test_loss:.4f}"
+            print(f"  Train Loss: {train_loss_text}, Test Loss: {test_loss_text}")
             print(f"  Train Acc: {train_accuracy:.4f}, Test Acc: {accuracy:.4f}")
             if lr_now and grad_norm and samples_per_second:
                 print(f"  LR: {lr_now:.6f}, Grad Norm: {grad_norm:.4f}, Throughput: {samples_per_second:.1f} samples/s")
@@ -446,6 +463,7 @@ class Train:
                 'train_accuracy': train_accuracy,
                 'gradient_norm': grad_norm,
                 'samples_per_second': samples_per_second,
+                'epoch_max': epoch_max,
                 'best_accuracy': self.best_accuracy,
                 'best_epoch': self.best_epoch,
                 'cpu_count': self.system_info.get('cpu_count'),

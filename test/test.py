@@ -95,11 +95,11 @@ class Testing(unittest.TestCase):
     # ------------------------------------------------------------------
     def test_data_join(self):
         df = api.data(only_best_accuracy=True, task="img-classification",
-                        nn_prefixes=('rag-',), max_rows=500, #, include_nn_stats=True # too slow
-                        sql=JoinConf(num_joint_nns=2,
-                                     same_columns=('task', 'dataset', 'metric', 'epoch'),
-                                     diff_columns=('nn',),
-                                     enhance_nn=True))
+                      nn_prefixes=('rag-',), max_rows=500,  # , include_nn_stats=True # too slow
+                      sql=JoinConf(num_joint_nns=2,
+                                   same_columns=('task', 'dataset', 'metric', 'epoch'),
+                                   diff_columns=('nn',),
+                                   enhance_nn=True))
         print(f"Total join rows: {len(df)} ")
         print(df.head(10).to_string(index=False))
 
@@ -107,12 +107,14 @@ class Testing(unittest.TestCase):
     #  Basic 'run' data sanity check
     # ------------------------------------------------------------------
     def test_run_data(self):
-        # Fetch first 10 rows from `run`
         df = api.run_data(max_rows=10)
-
-        print("Total rows available:", len(api.run_data()))
+        self.assertEqual(len(df), 10)
         print("Showing first 10 rows:")
         print(df.to_string(index=False))
+
+        pt = api.run_data(type='pt')
+        self.assertFalse(pt.empty)
+        self.assertTrue((pt['type'] == 'pt').all())
 
     # ------------------------------------------------------------------
     #  check_nn with trainer stubbed out

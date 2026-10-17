@@ -6,12 +6,13 @@ from ab.nn.util.Const import default_epoch_limit_minutes
 from pandas import DataFrame
 import functools
 
+
 from ab.nn.util.db.Query import JoinConf
 
 
 @functools.lru_cache(maxsize=10)
 def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None, epoch=None, max_rows=None, sql: Optional[JoinConf] = None, nn_prefixes=None,
-         unique_nn=False, include_nn_stats=False) -> DataFrame:
+         min_accuracy: Optional[float] = None, unique_nn=False, include_nn_stats=False, include_layer_stats=False) -> DataFrame:
     """
     Get the NN model code and all related statistics as a pandas DataFrame.
 
@@ -23,6 +24,8 @@ def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None
           If False, all matching rows are returned.
       - task, dataset, metric, nn, epoch: Optional filters to restrict the results.
       - max_rows (int): Specifies the maximum number of results.
+      - min_accuracy (float): If set, only rows with accuracy >= min_accuracy are returned.
+          Applied in the SQL query, so it composes correctly with max_rows.
       - include_nn_stats (bool): If True, include NN architecture statistics in the results.
           This adds columns like 'nn_total_params', 'nn_flops', 'nn_model_size_mb', etc.
 
@@ -34,7 +37,7 @@ def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None
 
         If include_nn_stats=True, additional columns are included:
           'nn_total_params', 'nn_trainable_params', 'nn_frozen_params',
-          'nn_total_layers', 'nn_leaf_layers', 'nn_max_depth',
+          'nn_total_layers', 'nn_leaf_layers', 'nn_max_depth', 'nn_nn_depth',
           'nn_flops', 'nn_model_size_mb', 'nn_buffer_size_mb', 'nn_total_memory_mb',
           'nn_dropout_count', 'nn_has_attention', 'nn_has_residual',
           'nn_is_resnet_like', 'nn_is_vgg_like', 'nn_is_inception_like',
@@ -45,7 +48,7 @@ def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None
           'nn_stats_meta' (dict with additional metadata), 'nn_stats_error'
     """
     dt: tuple[dict, ...] = DB_Read.data(only_best_accuracy, task=task, dataset=dataset, metric=metric, nn=nn, epoch=epoch, max_rows=max_rows,
-                                        sql=sql, nn_prefixes=nn_prefixes, unique_nn=unique_nn, include_nn_stats=include_nn_stats)
+                                        sql=sql, nn_prefixes=nn_prefixes,  min_accuracy=min_accuracy, unique_nn=unique_nn, include_nn_stats=include_nn_stats, include_layer_stats=include_layer_stats)
     return DataFrame.from_records(dt)
 
 
@@ -99,7 +102,7 @@ def data_withnonnullvalue(
 
 
 @functools.lru_cache(maxsize=10)
-def run_data(model_name=None, device_type=None, max_rows=None) -> DataFrame:
+def run_data(model_name=None, duration=None, device_type=None, max_rows=None, type=None) -> DataFrame:
     """
     Get comprehensive runtime and tflite analytics as a pandas DataFrame.
     
@@ -109,8 +112,12 @@ def run_data(model_name=None, device_type=None, max_rows=None) -> DataFrame:
 
     Parameters:
       - model_name (str | None): filter by model name (FK to nn.name)
+    - duration (int | None): filter by runtime duration from the pt JSON record
       - device_type (str | None): filter by device type (only applies to run table)
       - max_rows (int | None): maximum number of results
+      - type (str | None): filter by runtime: "tflite" (mobile) or "pt" (workstation, PyTorch).
+          For "pt" rows, 'duration' is the fastest latency and 'unit' is the GPU name,
+          or "CPU" when the CPU was faster.
 
     Returns:
       - A pandas DataFrame with columns from both tables:
@@ -121,7 +128,7 @@ def run_data(model_name=None, device_type=None, max_rows=None) -> DataFrame:
         'cpu_std_dev', 'cpu_error', 'gpu_duration', 'gpu_min_duration', 'gpu_max_duration', 
         'gpu_std_dev', 'gpu_error', 'npu_duration', 'npu_min_duration', 'npu_max_duration', 
         'npu_std_dev', 'npu_error', 'total_ram_kb', 'free_ram_kb', 'available_ram_kb', 'cached_kb',
-        'in_dim_0', 'in_dim_1', 'in_dim_2', 'in_dim_3', 'device_analytics', 'precision_type'
+        'in_dim_0', 'in_dim_1', 'in_dim_2', 'in_dim_3', 'device_analytics', 'precision_type', 'type'
         
         ** From tflite table (model metrics) **
         'tflite_id', 'tflite_accuracy', 'tflite_transform', 'tflite_precision_type'
@@ -133,8 +140,10 @@ def run_data(model_name=None, device_type=None, max_rows=None) -> DataFrame:
     # Get run data
     run_recs: tuple[dict, ...] = DB_Read.run_data(
         model_name=model_name, 
+        duration=duration,
         device_type=device_type, 
-        max_rows=max_rows
+        max_rows=max_rows,
+        type=type
     )
     
     # Get tflite data
@@ -151,8 +160,8 @@ def run_data(model_name=None, device_type=None, max_rows=None) -> DataFrame:
     for run_rec in run_recs:
         merged_rec = dict(run_rec)
         
-        # Join with tflite data if available
-        if merged_rec['model_name'] in tflite_map:
+        # Join with tflite data if available (only for tflite runs)
+        if merged_rec.get('type') == 'tflite' and merged_rec['model_name'] in tflite_map:
             tflite_rec = tflite_map[merged_rec['model_name']]
             merged_rec['tflite_id'] = tflite_rec.get('id')
             merged_rec['tflite_accuracy'] = tflite_rec.get('accuracy')
@@ -215,7 +224,7 @@ def nn_stat_data(nn_name=None, prm_id=None, max_rows=None) -> DataFrame:
     Returns:
       - A pandas DataFrame with columns:
         'id', 'nn_name', 'prm_id',
-        'total_layers', 'leaf_layers', 'max_depth',
+        'total_layers', 'leaf_layers', 'max_depth', 'nn_depth',
         'total_params', 'trainable_params', 'frozen_params',
         'flops', 'model_size_mb', 'buffer_size_mb', 'total_memory_mb',
         'dropout_count', 'has_attention', 'has_residual_connections',

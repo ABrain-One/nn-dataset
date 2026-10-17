@@ -2,7 +2,7 @@
 BLIP-2 Processor Transform for NN Dataset Framework
 
 This transform uses the BLIP-2 processor from HuggingFace transformers
-for image preprocessing suitable for the Blip2Sota model.
+for legacy pipelines that recorded this transform name.
 """
 
 from torchvision import transforms

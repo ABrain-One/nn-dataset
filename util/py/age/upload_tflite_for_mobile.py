@@ -14,7 +14,7 @@ import argparse
 # Configuration
 TFLITE_REPO_ID = "Arun03k/tflite"
 LOCAL_TFLITE_DIR = "ab/nn/stat/run/age-regression_utkface_mae_MobileAgeNet"
-REPORT_FILE = "ab/nn/imp/TFLITE_REPORT_AGE_EPOCH50.json"
+REPORT_FILE = "ab/nn/stat/imp/TFLITE_REPORT_AGE_EPOCH50.json"
 
 def create_all_models_json():
     """Create all_models.json for the mobile testing pipeline"""

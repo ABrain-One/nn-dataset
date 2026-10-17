@@ -19,7 +19,97 @@ def query_cursor_cols_rows(*q) -> tuple[list, list]:
     columns = [col[0] for col in cursor.description]
     close_conn(conn)
     return columns, rows
+_LAYER_STAT_COLUMNS = (
+    ("ww_alpha", "layer_ww_alpha"),
+    ("grad_norm", "layer_grad_norm"),
+    ("dead_frac", "layer_dead_frac"),
+    ("taylor_imp", "layer_taylor_imp"),
+    ("cka_redund", "layer_cka_redund"),
+    ("rank_ratio", "layer_rank_ratio"),
+    ("sensitivity", "layer_sensitivity"),
+)
 
+def _attach_layer_stats(results: list[dict]) -> list[dict]:
+    stat_ids = [
+        str(result["id"])
+        for result in results
+        if result.get("id") is not None
+    ]
+
+    if not stat_ids:
+        for result in results:
+            for _, db_column in _LAYER_STAT_COLUMNS:
+                result[db_column] = None
+        return results
+
+    placeholders = ",".join("?" for _ in stat_ids)
+
+    columns = (
+        "stat_id",
+        "layer_ww_alpha",
+        "layer_grad_norm",
+        "layer_dead_frac",
+        "layer_taylor_imp",
+        "layer_cka_redund",
+        "layer_rank_ratio",
+        "layer_sensitivity",
+    )
+
+    query = f"""
+        SELECT
+            ls.stat_id,
+            AVG(pls.ww_alpha) AS layer_ww_alpha,
+            AVG(pls.grad_norm) AS layer_grad_norm,
+            AVG(pls.dead_frac) AS layer_dead_frac,
+            AVG(pls.taylor_imp) AS layer_taylor_imp,
+            AVG(pls.cka_redund) AS layer_cka_redund,
+            AVG(pls.rank_ratio) AS layer_rank_ratio,
+            AVG(pls.sensitivity) AS layer_sensitivity
+        FROM layer_stat ls
+        JOIN per_layer_stat pls
+            ON pls.id = ls.id
+           AND pls.stat_id = ls.stat_id
+        WHERE ls.stat_id IN ({placeholders})
+        GROUP BY ls.stat_id
+        ORDER BY ls.stat_id
+    """
+
+    rows = []
+    chunk_size = 900
+
+    for start in range(0, len(stat_ids), chunk_size):
+        chunk_stat_ids = stat_ids[start:start + chunk_size]
+        chunk_placeholders = ",".join("?" for _ in chunk_stat_ids)
+
+        chunk_query = query.replace(
+            placeholders,
+            chunk_placeholders,
+            1,
+        )
+
+        _, chunk_rows = query_cursor_cols_rows(
+            chunk_query,
+            chunk_stat_ids,
+        )
+        rows.extend(chunk_rows)
+
+    grouped: dict[str, dict] = {}
+
+    for row in rows:
+        values = dict(zip(columns, row))
+        grouped[str(values["stat_id"])] = values
+
+    for result in results:
+        summary = grouped.get(str(result["id"]))
+
+        for _, db_column in _LAYER_STAT_COLUMNS:
+            result[db_column] = (
+                summary.get(db_column)
+                if summary is not None
+                else None
+            )
+
+    return results
 
 def query_rows(*q):
     conn, cursor = sql_conn()
@@ -52,9 +142,11 @@ def data(only_best_accuracy: bool = False,
          epoch: Optional[int] = None,
          max_rows: Optional[int] = None,
          nn_prefixes: Optional[tuple] = None,
+         min_accuracy: Optional[float] = None,
          sql: Optional[JoinConf] = None,
          unique_nn: bool = False,
          include_nn_stats: bool = False,
+         include_layer_stats: bool = False,
          ) -> tuple[
     dict[str, int | float | str | dict[str, int | float | str]], ...
 ]:
@@ -86,7 +178,9 @@ def data(only_best_accuracy: bool = False,
       - 'nn_frozen_params': int       (frozen parameters)
       - 'nn_total_layers': int        (total number of layers)
       - 'nn_leaf_layers': int         (number of leaf layers)
-      - 'nn_max_depth': int           (maximum depth of the model)
+      - 'nn_max_depth': int           (nesting depth of the nn.Module tree)
+      - 'nn_nn_depth': int | None     (real network depth: longest chain of
+                                       weight-bearing ops; None if unmeasurable)
       - 'nn_flops': int               (floating point operations)
       - 'nn_model_size_mb': float     (model size in MB)
       - 'nn_buffer_size_mb': float    (buffer size in MB)
@@ -110,12 +204,20 @@ def data(only_best_accuracy: bool = False,
       - 'nn_uses_moduledict': bool    (uses ModuleDict)
       - 'nn_stats_meta': dict         (additional metadata as JSON)
       - 'nn_stats_error': str         (error message if statistics failed)
+
+    - min_accuracy: if set, only rows with accuracy >= min_accuracy are returned.
+      Applied as a SQL WHERE condition (not a post-hoc DataFrame filter), so it
+      composes correctly with max_rows -- the LIMIT is applied to the already-
+      filtered set, not the other way around.
     """
 
     # Build filtering conditions based on provided parameters.
     params, where_clause = sql_where([task, dataset, metric, nn, epoch])
     if nn_prefixes:
         where_clause += ' AND (' + ' OR '.join([f"nn LIKE '{prefix}%'" for prefix in nn_prefixes]) + ')'
+    if min_accuracy is not None:
+        where_clause += (' WHERE ' if not where_clause else ' AND ') + 's.accuracy >= ?'
+        params = list(params) + [min_accuracy]
 
     source = f'(SELECT s.* FROM stat s {where_clause})'
     if unique_nn:
@@ -145,6 +247,7 @@ def data(only_best_accuracy: bool = False,
                    ns.total_layers AS nn_total_layers,
                    ns.leaf_layers AS nn_leaf_layers,
                    ns.max_depth AS nn_max_depth,
+                   ns.nn_depth AS nn_nn_depth,
                    ns.flops AS nn_flops,
                    ns.model_size_mb AS nn_model_size_mb,
                    ns.buffer_size_mb AS nn_buffer_size_mb,
@@ -206,7 +309,17 @@ def data(only_best_accuracy: bool = False,
         if sql:
             results = join_nn_query(sql,limit_clause, cur)
         else:
-            results = fill_hyper_prm(cur, include_nn_stats=include_nn_stats)
+            results = fill_hyper_prm(cur, include_nn_stats=include_nn_stats,)
+            if include_layer_stats:
+                results = _attach_layer_stats(results)
+                results = [
+                    result
+                    for result in results
+                    if any(
+                        result.get(db_column) is not None
+                        for _, db_column in _LAYER_STAT_COLUMNS
+                    )
+                ]
         return tuple(results)
     finally:
         if conn: close_conn(conn)
@@ -219,6 +332,7 @@ _NN_STAT_OUTPUT_TO_COL: dict[str, str] = {
     'nn_total_layers': 'total_layers',
     'nn_leaf_layers': 'leaf_layers',
     'nn_max_depth': 'max_depth',
+    'nn_nn_depth': 'nn_depth',
     'nn_flops': 'flops',
     'nn_model_size_mb': 'model_size_mb',
     'nn_buffer_size_mb': 'buffer_size_mb',
@@ -431,6 +545,7 @@ def data_withnonnullvalue(
                    ns.total_layers AS nn_total_layers,
                    ns.leaf_layers AS nn_leaf_layers,
                    ns.max_depth AS nn_max_depth,
+                   ns.nn_depth AS nn_nn_depth,
                    ns.flops AS nn_flops,
                    ns.model_size_mb AS nn_model_size_mb,
                    ns.buffer_size_mb AS nn_buffer_size_mb,
@@ -529,11 +644,14 @@ def data_withnonnullvalue(
 
 def run_data(
         model_name: str | None = None,
+        duration: int | None = None,
         device_type: str | None = None,
         max_rows: int | None = None,
+        type: str | None = None,
 ):
     """
-    Query mobile runtime analytics from the `mobile` table with optional filters.
+    Query runtime analytics from the `run` table with optional filters.
+    ``type`` selects the runtime: "tflite" (mobile) or "pt" (workstation, PyTorch).
     Returns a tuple of dicts with columns and parsed device_analytics JSON.
     """
     params = []
@@ -541,9 +659,15 @@ def run_data(
     if model_name is not None:
         filters.append('model_name = ?')
         params.append(model_name)
+    if duration is not None:
+        filters.append('duration = ?')
+        params.append(duration)
     if device_type is not None:
         filters.append('device_type = ?')
         params.append(device_type)
+    if type is not None:
+        filters.append('type = ?')
+        params.append(type)
 
     where_clause = (' WHERE ' + ' AND '.join(filters)) if filters else ''
     limit_clause = (' LIMIT ' + str(max_rows)) if max_rows else ''
@@ -557,7 +681,7 @@ def run_data(
                    gpu_duration, gpu_min_duration, gpu_max_duration, gpu_std_dev, gpu_error,
                    npu_duration, npu_min_duration, npu_max_duration, npu_std_dev, npu_error,
                    total_ram_kb, free_ram_kb, available_ram_kb, cached_kb,
-                   in_dim_0, in_dim_1, in_dim_2, in_dim_3, device_analytics_json, precision_type
+                   in_dim_0, in_dim_1, in_dim_2, in_dim_3, device_analytics_json, precision_type, type
             FROM {run_table}
             {where_clause}
             ORDER BY model_name
@@ -759,7 +883,7 @@ def nn_stat_data(
         cur.execute(
             f"""
             SELECT id, nn_name, prm_id,
-                   total_layers, leaf_layers, max_depth,
+                   total_layers, leaf_layers, max_depth, nn_depth,
                    total_params, trainable_params, frozen_params,
                    flops, model_size_mb, buffer_size_mb, total_memory_mb,
                    dropout_count, has_attention, has_residual_connections,

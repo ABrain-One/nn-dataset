@@ -115,6 +115,8 @@ stat_run_dir = stat_dir / 'run'
 stat_run_tflite_dir = stat_run_dir / 'tflite'
 stat_run_tflite_fp32_dir = stat_run_tflite_dir / 'fp32'
 stat_run_tflite_int8_dir = stat_run_tflite_dir / 'int8'
+stat_run_pt_dir = stat_run_dir / 'pt'
+stat_run_pt_fp32_dir = stat_run_pt_dir / 'fp32'
 stat_nn_dir = stat_dir / 'nn'
 
 code_folders = (nn_dir, metric_dir)  # transform_dir,
@@ -179,7 +181,6 @@ run_extra_columns = (
 
 # Pruning analytics table
 prun_table = 'prun'
-stat_run_pt_dir = stat_dir / 'run' / 'pt'
 
 # NN statistics table
 nn_stat_table = 'nn_stat'
