@@ -7,6 +7,10 @@ import torch
 import torch.nn as nn
 from typing import Dict, Optional
 
+# None = all seven statistics.
+# Examples: "taylor_imp" or "taylor_imp,grad_norm,rank_ratio"
+ACTIVE_LAYER_FEATURES = None
+
 try:
     import weightwatcher as ww
     _HAS_WW = True
@@ -371,7 +375,9 @@ class LayerAnalyzer:
         self.model.train(was_training)
         return result
 
-    def full_analysis(self, loader, loss_fn, num_batches=1):
+    def full_analysis(self, loader, loss_fn, num_batches=1, features=None):
+        import os
+
         methods = [
             ("weightwatcher",         lambda: self.weightwatcher_analysis()),
             ("gradient_flow",         lambda: self.gradient_flow(loader, loss_fn, num_batches)),
@@ -381,6 +387,43 @@ class LayerAnalyzer:
             ("cka_similarity",        lambda: self.cka_similarity(loader, num_batches)),
             ("sensitivity",           lambda: self.sensitivity_analysis(loader, loss_fn, num_batches=5)),
         ]
+        feature_methods = {
+            "ww_alpha": "weightwatcher",
+            "grad_norm": "gradient_flow",
+            "dead_frac": "activation_statistics",
+            "taylor_imp": "taylor_importance",
+            "rank_ratio": "effective_rank",
+            "cka_redund": "cka_similarity",
+            "sensitivity": "sensitivity",
+        }
+
+        if features is None:
+            features = ACTIVE_LAYER_FEATURES
+        if features is None:
+            features = os.environ.get("NN_DATASET_LAYER_FEATURES")
+
+        if features is not None:
+            if isinstance(features, str):
+                features = features.split(",")
+            elif not isinstance(features, (tuple, list)):
+                raise TypeError("features must be a comma-separated string, tuple, list, or None")
+
+            if not features or any(not isinstance(name, str) or not name.strip() for name in features):
+                raise ValueError("Layer-feature selection must contain non-empty feature names")
+
+            selected = tuple(name.strip() for name in features)
+            invalid = sorted(set(selected) - set(feature_methods))
+            if invalid:
+                raise ValueError(
+                    f"Unknown layer features: {invalid}. "
+                    f"Valid names: {', '.join(feature_methods)}"
+                )
+            if len(selected) != len(set(selected)):
+                raise ValueError("Duplicate layer-feature names are not allowed")
+
+            selected_methods = {feature_methods[name] for name in selected}
+            methods = [(name, fn) for name, fn in methods if name in selected_methods]
+
         result = {}
         for name, fn in methods:
             try:
@@ -388,7 +431,6 @@ class LayerAnalyzer:
             except Exception as e:
                 result[name] = {"error": str(e)}
         result["layer_types"] = self._get_layer_types()
-        # CHANGED: was result["layer_ids"] = self._get_layer_ids()
         return result
 
     def build_layer_table(self, analysis):
@@ -402,10 +444,6 @@ class LayerAnalyzer:
         cka_raw = analysis.get("cka_similarity", {})
         cka     = self._cka_per_layer(cka_raw) if "cka_matrix" in cka_raw else {}
 
-        # CHANGED: removed _na() helper entirely
-        # All missing/NaN/inf values are now None, which maps to SQL NULL
-        # _safe_float() handles NaN/inf → None for numeric fields
-        # String fields use plain dict.get() which returns None if missing
 
         table = {}
         for name in self._weight_layers().keys():
