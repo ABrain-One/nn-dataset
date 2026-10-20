@@ -4,7 +4,7 @@ build-backend = 'setuptools.build_meta'
 
 [project]
 name = 'nn-dataset'
-dynamic = ['version', 'dependencies']
+dynamic = ['version', 'dependencies', 'optional-dependencies']
 description = 'Neural Network Dataset'
 readme = { file = 'README.md', content-type = 'text/markdown' }
 license = { file = 'LICENSE' }
@@ -31,6 +31,12 @@ Repository = 'https://github.com/ABrain-One/nn-dataset'
 version = { file = 'version' }
 dependencies = { file = 'requirements.txt' }
 
+[tool.setuptools.dynamic.optional-dependencies]
+stat = { file = 'requirements-stat.txt' }
+tflite = { file = 'requirements-tflite.txt' }
+tflite-run = { file = 'requirements-tflite-run.txt' }
+litert = { file = 'requirements-litert.txt' }
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["ab", "ab.*"]
@@ -43,7 +49,4 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 'doc' = ['licenses/*']
-'*' = ['requirements.txt', 'LICENSE', 'version', '*.md']
-
-[project.optional-dependencies]
-stat = ['nn-stat']
+'*' = ['requirements*.txt', 'LICENSE', 'version', '*.md']

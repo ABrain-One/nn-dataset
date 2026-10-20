@@ -1,0 +1,15 @@
+# Convert ONNX -> TFLite with onnx2tf. Needs full TensorFlow, because the code
+# calls tf.lite.TFLiteConverter directly (util/py/age/convert_onnx_to_tflite_age.py,
+# demo/godzilla_convert_to_tflite.py, demo/convert_final_v5.py).
+#
+# Kept out of requirements.txt on purpose: onnx2tf pins its world with '==' and
+# collides with a vLLM-bearing environment:
+#   setuptools==81.0.0       vs vLLM  setuptools<81.0.0
+#   ai-edge-litert==2.1.2    vs litert-torch  ai-edge-litert>=2.3.0
+#   onnxruntime==1.26.0      vs onnxruntime-gpu  (same import namespace)
+#   opencv-python==4.13.*    vs opencv-python-headless  (same import namespace)
+# plus TensorFlow duplicates the CUDA runtime already shipped with torch.
+#
+# MUTUALLY EXCLUSIVE with requirements-litert.txt.
+# Install into a dedicated virtual environment.
+onnx2tf[tensorflow]>=2.6.0

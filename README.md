@@ -127,6 +127,49 @@ and export/generate:
 python -m ab.stat.export
 ```
 
+### Optional export extras (TFLite / LiteRT)
+
+The TFLite export dependencies are **not** part of the default installation. Each
+pins its own transitive versions, the two are mutually exclusive with each other,
+and both conflict with environments that also contain vLLM. Install whichever one
+you need into a **dedicated virtual environment**.
+
+Running an existing `.tflite` model (inference only, no TensorFlow). This one is
+light and installs cleanly next to the main requirements:
+```bash
+pip install nn-dataset[tflite-run]
+```
+
+Converting ONNX &rarr; TFLite with `onnx2tf` (`util/py/age/convert_onnx_to_tflite_age.py`,
+`demo/*`). Pulls full TensorFlow, so use a separate environment:
+```bash
+python -m venv .venv-tflite && . .venv-tflite/bin/activate
+pip install nn-dataset[tflite]
+```
+
+PyTorch &rarr; TFLite through Google LiteRT (`litert-torch`), no Windows wheels:
+```bash
+python -m venv .venv-litert && . .venv-litert/bin/activate
+pip install nn-dataset[litert]
+```
+
+Why they are separate:
+
+| Pin | Conflicts with |
+|---|---|
+| `onnx2tf` &rarr; `setuptools==81.0.0` | vLLM: `setuptools<81.0.0` |
+| `onnx2tf` &rarr; `ai-edge-litert==2.1.2` | `litert-torch`: `ai-edge-litert>=2.3.0` |
+| `onnx2tf` &rarr; `onnxruntime==1.26.0` | `onnxruntime-gpu` (same `onnxruntime` import namespace) |
+| `litert-torch` &rarr; `xdsl==0.28.0` | `typing-extensions<4.13` vs vLLM &rarr; `pydantic>=2.12` needing `>=4.14.1` |
+
+There is no lite-only converter: `tf.lite.TFLiteConverter` ships with full
+TensorFlow, so `[tflite]` cannot be slimmed down. Only the inference side can,
+which is what `[tflite-run]` is for.
+
+Installing an extra alongside the main requirements in one environment will fail
+to resolve. That is intentional &mdash; the alternative is a silently broken
+environment.
+
 ## Usage
 
 Standard use cases:
