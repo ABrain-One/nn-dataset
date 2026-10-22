@@ -1,34 +1,34 @@
 """
-lemur_query.py — Standalone User-Facing Extraction Tool for the LEMUR NN Dataset
-==================================================================================
+info.py — Standalone User-Facing Extraction Tool for the LEMUR NN Dataset
+==========================================================================
 
 Usage examples:
 
   # List all available tasks
-  python lemur_query.py
+  python info.py
 
   # Show models + datasets + best accuracy for a specific task
-  python lemur_query.py --task "image classification"
+  python info.py --task "img-classification"
 
   # Export task results to Excel (.xlsx) or CSV
-  python lemur_query.py --task "image classification" --csv results.xlsx
-  python lemur_query.py --task "image classification" --csv results.csv
+  python info.py --task "img-classification" --csv results.xlsx
+  python info.py --task "img-classification" --csv results.csv
 
   # Export task results to plain text
-  python lemur_query.py --task "image classification" --txt results.txt
+  python info.py --task "img-classification" --txt results.txt
 
   # Extract source code for one or more models by name prefix
-  python lemur_query.py --code AlexNet
-  python lemur_query.py --code AlexNet,ResNet --out-dir ./model_code
+  python info.py --code AlexNet
+  python info.py --code AlexNet,ResNet --out-dir ./model_code
 
   # Best accuracy per model grouped by dataset (all tasks)
-  python lemur_query.py --best-accuracy
+  python info.py --best-accuracy
 
   # Best accuracy per model grouped by dataset, filtered by task
-  python lemur_query.py --best-accuracy --task "image classification"
+  python info.py --best-accuracy --task "img-classification"
 
   # Export best-accuracy table to CSV
-  python lemur_query.py --best-accuracy --csv best.csv
+  python info.py --best-accuracy --csv best.csv
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
-# LEMUR DB Archival & Cleanup Pipeline — Documentation
+# syncDB2HF — Documentation
 
-`lemur_archival_pipeline.py` is the central maintenance script for the LEMUR NN Dataset. It ingests new training statistics into the database, verifies that all local artifacts are safely backed up, generates an audit report, compresses and uploads the updated database to Hugging Face, and finally deletes local files only when every safety condition is satisfied.
+`syncDB2HF.py` is the central maintenance script for the LEMUR NN Dataset. It ingests new training statistics into the database, verifies that all local artifacts are safely backed up, generates an audit report, compresses and uploads the updated database to Hugging Face, and finally deletes local files only when every safety condition is satisfied.
 
 > **Safety guarantee:** Local files are never deleted unless all 5 conditions pass simultaneously — the artifact is marked SAFE, verified in the DB, the DB was compressed successfully, the upload to Hugging Face succeeded, and the Excel audit was generated. If any one condition fails, nothing is deleted.
 
@@ -21,7 +21,7 @@
 Navigate to the repository folder and activate the environment:
 
 ```bash
-cd ~/CV\ Praktikum/nn-dataset
+cd path/to/nn-dataset
 source lemur_env/bin/activate
 ```
 
@@ -34,7 +34,7 @@ export HF_TOKEN=hf_your_token_here
 Alternatively, pass it directly on the command line:
 
 ```bash
-python lemur_archival_pipeline.py --HF_TOKEN hf_your_token_here
+python syncDB2HF.py --HF_TOKEN hf_your_token_here
 ```
 
 ---
@@ -44,20 +44,14 @@ python lemur_archival_pipeline.py --HF_TOKEN hf_your_token_here
 **Full pipeline (all 10 phases including upload and deletion):**
 
 ```bash
-python lemur_archival_pipeline.py
-```
-
-**Analysis only — no upload or deletion (recommended for testing):**
-
-```bash
-python test_pipeline_audit.py
+python syncDB2HF.py
 ```
 
 ---
 
 ## The 10 Phases
 
-The pipeline runs 10 phases in sequence. Each phase must succeed before the next begins. Phases 8–10 are skipped entirely when running `test_pipeline_audit.py`.
+The pipeline runs 10 phases in sequence. Each phase must succeed before the next begins.
 
 ---
 
@@ -189,25 +183,12 @@ If any one of these conditions is not met, **nothing is deleted** and a warning 
 
 ---
 
-## Testing Without Upload or Deletion
-
-To validate the pipeline logic without any risk, run the test script instead:
-
-```bash
-python test_pipeline_audit.py
-```
-
-This runs Phases 1–7 only (inventory through audit report) and produces a `TEST_Audit_<timestamp>.xlsx` file with an additional **Test Summary** sheet. Nothing is compressed, uploaded, or deleted.
-
----
-
 ## Output Files
 
 | File | Created by | Location | Description |
 |---|---|---|---|
-| `LEMUR_Deep_Audit_<timestamp>.xlsx` | Full pipeline (Phase 7) | Repo root | Full audit with 3 sheets |
-| `TEST_Audit_<timestamp>.xlsx` | Test script (Phase 7) | Repo root | Audit with extra Test Summary sheet |
-| `db/ab.nn.zst-<version>` | Full pipeline (Phase 8) | `db/` folder | Compressed database for upload |
+| `LEMUR_Deep_Audit_<timestamp>.xlsx` | Phase 7 | Repo root | Full audit with 3 sheets |
+| `db/ab.nn.zst-<version>` | Phase 8 | `db/` folder | Compressed database for upload |
 
 ---
 
@@ -226,7 +207,7 @@ Phase 5   SAFE / KEEP Logic
     ↓
 Phase 6   DB Verification
     ↓
-Phase 7   Excel Audit Report  ←── test_pipeline_audit.py stops here
+Phase 7   Excel Audit Report
     ↓
 Phase 8   Compress DB
     ↓
