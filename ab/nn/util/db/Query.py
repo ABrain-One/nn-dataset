@@ -338,7 +338,10 @@ class JoinConf:
     # Optional compatibility knobs (kept for callers)
     same_columns: Optional[tuple[str, ...]] = None
     diff_columns: Optional[tuple[str, ...]] = None
-    enhance_nn: Optional[bool] = None
+    # True pairs a row with any better network; a number pairs it only with one
+    # that is better by at least that much. False or None disables pairing on
+    # accuracy altogether.
+    enhance_nn: Optional[bool | float] = None
 
     task: Optional[str] = None
     dataset: Optional[str] = None
@@ -354,6 +357,10 @@ class JoinConf:
     max_arch_jaccard: float = 1.0
 
     overfetch_factor: int = 10
+
+    # pair_seed=None shuffles, so each call pairs the rows afresh; an integer
+    # reproduces one shuffle.
+    pair_seed: Optional[int] = None
 
     supported_columns = main_columns_ext
 
@@ -371,8 +378,21 @@ class JoinConf:
                 if c not in self.supported_columns:
                     raise ValueError(f"Unsupported column name in same_columns: {c}")
 
+        # bool is checked before the numeric case because bool subclasses int:
+        # True means "any improvement", while 1 would be a threshold of 1.0.
         if self.enhance_nn is not None and not isinstance(self.enhance_nn, bool):
-            raise ValueError("'enhance_nn' must be boolean.")
+            if not isinstance(self.enhance_nn, (int, float)):
+                raise ValueError(
+                    "'enhance_nn' must be boolean, a number, or None.")
+            if float(self.enhance_nn) < 0:
+                raise ValueError(
+                    "'enhance_nn' as a threshold must be >= 0.")
+
+        if self.pair_seed is not None:
+            try:
+                int(self.pair_seed)
+            except (TypeError, ValueError):
+                raise ValueError("'pair_seed' must be an integer or None.")
 
         if int(self.overfetch_factor) < 1:
             raise ValueError("'overfetch_factor' must be >= 1.")
@@ -510,6 +530,30 @@ def join_nn_query_sql_Var_num(sql: JoinConf,limit_clause:Optional[str], cur: Cur
 
     return fill_hyper_prm(cur, num_joint_nns=1)
 
+def _pair_partner_order_sql(pair_seed=None) -> str:
+    """ORDER BY for the partner subquery, so the pairing varies between calls.
+
+    The partner is chosen by a correlated subquery with LIMIT. Without an
+    explicit ORDER BY the row returned is whichever the scan reaches first, and
+    that is not arbitrary: when enhance_nn is set, idx_tmp_join covers
+    'accuracy', so SQLite satisfies 'd2.accuracy > d1.accuracy' by walking that
+    index in accuracy order and LIMIT takes the model whose accuracy sits
+    nearest above the baseline's. The pairing is therefore both deterministic
+    and minimal -- the same pairs every call, each asking for a gain too small
+    to learn from.
+
+    ``pair_seed`` of None -- the default -- shuffles, so every call pairs the
+    rows afresh. An integer seed reproduces one particular shuffle for runs
+    that have to repeat exactly; it is scaled by a 32-bit constant so the
+    product wraps the modulus, without which the multiplication would stay
+    monotonic and every seed would order the candidates identically.
+    """
+    if pair_seed is None:
+        return "ORDER BY RANDOM()"
+    factor = 1 + (int(pair_seed) * 2654435761) % 2147483646
+    return "ORDER BY ((d2.id * 48271 * " + str(factor) + ") % 2147483647)"
+
+
 def join_nn_query_legacy(sql: JoinConf,limit_clause:Optional[str], cur):
     if _is_real_table(cur, tmp_data):
         cur.execute(f'CREATE INDEX IF NOT EXISTS i_id ON {tmp_data}(id)')
@@ -536,9 +580,20 @@ def join_nn_query_legacy(sql: JoinConf,limit_clause:Optional[str], cur):
     for c in (sql.diff_columns or ()):
         q_list.append(f'd2.{c} != d1.{c}')
 
+    # enhance_nn says both whether to pair on accuracy and by how much. True
+    # takes any better network, which is what it has always meant; a number
+    # takes only one better by at least that margin, so the pair asks for a
+    # worthwhile change rather than the smallest the data happens to offer.
+    # bool is tested first because bool subclasses int.
     if sql.enhance_nn:
-        q_list.append(f'd2.accuracy > d1.accuracy')
+        if isinstance(sql.enhance_nn, bool):
+            q_list.append('d2.accuracy > d1.accuracy')
+        else:
+            q_list.append(
+                f'd2.accuracy >= d1.accuracy + {float(sql.enhance_nn)}')
+
     where_clause = 'WHERE ' + ' AND '.join(q_list) if q_list else ''
+    order_sql = _pair_partner_order_sql(getattr(sql, 'pair_seed', None))
 
     cur.execute(f'''
 WITH matches AS (
@@ -548,6 +603,7 @@ WITH matches AS (
           SELECT d2.id
           FROM {tmp_data} d2
           {where_clause}
+          {order_sql}
           LIMIT {sql.num_joint_nns - 1}
       ) AS matched_id
   FROM {tmp_data} d1

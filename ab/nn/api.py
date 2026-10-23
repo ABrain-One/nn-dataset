@@ -12,7 +12,7 @@ from ab.nn.util.db.Query import JoinConf
 
 @functools.lru_cache(maxsize=10)
 def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None, epoch=None, max_rows=None, sql: Optional[JoinConf] = None, nn_prefixes=None,
-         min_accuracy: Optional[float] = None, unique_nn=False, include_nn_stats=False, include_layer_stats=False) -> DataFrame:
+         min_accuracy: Optional[float] = None, pair_seed: Optional[int] = None, unique_nn=False, include_nn_stats=False, include_layer_stats=False) -> DataFrame:
     """
     Get the NN model code and all related statistics as a pandas DataFrame.
 
@@ -26,6 +26,15 @@ def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None
       - max_rows (int): Specifies the maximum number of results.
       - min_accuracy (float): If set, only rows with accuracy >= min_accuracy are returned.
           Applied in the SQL query, so it composes correctly with max_rows.
+      - pair_seed (int): Only meaningful with sql=JoinConf, which pairs each row
+          with another network. Left as None, the default, the pairing is
+          shuffled, so every call returns different pairs -- which is what
+          iterative fine-tuning needs, since repeating one set of pairs teaches
+          the model to memorise it. Pass an integer to reproduce one particular
+          shuffle exactly.
+          The improvement a pair must show is set on JoinConf.enhance_nn:
+          True pairs a row with any better network, while a number pairs it
+          only with one better by at least that much (e.g. enhance_nn=0.05).
       - include_nn_stats (bool): If True, include NN architecture statistics in the results.
           This adds columns like 'nn_total_params', 'nn_flops', 'nn_model_size_mb', etc.
 
@@ -48,7 +57,9 @@ def data(only_best_accuracy=False, task=None, dataset=None, metric=None, nn=None
           'nn_stats_meta' (dict with additional metadata), 'nn_stats_error'
     """
     dt: tuple[dict, ...] = DB_Read.data(only_best_accuracy, task=task, dataset=dataset, metric=metric, nn=nn, epoch=epoch, max_rows=max_rows,
-                                        sql=sql, nn_prefixes=nn_prefixes,  min_accuracy=min_accuracy, unique_nn=unique_nn, include_nn_stats=include_nn_stats, include_layer_stats=include_layer_stats)
+                                        sql=sql, nn_prefixes=nn_prefixes,  min_accuracy=min_accuracy,
+                                        pair_seed=pair_seed,
+                                        unique_nn=unique_nn, include_nn_stats=include_nn_stats, include_layer_stats=include_layer_stats)
     return DataFrame.from_records(dt)
 
 

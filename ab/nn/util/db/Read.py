@@ -1,3 +1,4 @@
+from dataclasses import replace
 import json
 import math
 
@@ -144,6 +145,7 @@ def data(only_best_accuracy: bool = False,
          nn_prefixes: Optional[tuple] = None,
          min_accuracy: Optional[float] = None,
          sql: Optional[JoinConf] = None,
+         pair_seed: Optional[int] = None,
          unique_nn: bool = False,
          include_nn_stats: bool = False,
          include_layer_stats: bool = False,
@@ -307,6 +309,12 @@ def data(only_best_accuracy: bool = False,
                         {limit_clause}''',
                     params)
         if sql:
+            # JoinConf is frozen, so the caller's object is left untouched
+            # and the seed is applied to a copy. Passing none leaves the
+            # config's own value in force, and its default shuffles, so
+            # repeated calls pair the rows differently.
+            if pair_seed is not None:
+                sql = replace(sql, pair_seed=pair_seed)
             results = join_nn_query(sql,limit_clause, cur)
         else:
             results = fill_hyper_prm(cur, include_nn_stats=include_nn_stats,)
