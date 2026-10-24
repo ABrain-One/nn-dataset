@@ -150,7 +150,7 @@ class Net(nn.Module):
 
         if prm.get('augment'):
             try:
-                from ab.nn.transform.base.BatchTransform import BatchTransform as bt_mod
+                from ab.nn.transform.base import BatchTransform as bt_mod
                 batch_transform = bt_mod.batch_transform
                 # determine schedule validator 
                 validate_schedule = getattr(bt_mod, 'validate_schedule', None)

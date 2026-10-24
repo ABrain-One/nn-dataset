@@ -13,7 +13,7 @@ batch_transform(inputs, labels, current_batch, total_batches, config) -> (inputs
 
 import torch
 import torch.nn.functional as F
-from ab.gpt.brute.trans.augment.ScheduleValidate import validate_schedule
+from ab.nn.transform.base.ScheduleValidate import validate_schedule
 
 _VALIDATED = {}  # id(config)
 
