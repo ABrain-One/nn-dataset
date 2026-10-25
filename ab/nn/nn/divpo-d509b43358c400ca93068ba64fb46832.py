@@ -1,0 +1,103 @@
+import torch
+import torch.nn as nn
+
+def supported_hyperparameters():
+    return {'lr', 'momentum'}
+
+class InvertedResidual(nn.Module):
+    def __init__(self, in_channels, out_channels, stride, expand_ratio):
+        super(InvertedResidual, self).__init__()
+        self.stride = stride
+        hidden_dim = int(in_channels * expand_ratio)
+        self.use_res_connect = self.stride == 1 and in_channels == out_channels
+
+        layers = []
+        if expand_ratio != 1:
+            # pw
+            layers.append(
+                nn.Conv2d(in_channels, hidden_dim, 1, 1, 0, bias=False))
+            layers.append(nn.BatchNorm2d(hidden_dim))
+            layers.append(nn.ReLU6(inplace=True))
+        layers.extend([
+            # dw
+            nn.Conv2d(hidden_dim, hidden_dim, 3, stride, 1,
+                      groups=hidden_dim, bias=False),
+            nn.BatchNorm2d(hidden_dim),
+            # pw-linear
+            nn.Conv2d(hidden_dim, out_channels, 1, 1, 0, bias=False),
+            nn.BatchNorm2d(out_channels),
+        ])
+        self.conv = nn.Sequential(*layers)
+
+    def forward(self, x):
+        if self.use_res_connect:
+            return x + self.conv(x)
+        else:
+            return self.conv(x)
+
+
+class Net(nn.Module):
+    def __init__(self, in_shape, out_shape, prm, device):
+        super(Net, self).__init__()
+        self.device = device
+        in_channels = in_shape[1]
+        num_classes = out_shape[0]
+
+        self.stem = nn.Sequential(
+            nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU6(inplace=True),
+            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU6(inplace=True),
+        )
+
+        self.block1 = InvertedResidual(32, 32, 1, 1)
+        self.block2 = InvertedResidual(32, 32, 1, 2)
+        self.block3 = InvertedResidual(32, 32, 1, 3)
+        self.block4 = InvertedResidual(32, 32, 1, 4)
+        self.block5 = InvertedResidual(32, 32, 1, 5)
+
+        self.conv = nn.Sequential(
+            nn.Conv2d(32, 16, 1, 1, 0, bias=False),
+            nn.BatchNorm2d(16),
+            nn.ReLU6(inplace=True),
+            nn.Conv2d(16, num_classes, 1, 1, 0, bias=False),
+            nn.AdaptiveAvgPool2d((1, 1)),
+        )
+
+        self.criterion = nn.CrossEntropyLoss()
+        self.optimizer = self.configure_optimizers(prm)
+
+    def forward(self, x):
+        x = self.stem(x)
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.block3(x)
+        x = self.block4(x)
+        x = self.block5(x)
+        x = self.conv(x)
+        x = x.view(x.size(0), -1)
+        return x
+
+    def train_setup(self, prm):
+        self.to(self.device)
+        self.criteria = nn.CrossEntropyLoss().to(self.device)
+        self.optimizer = self.configure_optimizers(prm)
+
+    def learn(self, train_data):
+        self.train()
+        for inputs, labels in train_data:
+            inputs, labels = inputs.to(self.device), labels.to(self.device)
+            self.optimizer.zero_grad()
+            outputs = self(inputs)
+            loss = self.criteria(outputs, labels)
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.parameters(), 3)
+            self.optimizer.step()
+
+    def configure_optimizers(self, prm):
+        lr = prm.get('lr', 0.05)
+        momentum = prm.get('momentum', 0.9)
+        return torch.optim.SGD(self.parameters(), lr=lr, momentum=momentum,
+                               weight_decay=0.00004)

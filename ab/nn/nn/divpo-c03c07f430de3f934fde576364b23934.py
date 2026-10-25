@@ -1,0 +1,74 @@
+import torch
+import torch.nn as nn
+
+def supported_hyperparameters():
+    return {'lr', 'momentum'}
+
+class Net(nn.Module):
+    def __init__(self, in_shape, out_shape, prm, device):
+        super().__init__()
+        self.device = device
+        self.conv1 = nn.Conv2d(in_shape[1], 32, kernel_size=3, stride=1, padding=1)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
+        self.dropout1 = nn.Dropout(p=prm.get('dropout', 0.2))
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1)
+        self.dropout2 = nn.Dropout(p=prm.get('dropout', 0.3))
+        self.avgpool = nn.AdaptiveAvgPool2d((6, 6))
+        self.fc1 = nn.Linear(128 * 6 * 6, 1024)
+        self.dropout3 = nn.Dropout(p=prm.get('dropout', 0.4))
+        self.fc2 = nn.Linear(1024, 128)
+        self.fc3 = nn.Linear(128, out_shape[0])
+
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+        x = self.conv2(x)
+        x = self.relu(x)
+        x = self.dropout1(x)
+        x = self.conv3(x)
+        x = self.relu(x)
+        x = self.dropout2(x)
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.dropout3(x)
+        x = self.fc2(x)
+        x = self.relu(x)
+        x = self.fc3(x)
+        return x
+
+    def train_setup(self, prm):
+        self.to(self.device)
+        self.criteria = nn.CrossEntropyLoss().to(self.device)
+        self.optimizer = torch.optim.SGD(
+            self.parameters(),
+            lr=prm.get('lr', 0.01),
+            momentum=prm.get('momentum', 0.9),
+        )
+
+    def learn(self, train_data):
+        self.train()
+        for inputs, labels in train_data:
+            inputs, labels = inputs.to(self.device), labels.to(self.device)
+            self.optimizer.zero_grad()
+            outputs = self(inputs)
+            loss = self.criteria(outputs, labels)
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.parameters(), 3)
+            self.optimizer.step()
