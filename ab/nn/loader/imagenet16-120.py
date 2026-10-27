@@ -1,11 +1,8 @@
-"""NAS-Bench-201 ImageNet16-120 loader (not Imagenette).
+"""NAS-Bench-201 ImageNet16-120 loader.
 
 Place the official train_data_batch_1 ... train_data_batch_10 and
 val_data files in data/ImageNet16. No automatic download is attempted.
-File format/checksums and normalization follow D-X-Y/AutoDL-Projects:
-https://github.com/D-X-Y/AutoDL-Projects/blob/main/xautodl/datasets/DownsampledImageNet.py
-https://github.com/D-X-Y/AutoDL-Projects/blob/main/xautodl/datasets/get_dataset_with_transform.py
-Only checksum-verified official pickle files are loaded.
+
 The full official validation partition is returned, not the benchmark's
 separate x-valid/x-test subsets. Transforms are supplied by nn-dataset.
 """
