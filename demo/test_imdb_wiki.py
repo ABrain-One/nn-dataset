@@ -3,7 +3,7 @@ Test script to download and explore the IMDB-Wiki dataset
 """
 import torch
 import torchvision.transforms as transforms
-from ab.nn.loader.imdb_wiki import loader, __norm_mean, __norm_dev
+from ab.nn.loader.imdb-wiki import loader, __norm_mean, __norm_dev
 import matplotlib.pyplot as plt
 
 

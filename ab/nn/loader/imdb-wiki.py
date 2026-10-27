@@ -11,7 +11,7 @@ __norm_dev = (0.229, 0.224, 0.225)
 MINIMUM_ACCURACY = 0.01
 
 # Cache lives under the repo's gitignored data/ directory
-_cache_dir = os.path.join(str(data_dir), 'imdb_wiki')
+_cache_dir = os.path.join(str(data_dir), 'imdb-wiki')
 
 
 def loader(transform_fn, task):
