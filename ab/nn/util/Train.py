@@ -688,7 +688,7 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
     try:
         with open(temp_file_path, 'w') as f:
             f.write(nn_code)  # write the code to the temp file
-        res = codeEvaluator.evaluate_single_file(temp_file_path)
+        res = codeEvaluator.evaluate_single_file(temp_file_path, prm)
         # load dataset
         out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset, prm['transform'], transform_dir)
         num_workers = prm.get('num_workers', 1)

@@ -95,8 +95,18 @@ def check_docstrings(file_path):
         print(f"Error checking docstrings for {file_path}: {e}")
         return []
 
+
 # Dynamic Evaluation: Attempt to Run the Code
-def dynamic_evaluation(file_path, class_name='Net'):
+def probe_prm(model_module, prm):
+    declared = getattr(model_module, 'supported_hyperparameters', None)
+    if callable(declared):
+        missing = [k for k in declared() if k not in prm]
+        if missing:
+            raise ValueError(f"Missing required hyperparameters: {sorted(missing)}")
+    return dict(prm)
+
+
+def dynamic_evaluation(file_path, prm):
     try:
         # Dynamically import the module
         spec = importlib.util.spec_from_file_location("model_module", file_path)
@@ -104,16 +114,12 @@ def dynamic_evaluation(file_path, class_name='Net'):
         spec.loader.exec_module(model_module)
 
         # Get the model class
-        ModelClass = getattr(model_module, class_name)
+        ModelClass = getattr(model_module, 'Net')
 
         # Example parameters
         in_shape = (1, 3, 224, 224)  # Assuming input is an RGB image of size 224x224
         out_shape = (10,)  # Assuming there are 10 classes
-        prm = {
-            'lr': 0.01,
-            'momentum': 0.9,
-            'dropout': 0.5
-        }
+        prm = probe_prm(model_module, prm)
 
         # Set up the device
         device = torch_device()
@@ -182,7 +188,7 @@ def calculate_score(pylint_issues, complexity_report, dynamic_success, missing_d
     return score / 100.0
 
 # Evaluate Code Quality for a Single File
-def evaluate_code_quality(file_path):
+def evaluate_code_quality(file_path, prm):
     success = False
     try:
         report = {}
@@ -196,7 +202,9 @@ def evaluate_code_quality(file_path):
         report['complexity'] = complexity_report
 
         # Dynamic evaluation
-        dynamic_success, dynamic_output = dynamic_evaluation(file_path, class_name='Net')
+        dynamic_result = dynamic_evaluation(file_path, prm=prm)
+        dynamic_success = bool(dynamic_result.get('success'))
+        dynamic_output = dynamic_result.get('output')
         report['dynamic_evaluation'] = {
             'success': dynamic_success,
             'output': dynamic_output
@@ -212,50 +220,11 @@ def evaluate_code_quality(file_path):
         }
     return success, report
 
-# Evaluate Code Quality for an Entire Directory
-def evaluate_directory_code_quality(directory):
-    report = {}
-    python_files = get_python_files(directory)
-    report['files'] = {}
-    report['total_score'] = 0
-    report['max_score'] = len(python_files) * 100
-    report['average_score'] = 0
 
-    for file_path in python_files:
-        print(f"Evaluating {file_path}...")
-        success, file_report = evaluate_code_quality(file_path)
-        report['files'][file_path] = file_report
-        report['total_score'] += file_report['score']
-
-    # Calculate average score
-    if len(python_files) > 0:
-        report['average_score'] = report['total_score'] / len(python_files)
-    else:
-        report['average_score'] = 0
-
-    return report
-
-def evaluate_single_file(file_path):
+def evaluate_single_file(file_path, prm):
     print(f"Evaluating {file_path}...")
-    success, report = evaluate_code_quality(file_path)
+    success, report = evaluate_code_quality(file_path, prm=prm)
     if success:
         return report
     else:
         return None
-
-# Main Function
-if __name__ == "__main__":
-    # Single file evaluation
-    res = evaluate_single_file(default_nn_path)
-    pprint.pprint(res.get('score'))
-
-    quality_report = evaluate_directory_code_quality(nn_dir)
-    # # Print detailed report
-    pprint.pprint(quality_report)
-
-    # # Save as JSON file
-    makedirs(out_dir, exist_ok=True)
-    with open(out_dir / 'quality_report.json', 'w', encoding='utf-8') as f:
-        json.dump(quality_report, f, ensure_ascii=False, indent=4)
-
-    print("Quality report saved to quality_report.json")
