@@ -10,7 +10,6 @@ from typing import Union
 
 from torch.cuda import OutOfMemoryError
 
-import ab.nn.util.CodeEval as codeEvaluator
 import ab.nn.util.db.Write as DB_Write
 from ab.nn.util.Classes import DataRoll
 from ab.nn.util.Exception import *
@@ -673,7 +672,7 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
         save_path (str|None): Path to save the statistics, or None to not save.
         export_onnx (bool): Export model and its weights into ONNX file.
     return:
-        (str, float): Name of the model and the accuracy
+        (str, float, float): Name of the model, its accuracy and the accuracy to time metric
     """
     model_name = uuid4(nn_code)
     if prefix:
@@ -688,7 +687,6 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
     try:
         with open(temp_file_path, 'w') as f:
             f.write(nn_code)  # write the code to the temp file
-        res = codeEvaluator.evaluate_single_file(temp_file_path, prm)
         # load dataset
         out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset, prm['transform'], transform_dir)
         num_workers = prm.get('num_workers', 1)
@@ -742,4 +740,4 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             pass
         release_memory()
 
-    return model_name, accuracy, accuracy_to_time, res['score'] if res else 0.0
+    return model_name, accuracy, accuracy_to_time

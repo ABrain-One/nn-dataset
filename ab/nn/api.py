@@ -281,11 +281,11 @@ def layer_data(
     return DataFrame.from_records(dt)
 
 def check_nn(nn_code: str, task: str, dataset: str, metric: str, prm: dict, save_to_db=True, prefix=None, save_path=None, export_onnx=False,
-             epoch_limit_minutes=default_epoch_limit_minutes, transform_dir=None) -> tuple[str, float, float, float]:
+             epoch_limit_minutes=default_epoch_limit_minutes, transform_dir=None) -> tuple[str, float, float]:
     """
     Train the new NN model with the provided hyperparameters (prm) and save it to the database if training is successful.
     for argument description see :ref:`ab.nn.util.db.Write.save_nn()`
-    :return: Automatically generated name of NN model, its accuracy, accuracy to time metric, and quality of the code metric.
+    :return: Automatically generated name of NN model, its accuracy, and accuracy to time metric.
     """
     return Train.train_new(nn_code, task, dataset, metric, prm, save_to_db=save_to_db, prefix=prefix, save_path=save_path, export_onnx=export_onnx,
                            epoch_limit_minutes=epoch_limit_minutes, transform_dir=transform_dir)
