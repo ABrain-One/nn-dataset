@@ -1,8 +1,8 @@
-import os
 import shutil
 import time
 import unittest
 import uuid
+from contextlib import contextmanager
 from unittest.mock import patch
 
 import pandas as pd
@@ -16,64 +16,98 @@ from ab.nn.api import JoinConf
 from ab.nn.util.Const import *
 
 
+@contextmanager
+def dummy_nn(code="def model(x):\n    return x"):
+    """Write a synthetic NN + stat row, yield its identifiers, then remove it.
+
+    The row exists only for the duration of the `with` block, so a failing test
+    cannot leak a `tmp_*` model into the LEMUR database. Deletion runs in
+    `finally`, so it also happens when the body raises.
+    """
+    uid = str(uuid.uuid4())
+    nm = f"tmp_{uid[:8]}"
+    cfg_ext = ("unit-task", "unit-set", "acc", nm, 1)
+    prm = {
+        "uid": uid,
+        "lr": 0.123,
+        "batch": 16,
+        "note": "native-test",
+        "flag": True,
+        "transform": "norm_256_flip",
+        "epoch": 1,
+    }
+
+    DB_Write.save_nn(
+        nn_code=code,
+        task="unit-task",
+        dataset="unit-set",
+        metric="acc",
+        epoch=1,
+        prm=prm,
+        force_name=nm,
+    )
+    try:
+        yield nm, uid, cfg_ext
+    finally:
+        conn, cur = DB_Init.sql_conn()
+        try:
+            cur.execute("PRAGMA foreign_keys=ON")
+            # `stat.id` is uuid4(all_values); the uid passed in `prm` is stored
+            # in the `prm` column, so that is the column to match on.
+            cur.execute("DELETE FROM stat WHERE prm=?", (uid,))
+            cur.execute("DELETE FROM nn WHERE name=?", (nm,))
+            for tbl in param_tables:
+                cur.execute(f"DELETE FROM {tbl} WHERE uid=?", (uid,))
+        finally:
+            DB_Init.close_conn(conn)
+
+
+def nn_row_count(nm: str) -> int:
+    conn, cur = DB_Init.sql_conn()
+    try:
+        cur.execute("SELECT COUNT(*) FROM nn WHERE name=?", (nm,))
+        return cur.fetchone()[0]
+    finally:
+        DB_Init.close_conn(conn)
+
+
+def temporary_models() -> list[str]:
+    conn, cur = DB_Init.sql_conn()
+    try:
+        cur.execute(r"SELECT name FROM nn WHERE name LIKE 'tmp\_%' ESCAPE '\'")
+        return [r[0] for r in cur.fetchall()]
+    finally:
+        DB_Init.close_conn(conn)
+
+
 class Testing(unittest.TestCase):
-    inserted_uid: str | None = None  # set in setUpClass
-    dummy_cfg_ext: tuple | None = None  # (task, dataset, metric, nn, epoch)
 
     @classmethod
     def setUpClass(cls):
-        if os.path.exists(db_dir):
-            shutil.rmtree(db_dir)
-            DB_Read.init_population()
-        uid = str(uuid.uuid4())
-        cls.inserted_uid = uid
-        tmp_nn = f"tmp_{uid[:8]}"
-        cls.dummy_cfg_ext = ("unit-task", "unit-set", "acc", tmp_nn, 1)
+        """Rebuild the database, then verify it, then test against it.
 
-        dummy_code = "def model(x):\n    return x"
-        prm = {
-            "uid": uid,
-            "lr": 0.123,
-            "batch": 16,
-            "note": "native-test",
-            "flag": True,
-            "transform": "norm_256_flip",
-            "epoch": 1,
-        }
+        The rebuild is unconditional: the previous version only ran when
+        `db_dir` already existed, so a first run on a clean checkout tested
+        whatever `init_population()` had happened to produce at import time.
+        The cached query results from the old database are dropped as well.
+        """
+        shutil.rmtree(db_dir, ignore_errors=True)
+        DB_Write.init_population()
+        assert db_file.exists(), f"database was not recreated at {db_file}"
 
-        DB_Write.save_nn(
-            nn_code=dummy_code,
-            task="unit-task",
-            dataset="unit-set",
-            metric="acc",
-            epoch=1,
-            prm=prm,
-            force_name=tmp_nn,
-        )
+        for fn in (api.data, api.run_data, api.prun_data,
+                   api.nn_stat_data, api.layer_data):
+            fn.cache_clear()
 
-    # ------------------------------------------------------------------
-    #  Class-level tear-down: delete the synthetic record and confirm
-    # ------------------------------------------------------------------
+        assert DB_Read.data(max_rows=1), "database was recreated but is empty"
+        leaked = temporary_models()
+        assert not leaked, f"freshly built database already contains: {leaked}"
+
     @classmethod
     def tearDownClass(cls):
-        if cls.inserted_uid is None:
-            return
-
-        conn, cur = DB_Init.sql_conn()
-        cur.execute("DELETE FROM stat WHERE id=?", (cls.inserted_uid,))
-        for tbl in param_tables:
-            cur.execute(f"DELETE FROM {tbl} WHERE uid=?", (cls.inserted_uid,))
-
-        # ── confirmation ───────────────────────────────────────────────
-        cur.execute("SELECT COUNT(*) FROM stat WHERE id=?", (cls.inserted_uid,))
-        assert cur.fetchone()[0] == 0, "stat row not removed in tearDownClass"
-
-        for tbl in param_tables:
-            cur.execute(f"SELECT COUNT(*) FROM {tbl} WHERE uid=?", (cls.inserted_uid,))
-            leftovers = cur.fetchone()[0]
-            assert leftovers == 0, f"{leftovers} leftover prm rows in {tbl}"
-
-        DB_Init.close_conn(conn)
+        """No test may leave a temporary model behind."""
+        leaked = temporary_models()
+        assert not leaked, f"leaked temporary models: {leaked}"
 
     # ------------------------------------------------------------------
     #  Basic data sanity check
@@ -161,16 +195,36 @@ class Testing(unittest.TestCase):
         self.assertEqual(result, ("mock-nn", 0.0, 0.0))
 
     # ------------------------------------------------------------------
+    #  save_nn round-trip: written, readable, and fully removed afterwards
+    # ------------------------------------------------------------------
+    def test_save_nn_roundtrip(self):
+        with dummy_nn() as (nm, uid, _cfg):
+            self.assertEqual(len(DB_Read.data(task="unit-task", nn=nm)), 1)
+            self.assertEqual(nn_row_count(nm), 1)
+
+        self.assertEqual(len(DB_Read.data(task="unit-task", nn=nm)), 0)
+        self.assertEqual(nn_row_count(nm), 0)
+
+        conn, cur = DB_Init.sql_conn()
+        try:
+            for tbl in param_tables:
+                cur.execute(f"SELECT COUNT(*) FROM {tbl} WHERE uid=?", (uid,))
+                self.assertEqual(cur.fetchone()[0], 0, f"leftover prm rows in {tbl}")
+        finally:
+            DB_Init.close_conn(conn)
+
+    # ------------------------------------------------------------------
     #  Native-typing round-trip
     # ------------------------------------------------------------------
     def test_native_param_types(self):
-        rows = DB_Read.data(task="unit-task", nn=self.dummy_cfg_ext[3])
-        self.assertEqual(len(rows), 1)
-        prm = rows[0]["prm"]
-        self.assertIsInstance(prm["lr"], float)
-        self.assertIsInstance(prm["batch"], int)
-        self.assertIsInstance(prm["note"], str)
-        self.assertIn(prm["flag"], (0, 1))
+        with dummy_nn() as (nm, _uid, _cfg):
+            rows = DB_Read.data(task="unit-task", nn=nm)
+            self.assertEqual(len(rows), 1)
+            prm = rows[0]["prm"]
+            self.assertIsInstance(prm["lr"], float)
+            self.assertIsInstance(prm["batch"], int)
+            self.assertIsInstance(prm["note"], str)
+            self.assertIn(prm["flag"], (0, 1))
 
     # ------------------------------------------------------------------
     #  Performance guard (dynamic budget)
@@ -192,12 +246,12 @@ class Testing(unittest.TestCase):
     #  remaining_trials logic
     # ------------------------------------------------------------------
     def test_remaining_trials(self):
-        cfg = self.dummy_cfg_ext
-        rem, passed = DB_Read.remaining_trials(cfg, 5)
-        self.assertEqual(rem + passed, 5 if passed < 5 else passed)
+        with dummy_nn() as (_nm, _uid, cfg):
+            rem, passed = DB_Read.remaining_trials(cfg, 5)
+            self.assertEqual(rem + passed, 5 if passed < 5 else passed)
 
-        rem2, _ = DB_Read.remaining_trials(cfg, -3)
-        self.assertEqual(rem2, 3)
+            rem2, _ = DB_Read.remaining_trials(cfg, -3)
+            self.assertEqual(rem2, 3)
 
         rem3, passed3 = DB_Read.remaining_trials(
             ("nope", "nope", "nope", "nope", 1), 7
