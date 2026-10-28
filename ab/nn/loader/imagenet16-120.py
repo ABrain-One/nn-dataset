@@ -1,7 +1,6 @@
 """NAS-Bench-201 ImageNet16-120 loader.
 
-Place the official train_data_batch_1 ... train_data_batch_10 and
-val_data files in data/ImageNet16. No automatic download is attempted.
+Missing official batches are downloaded automatically into data/ImageNet16.
 
 The full official validation partition is returned, not the benchmark's
 separate x-valid/x-test subsets. Transforms are supplied by nn-dataset.
@@ -20,7 +19,6 @@ __norm_mean = tuple(x / 255 for x in (122.68, 116.66, 104.01))
 __norm_dev = tuple(x / 255 for x in (63.22, 61.26, 65.09))
 CLASS_QUANTITY = 120
 MINIMUM_ACCURACY = 1.0 / CLASS_QUANTITY
-
 
 class ImageNet16(Dataset):
     train_list = (
@@ -75,10 +73,18 @@ class ImageNet16(Dataset):
             image = self.transform(image)
         return image, self.targets[index]
 
-
 def loader(transform_fn, task):
     transform = transform_fn((__norm_mean, __norm_dev))
     root = data_dir / 'ImageNet16'
+    files = ImageNet16.train_list + ImageNet16.valid_list
+    if any(not (root / name).is_file() for name, _ in files):
+        import gdown
+
+        gdown.download_folder(
+            url='https://drive.google.com/drive/folders/1Ui1Rw7MVhdLBaVpu1HYh_-5qEqzAu0nI',
+            output=str(root),
+            resume=True,
+        )
     train_set = ImageNet16(root, train=True, transform=transform)
     test_set = ImageNet16(root, train=False, transform=transform)
     return (CLASS_QUANTITY,), MINIMUM_ACCURACY, train_set, test_set
