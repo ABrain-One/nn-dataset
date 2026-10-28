@@ -16,50 +16,32 @@ from ab.nn.api import JoinConf
 from ab.nn.util.Const import *
 
 
-@contextmanager
-def dummy_nn(code="def model(x):\n    return x"):
-    """Write a synthetic NN + stat row, yield its identifiers, then remove it.
+# Models this run inserted, so tear-down can confirm each one was removed
+# without touching anything it did not create.
+created_models: list[str] = []
 
-    The row exists only for the duration of the `with` block, so a failing test
-    cannot leak a `tmp_*` model into the LEMUR database. Deletion runs in
-    `finally`, so it also happens when the body raises.
+
+def drop_model(nm: str):
+    """Remove one model and everything hanging off it.
+
+    Nothing cascades here. `stat` declares FOREIGN KEY (prm) REFERENCES
+    prm (uid), but `prm` has no unique key on `uid`, so switching foreign-key
+    enforcement on makes SQLite reject every statement touching `stat` with
+    "foreign key mismatch". The project therefore runs with enforcement off
+    (`sql_conn` never sets the pragma) and each table is cleared explicitly,
+    children first.
     """
-    uid = str(uuid.uuid4())
-    nm = f"tmp_{uid[:8]}"
-    cfg_ext = ("unit-task", "unit-set", "acc", nm, 1)
-    prm = {
-        "uid": uid,
-        "lr": 0.123,
-        "batch": 16,
-        "note": "native-test",
-        "flag": True,
-        "transform": "norm_256_flip",
-        "epoch": 1,
-    }
-
-    DB_Write.save_nn(
-        nn_code=code,
-        task="unit-task",
-        dataset="unit-set",
-        metric="acc",
-        epoch=1,
-        prm=prm,
-        force_name=nm,
-    )
+    conn, cur = DB_Init.sql_conn()
     try:
-        yield nm, uid, cfg_ext
+        for tbl in param_tables:
+            cur.execute(
+                f"DELETE FROM {tbl} WHERE uid IN (SELECT prm FROM stat WHERE nn=?)",
+                (nm,),
+            )
+        cur.execute("DELETE FROM stat WHERE nn=?", (nm,))
+        cur.execute("DELETE FROM nn WHERE name=?", (nm,))
     finally:
-        conn, cur = DB_Init.sql_conn()
-        try:
-            cur.execute("PRAGMA foreign_keys=ON")
-            # `stat.id` is uuid4(all_values); the uid passed in `prm` is stored
-            # in the `prm` column, so that is the column to match on.
-            cur.execute("DELETE FROM stat WHERE prm=?", (uid,))
-            cur.execute("DELETE FROM nn WHERE name=?", (nm,))
-            for tbl in param_tables:
-                cur.execute(f"DELETE FROM {tbl} WHERE uid=?", (uid,))
-        finally:
-            DB_Init.close_conn(conn)
+        DB_Init.close_conn(conn)
 
 
 def nn_row_count(nm: str) -> int:
@@ -71,25 +53,64 @@ def nn_row_count(nm: str) -> int:
         DB_Init.close_conn(conn)
 
 
-def temporary_models() -> list[str]:
-    conn, cur = DB_Init.sql_conn()
+@contextmanager
+def dummy_nn():
+    """Write a synthetic NN plus one stat row, yield it, then remove it.
+
+    Yields the name `save_nn` reports, not the one requested: those differ
+    whenever `code_to_db` recognises the architecture and files the statistics
+    under the name already stored. Reading the return value is what keeps the
+    rest of the block, and the deletion, pointed at the row that actually
+    exists.
+
+    The uid is embedded in the code so the architecture is new on every run and
+    the requested name is the one that gets used. The row lives only for the
+    duration of the `with` block; the deletion is in `finally`, so it runs when
+    the body raises too.
+    """
+    uid = str(uuid.uuid4())
+    requested = f"tmp_{uid[:8]}"
+    code = f"# {uid}\ndef model(x):\n    return x"
+    prm = {
+        "uid": uid,
+        "lr": 0.123,
+        "batch": 16,
+        "note": "native-test",
+        "flag": True,
+        "transform": "norm_256_flip",
+        "epoch": 1,
+    }
+
+    nm = DB_Write.save_nn(
+        nn_code=code,
+        task="unit-task",
+        dataset="unit-set",
+        metric="acc",
+        epoch=1,
+        prm=prm,
+        force_name=requested,
+    )
+    assert nm == requested, (
+        f"save_nn filed the statistics under {nm!r}, not {requested!r}: "
+        f"the synthetic architecture was already in the database"
+    )
+    created_models.append(nm)
     try:
-        cur.execute(r"SELECT name FROM nn WHERE name LIKE 'tmp\_%' ESCAPE '\'")
-        return [r[0] for r in cur.fetchall()]
+        yield nm, uid, ("unit-task", "unit-set", "acc", nm, 1)
     finally:
-        DB_Init.close_conn(conn)
+        drop_model(nm)
 
 
 class Testing(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        """Rebuild the database, then verify it, then test against it.
+        """Rebuild the database, verify it, then test against it.
 
-        The rebuild is unconditional: the previous version only ran when
-        `db_dir` already existed, so a first run on a clean checkout tested
-        whatever `init_population()` had happened to produce at import time.
-        The cached query results from the old database are dropped as well.
+        The rebuild is unconditional: rebuilding only when `db_dir` already
+        existed meant a first run on a clean checkout tested whatever
+        `init_population()` had produced at import time. Cached query results
+        from the previous database are dropped with it.
         """
         shutil.rmtree(db_dir, ignore_errors=True)
         DB_Write.init_population()
@@ -100,14 +121,12 @@ class Testing(unittest.TestCase):
             fn.cache_clear()
 
         assert DB_Read.data(max_rows=1), "database was recreated but is empty"
-        leaked = temporary_models()
-        assert not leaked, f"freshly built database already contains: {leaked}"
 
     @classmethod
     def tearDownClass(cls):
-        """No test may leave a temporary model behind."""
-        leaked = temporary_models()
-        assert not leaked, f"leaked temporary models: {leaked}"
+        """Every model this run inserted must be gone again."""
+        leaked = [nm for nm in created_models if nn_row_count(nm)]
+        assert not leaked, f"leaked models: {leaked}"
 
     # ------------------------------------------------------------------
     #  Basic data sanity check
