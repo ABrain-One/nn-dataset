@@ -1,34 +1,34 @@
 """
-lemur_query.py — Standalone User-Facing Extraction Tool for the LEMUR NN Dataset
-==================================================================================
+info.py — Standalone User-Facing Extraction Tool for the LEMUR NN Dataset
+==========================================================================
 
 Usage examples:
 
   # List all available tasks
-  python lemur_query.py
+  python info.py
 
   # Show models + datasets + best accuracy for a specific task
-  python lemur_query.py --task "image classification"
+  python info.py --task "img-classification"
 
   # Export task results to Excel (.xlsx) or CSV
-  python lemur_query.py --task "image classification" --csv results.xlsx
-  python lemur_query.py --task "image classification" --csv results.csv
+  python info.py --task "img-classification" --csv results.xlsx
+  python info.py --task "img-classification" --csv results.csv
 
   # Export task results to plain text
-  python lemur_query.py --task "image classification" --txt results.txt
+  python info.py --task "img-classification" --txt results.txt
 
   # Extract source code for one or more models by name prefix
-  python lemur_query.py --code AlexNet
-  python lemur_query.py --code AlexNet,ResNet --out-dir ./model_code
+  python info.py --code AlexNet
+  python info.py --code AlexNet,ResNet --out-dir ./model_code
 
   # Best accuracy per model grouped by dataset (all tasks)
-  python lemur_query.py --best-accuracy
+  python info.py --best-accuracy
 
   # Best accuracy per model grouped by dataset, filtered by task
-  python lemur_query.py --best-accuracy --task "image classification"
+  python info.py --best-accuracy --task "img-classification"
 
   # Export best-accuracy table to CSV
-  python lemur_query.py --best-accuracy --csv best.csv
+  python info.py --best-accuracy --csv best.csv
 """
 
 from __future__ import annotations
@@ -92,8 +92,6 @@ def cmd_task_summary(task: str, csv_out: str | None, txt_out: str | None) -> Non
     For a given task, show each model + dataset combination and the maximum
     accuracy achieved. Optionally export to CSV or TXT.
     """
-    import pandas as pd
-
     df = _load_df(task=task)
 
     required = {"task", "nn", "dataset", "accuracy"}
@@ -145,7 +143,7 @@ def cmd_extract_code(prefixes: list[str], out_dir: str | None) -> None:
     Retrieve and save the source code for all models whose name starts with
     any of the given prefixes. One .py file per unique model name.
     """
-    import ab.nn.api as api  # type: ignore
+    from ab.nn.util.db.Read import query_rows  # type: ignore
 
     dest = Path(out_dir) if out_dir else Path(".")
     dest.mkdir(parents=True, exist_ok=True)
@@ -154,25 +152,26 @@ def cmd_extract_code(prefixes: list[str], out_dir: str | None) -> None:
     for prefix in prefixes:
         prefix = prefix.strip()
         print(f"\nSearching for models with prefix: {prefix!r} ...")
+        # Only model names and source code are needed, so query the `nn` table
+        # directly. The prefix is escaped so that '_' and '%' match literally.
+        like =prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         try:
-            df = api.data(nn_prefixes=(prefix,))
+            rows = query_rows("SELECT name, code FROM nn WHERE name LIKE ? ESCAPE '\\' ORDER BY name", [like])
         except Exception as exc:
             print(f"  ERROR: {exc}", file=sys.stderr)
             continue
 
-        if df.empty or "nn" not in df.columns or "nn_code" not in df.columns:
+        if not rows:
             print(f"  No models found for prefix {prefix!r}.")
             continue
 
-        # One file per unique (nn, nn_code) pair; skip rows without code
-        code_df = df[["nn", "nn_code"]].dropna(subset=["nn_code"]).drop_duplicates("nn")
-        if code_df.empty:
+        # One file per model name; skip models without stored source code
+        code_rows = [(name, code) for name, code in rows if code]
+        if not code_rows:
             print(f"  No source code stored for prefix {prefix!r}.")
             continue
 
-        for _, row in code_df.iterrows():
-            model_name = row["nn"]
-            code = row["nn_code"]
+        for model_name, code in code_rows:
             out_file = dest / f"{model_name}.py"
             out_file.write_text(str(code), encoding="utf-8")
             print(f"  Saved: {out_file}")
@@ -212,7 +211,7 @@ def cmd_best_accuracy(task: str | None, csv_out: str | None, txt_out: str | None
     )
     summary["Best Accuracy"] = summary["Best Accuracy"].round(6)
 
-    header = f"Best accuracy per model grouped by dataset"
+    header = "Best accuracy per model grouped by dataset"
     if task:
         header += f" (task: {task})"
     print(f"\n{header}")
@@ -237,7 +236,7 @@ def cmd_best_accuracy(task: str | None, csv_out: str | None, txt_out: str | None
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="lemur_query.py",
+        prog="info.py",
         description=(
             "LEMUR NN Dataset — user-facing extraction tool.\n\n"
             "Run with no arguments to list all available tasks."
@@ -248,7 +247,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--task", "-t",
         metavar="TASK",
-        help="Filter by task name (e.g. 'image classification'). "
+        help="Filter by task name (e.g. 'img-classification'). "
              "Shows models, datasets, and max accuracy for that task.",
     )
     p.add_argument(

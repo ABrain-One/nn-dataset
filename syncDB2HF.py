@@ -8,15 +8,19 @@ LEMUR database (db/ab.nn.db), generates an Excel audit report, compresses and
 uploads the database to Hugging Face, and finally deletes local artifacts only
 if every safety condition is satisfied.
 
+A valid Hugging Face token is required (--HF_TOKEN or the HF_TOKEN environment
+variable). Without one the script stops immediately, before any phase runs.
+
 Phases:
     1.  Inventory Scan
     2.  HF Fallback — download DB from Hugging Face if no local copy exists
+        (newest published version if the current one is not published yet)
     3.  Ingest new statistics into DB (json_train_to_db)
     4.  Dependency Mapping (Model <-> Stats <-> Transforms)
     5.  SAFE / KEEP Logic
     6.  DB Verification (hash + tuple lookups)
     7.  Excel Audit Report
-    8.  Compress ab.nn.db -> ab.nn.db.zst
+    8.  Compress ab.nn.db -> ab.nn.zst-<version>
     9.  Upload updated DB to Hugging Face (replaces current version)
     10. Local Deletion (only SAFE + VERIFIED + UPLOAD OK)
 """
@@ -47,7 +51,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-log = logging.getLogger("lemur-pipeline")
+log = logging.getLogger("syncDB2HF")
 
 # ---------------------------------------------------------------------------
 # Paths / Constants
@@ -56,13 +60,14 @@ TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 AUDIT_XLSX = ab_root_path / f"LEMUR_Deep_Audit_{TIMESTAMP}.xlsx"
 
 # Reuse the project's existing HF/DB utilities instead of reimplementing them.
-from ab.nn.util.Const import add_version  # noqa: E402
-from ab.nn.util.ZST import compress as zst_compress  # noqa: E402
-from ab.nn.util.hf.HF import upload_file as hf_upload_file  # noqa: E402
+from ab.nn.util.Const import add_version, get_version, db_dir  # noqa: E402
+from ab.nn.util.ZST import compress as zst_compress, decompress as zst_decompress  # noqa: E402
+from ab.nn.util.hf.HF import upload_file as hf_upload_file, download as hf_download  # noqa: E402
 from ab.nn.util.hf.DB_from_HF import repo_id as HF_REPO_ID  # noqa: E402
 
-# Versioned compressed filename, e.g. db/ab.nn.zst-2.2.9 (version comes from the
-# project's `version` file via add_version()).
+# Versioned compressed filename, e.g. db/ab.nn.zst-2.2.9. add_version() uses the
+# version of the pip-installed `nn-dataset` package if there is one, and falls
+# back to the project's `version` file otherwise.
 DB_ZST = db_file.parent / add_version("ab.nn.zst")
 
 HF_TOKEN = os.environ.get("HF_TOKEN")  # or pass --HF_TOKEN on the command line
@@ -168,14 +173,47 @@ def phase1_inventory() -> Tuple[Dict[str, ModelEntry], List[StatFolder], Dict[st
 # ===========================================================================
 # Phase 2: HF Fallback — ensure DB exists locally
 # ===========================================================================
+# Names of published databases in the HF repo root, e.g. "ab.nn.zst-2.2.11".
+_DB_NAME_RE = re.compile(r"^ab\.nn\.zst-(\d+(?:\.\d+)*)$")
+
+
+def _version_key(version: str) -> Tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
+def _published_db_versions() -> List[str]:
+    """Versions of all ab.nn.zst-<version> files in the HF repo root, ascending.
+
+    Listing a public repo needs no token. Files in sub-folders are ignored.
+    """
+    from huggingface_hub import HfApi  # type: ignore
+    versions = []
+    for name in HfApi().list_repo_files(HF_REPO_ID, repo_type="model"):
+        match = _DB_NAME_RE.match(name)
+        if match:
+            versions.append(match.group(1))
+    return sorted(versions, key=_version_key)
+
+
+def _pick_baseline_version(current: str, published: List[str]) -> Optional[str]:
+    """The current version if it is published, else the newest one below it."""
+    if current in published:
+        return current
+    older = [v for v in published if _version_key(v) <= _version_key(current)]
+    return older[-1] if older else None
+
+
 def phase2_ensure_db() -> bool:
     """
-    If the local database does not exist, download it from Hugging Face using
-    the project's own db_from_hf() helper, which:
-      - Downloads the versioned compressed file (ab.nn.zst-<version>) from the
-        NN-Dataset/LEMUR_DB HF repo (uses the version from the project's
-        `version` file via add_version(), matching the current project release).
-      - Decompresses it to db/ab.nn.db and removes the .zst download.
+    If the local database does not exist, download it from Hugging Face:
+      - The wanted file is ab.nn.zst-<version> in the NN-Dataset/LEMUR_DB HF
+        repo. The version comes from add_version(): the pip-installed
+        `nn-dataset` package if present, otherwise the project's `version` file.
+      - If that exact version has not been published yet (e.g. a new release
+        whose database is not uploaded), the newest published version below it
+        is used as the baseline. Phase 9 then uploads the result under the
+        current version name.
+      - The download is decompressed to db/ab.nn.db and the .zst is removed.
 
     If the DB already exists locally this phase is a no-op.
     Returns True when the DB is present (either pre-existing or downloaded).
@@ -186,16 +224,33 @@ def phase2_ensure_db() -> bool:
 
     log.info("Phase 2: DB not found locally. Downloading from Hugging Face...")
     try:
-        from ab.nn.util.hf.DB_from_HF import db_from_hf  # type: ignore
-        db_from_hf()
+        current = get_version()
+        baseline = _pick_baseline_version(current, _published_db_versions())
+        if baseline is None:
+            log.error(
+                "No published database at or below version %s found in '%s'.",
+                current, HF_REPO_ID,
+            )
+            return False
+        if baseline != current:
+            log.warning(
+                "ab.nn.zst-%s is not published in '%s'. Using ab.nn.zst-%s as the baseline.",
+                current, HF_REPO_ID, baseline,
+            )
+
+        zst_path = db_dir / f"ab.nn.zst-{baseline}"
+        hf_download(HF_REPO_ID, zst_path, db_dir)
+        zst_decompress(zst_path, db_file, True)
         if db_file.exists():
-            log.info("Phase 2 complete: DB downloaded to %s", db_file)
+            log.info("Phase 2 complete: DB (version %s) downloaded to %s", baseline, db_file)
             return True
         else:
             log.error("Download finished but DB file still not found: %s", db_file)
             return False
     except Exception as exc:
         log.error("Failed to download DB from Hugging Face: %s", exc)
+        # Do not leave a partial DB behind: Phase 2 would skip it on the next run.
+        db_file.unlink(missing_ok=True)
         return False
 
 
@@ -615,7 +670,7 @@ def phase7_generate_audit(
 
 
 # ===========================================================================
-# Phase 8: Compress ab.nn.db -> ab.nn.db.zst
+# Phase 8: Compress ab.nn.db -> ab.nn.zst-<version>
 # ===========================================================================
 def phase8_compress_db() -> bool:
     """Compress db/ab.nn.db into the versioned db/ab.nn.zst-<version> file.
@@ -644,13 +699,34 @@ def phase8_compress_db() -> bool:
 # ===========================================================================
 # Phase 9: Upload to Hugging Face
 # ===========================================================================
+def _version_mismatch() -> Optional[str]:
+    """Message if the version in use differs from the repo's `version` file.
+
+    get_version() prefers a pip-installed `nn-dataset` over the `version` file,
+    so an older installed package would make Phase 9 upload to (and overwrite)
+    that older version's file on Hugging Face.
+    """
+    version_file = ab_root_path / "version"
+    if not version_file.is_file():
+        return None
+    repo_version = version_file.read_text().strip()
+    used_version = get_version()
+    if repo_version and used_version != repo_version:
+        return (
+            f"version in use ({used_version}, from the installed nn-dataset package) "
+            f"does not match the repository version ({repo_version})"
+        )
+    return None
+
+
 def phase9_upload_to_hf(compression_ok: bool, audit_ok: bool, hf_token: Optional[str]) -> bool:
     """
     Upload the versioned compressed DB to the Hugging Face repo root, using
     the project's own `upload_file()` helper (which in turn uses
     `HfApi(token=...)` and `repo_type='model'`, creating the repo if needed).
     The Excel audit report is kept local only (not uploaded). Returns True
-    only if the upload succeeds.
+    only if the upload succeeds. The upload is skipped if the version in use
+    differs from the repository's `version` file.
     """
     log.info("Phase 9: Uploading artifacts to Hugging Face repo '%s'...", HF_REPO_ID)
 
@@ -658,12 +734,18 @@ def phase9_upload_to_hf(compression_ok: bool, audit_ok: bool, hf_token: Optional
         log.error("Skipping upload: prerequisite phases (compression/audit) failed.")
         return False
 
+    mismatch = _version_mismatch()
+    if mismatch:
+        log.error(
+            "Skipping upload: %s. Uninstall the old package (pip uninstall nn-dataset) "
+            "and run again.",
+            mismatch,
+        )
+        return False
+
     token = hf_token or HF_TOKEN
     if not token:
-        log.error(
-            "No Hugging Face token found. Set the HF_TOKEN environment variable, "
-            "pass --HF_TOKEN, or run 'huggingface-cli login'."
-        )
+        log.error("No Hugging Face token available. Upload not possible.")
         return False
 
     try:
@@ -763,6 +845,24 @@ def phase10_delete_local(
 # ===========================================================================
 # Main
 # ===========================================================================
+def require_valid_token(hf_token: Optional[str]) -> bool:
+    """The pipeline publishes to Hugging Face, so it only runs with a valid token."""
+    msg = ("You do not have the necessary authorization to synchronize and publish. "
+           "A valid Hugging Face token is required "
+           "(set HF_TOKEN or pass --HF_TOKEN).")
+    if not hf_token:
+        log.error(msg)
+        return False
+    try:
+        from huggingface_hub import HfApi  # type: ignore
+        user = HfApi().whoami(token=hf_token).get("name", "unknown")
+    except Exception as exc:
+        log.error("%s Token check failed: %s", msg, exc)
+        return False
+    log.info("Hugging Face token accepted (user: %s).", user)
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--HF_TOKEN', type=str, default=None)
@@ -770,6 +870,10 @@ def main() -> int:
     hf_token = args.HF_TOKEN or HF_TOKEN
 
     log.info("=== LEMUR DB Archival & Cleanup Pipeline starting ===")
+
+    # Publishing needs a valid token: stop before any phase runs without one.
+    if not require_valid_token(hf_token):
+        return 1
 
     # Phase 1: Inventory Scan
     models, stat_folders, transforms = phase1_inventory()
