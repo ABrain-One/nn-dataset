@@ -299,6 +299,15 @@ def phase3_ingest_stats() -> bool:
 # ===========================================================================
 # Phase 4: Dependency Mapping (Model <-> Stats <-> Transforms)
 # ===========================================================================
+def _transform_names(data) -> Set[str]:
+    """Transform names used in one statistics JSON file (a single trial or a list of trials)."""
+    records = data if isinstance(data, list) else [data]
+    return {
+        r["transform"] for r in records
+        if isinstance(r, dict) and isinstance(r.get("transform"), str) and r["transform"]
+    }
+
+
 def phase4_dependency_mapping(
     models: Dict[str, ModelEntry],
     stat_folders: List[StatFolder],
@@ -322,20 +331,16 @@ def phase4_dependency_mapping(
                 log.warning("Failed to parse JSON %s: %s", jf, exc)
                 continue
 
-            transform_name = None
-            if isinstance(data, dict):
-                transform_name = data.get("transform")
-            if not transform_name:
-                continue
+            for transform_name in _transform_names(data):
+                sf.transforms.add(transform_name)
 
-            sf.transforms.add(transform_name)
-
-            t_entry = transforms.get(transform_name)
-            if t_entry is None:
-                # Transform referenced but no corresponding .py file found
-                t_entry = TransformEntry(name=transform_name, py_path=None)
-                transforms[transform_name] = t_entry
-            t_entry.referenced_by.append(sf)
+                t_entry = transforms.get(transform_name)
+                if t_entry is None:
+                    # Transform referenced but no corresponding .py file found
+                    t_entry = TransformEntry(name=transform_name, py_path=None)
+                    transforms[transform_name] = t_entry
+                if sf not in t_entry.referenced_by:
+                    t_entry.referenced_by.append(sf)
 
     log.info("Phase 4 complete.")
 
@@ -350,9 +355,8 @@ def phase5_safe_keep_logic(
     """
     Model <-> Stats:
         A model is SAFE TO PROCESS if it exists locally AND it has at least one
-        local statistic folder AND every one of its statistic folders is eligible
-        for archival (i.e. has at least one parsable JSON file referencing a
-        transform).
+        local statistic folder AND every one of its statistic folders still
+        exists and contains at least one JSON file.
 
     Stats <-> Transform:
         A transform is SAFE TO PROCESS only if every statistic folder that
@@ -577,17 +581,16 @@ def phase7_generate_audit(
         for model in sorted(models.values(), key=lambda m: m.name):
             for sf in model.stat_folders:
                 for jf in sf.json_files:
-                    transform_name = ""
+                    names: Set[str] = set()
                     try:
                         with open(jf, "r", encoding="utf-8") as fh:
-                            data = json.load(fh)
-                        if isinstance(data, dict):
-                            transform_name = data.get("transform", "")
+                            names = _transform_names(json.load(fh))
+                        transform_name = ", ".join(sorted(names))
                     except (OSError, json.JSONDecodeError):
                         transform_name = "<unreadable>"
 
-                    t_entry = transforms.get(transform_name)
-                    action = "SAFE TO PROCESS" if (t_entry and t_entry.safe) else "KEEP"
+                    all_safe = bool(names) and all(n in transforms and transforms[n].safe for n in names)
+                    action = "SAFE TO PROCESS" if all_safe else "KEEP"
 
                     sheet2_rows.append({
                         "Model Name": model.name,
