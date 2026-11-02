@@ -17,6 +17,9 @@ Usage examples:
   # Export task results to plain text
   python info.py --task "img-classification" --txt results.txt
 
+  # Export to Excel or CSV and to plain text in one run
+  python info.py --task "img-classification" --csv results.xlsx --txt results.txt
+
   # Extract source code for one or more models by name prefix
   python info.py --code AlexNet
   python info.py --code AlexNet,ResNet --out-dir ./model_code
