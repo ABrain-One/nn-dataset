@@ -1,0 +1,185 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+
+def supported_hyperparameters():
+    return {'lr'}
+
+class DualPathBlock(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.conv2 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.act = nn.ReLU(inplace=True)
+        self.skip = nn.Conv2d(channels, channels, 1)
+
+    def forward(self, x):
+        skip = self.skip(x)
+        h = self.act(self.conv2(self.act(self.conv1(x))))
+        return h + skip
+
+class LitConvBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        mid = out_channels // 2
+        self.conv1 = nn.Conv2d(in_channels, mid, 3, padding=1)
+        self.conv2 = nn.Conv2d(mid, out_channels, 3, padding=1)
+        self.act = nn.ELU(inplace=True)
+        self.residual = nn.Conv2d(in_channels, out_channels, 1)
+
+    def forward(self, x):
+        identity = self.residual(x)
+        out = self.act(self.conv1(x))
+        out = self.conv2(out)
+        return self.act(out + identity)
+
+class PyramidLayer(nn.Module):
+    def __init__(self, in_channels):
+        super().__init__()
+        self.pool = nn.AvgPool2d(2)
+        self.up = nn.Upsample(scale_factor=2, mode="nearest")
+        self.low_pass = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels // 2, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels // 2, in_channels, 3, padding=1)
+        )
+        self.high_pass = nn.Conv2d(in_channels, in_channels, 3, padding=1)
+
+    def forward(self, x):
+        low = self.pool(x)
+        high = x - self.up(low)
+        low_denoised = self.low_pass(low)
+        high_denoised = self.high_pass(high)
+        return self.up(low_denoised) + high_denoised
+
+class ProgressiveShuffleNet(nn.Module):
+    def __init__(self, in_channels=3, base_filters=32):
+        super().__init__()
+        s = base_filters
+
+        self.init_conv = nn.Conv2d(in_channels, s, 3, 1, 1)
+
+        self.enc1 = DualPathBlock(s)
+        self.pool1 = nn.Conv2d(s, s * 2, 1, stride=2)
+
+        self.enc2 = DualPathBlock(s * 2)
+        self.pool2 = nn.Conv2d(s * 2, s * 4, 1, stride=2)
+
+        self.enc3 = DualPathBlock(s * 4)
+        self.pool3 = nn.Conv2d(s * 4, s * 8, 1, stride=2)
+
+        self.enc4 = DualPathBlock(s * 8)
+        self.pool4 = nn.Conv2d(s * 8, s * 16, 1, stride=2)
+
+        self.bottleneck = DualPathBlock(s * 16)
+
+        self.up6 = nn.Conv2d(s * 16, s * 32, 1)
+        self.gate6 = nn.Conv2d(s * 8, s * 8, 1)
+        self.dec6 = LitConvBlock(s * 8, s * 8)
+
+        self.up7 = nn.Conv2d(s * 8, s * 16, 1)
+        self.gate7 = nn.Conv2d(s * 4, s * 4, 1)
+        self.dec7 = LitConvBlock(s * 4, s * 4)
+
+        self.up8 = nn.Conv2d(s * 4, s * 8, 1)
+        self.gate8 = nn.Conv2d(s * 2, s * 2, 1)
+        self.dec8 = LitConvBlock(s * 2, s * 2)
+
+        self.up9 = nn.Conv2d(s * 2, s * 4, 1)
+        self.gate9 = nn.Conv2d(s, s, 1)
+        self.dec9 = LitConvBlock(s, s)
+
+        self.ps = nn.PixelShuffle(2)
+        self.final_conv = nn.Conv2d(s, 3, 3, 1, 1)
+
+    def _upconv(self, x, skip, up_conv, gate):
+        return self.ps(up_conv(x)) + gate(skip)
+
+    def forward(self, x):
+        x0 = self.init_conv(x)
+
+        c1 = self.enc1(x0)
+        c2 = self.enc2(self.pool1(c1))
+        c3 = self.enc3(self.pool2(c2))
+        c4 = self.enc4(self.pool3(c3))
+        c5 = self.bottleneck(self.pool4(c4))
+
+        u6 = self.dec6(self._upconv(c5, c4, self.up6, self.gate6))
+        u7 = self.dec7(self._upconv(u6, c3, self.up7, self.gate7))
+        u8 = self.dec8(self._upconv(u7, c2, self.up8, self.gate8))
+        u9 = self.dec9(self._upconv(u8, c1, self.up9, self.gate9))
+
+        return self.final_conv(u9)
+
+class Net(nn.Module):
+    def __init__(self, in_shape=(1, 3, 256, 256), out_shape=None, prm={}, device='cuda'):
+        super().__init__()
+        self.device = device
+        self.initial_unshuffle = nn.PixelUnshuffle(2)
+        self.in_conv = nn.Conv2d(3 * 4, 48, 3, padding=1)
+        self.dp_blocks = nn.ModuleList([
+            DualPathBlock(48),
+            DualPathBlock(48),
+            DualPathBlock(48)
+        ])
+        self.lit_blocks = nn.ModuleList([
+            LitConvBlock(48, 48),
+            LitConvBlock(48, 48),
+            LitConvBlock(48, 48)
+        ])
+        self.pyramid_block = PyramidLayer(48)
+        self.out_conv = nn.Conv2d(48, 3 * 4, 3, padding=1)
+        self.output_shuffle = nn.PixelShuffle(2)
+        self.criterion_mse = nn.MSELoss()
+        self.criterion_l1 = nn.L1Loss()
+        self.train_setup(prm)
+        self.to(device)
+
+    def forward(self, x):
+        identity = x
+        h = self.initial_unshuffle(x)
+        h = self.in_conv(h)
+        for dp, lit in zip(self.dp_blocks, self.lit_blocks):
+            h = dp(lit(h))
+        h = self.pyramid_block(h)
+        return torch.clamp(self.output_shuffle(self.out_conv(h)) + identity, 0.0, 1.0)
+
+    def train_setup(self, prm):
+        lr = prm.get("lr", 1e-4)
+        self.optimizer = optim.Adam(self.parameters(), lr=lr)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=200, eta_min=1e-5
+        )
+
+    def learn(self, train_data):
+        self.train()
+        total_loss = 0.0
+        count = 0
+        bn_layers = [m for m in self.modules() if isinstance(
+            m, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.SyncBatchNorm))]
+        for noisy, clean in train_data:
+            noisy, clean = noisy.to(self.device), clean.to(self.device)
+            self.optimizer.zero_grad()
+            bn_state = [(m.running_mean.clone(), m.running_var.clone(),
+                         m.num_batches_tracked.clone()) for m in bn_layers]
+            preds = self(noisy)
+            loss_gt = self.criterion_mse(preds, clean)
+            loss = loss_gt * 1000 + self.criterion_l1(preds, clean) * 50
+            bad = not torch.isfinite(loss)
+            if not bad and bn_layers:
+                bad = not all(torch.isfinite(m.running_mean).all()
+                              and torch.isfinite(m.running_var).all() for m in bn_layers)
+            if bad:
+                for m, (rm, rv, nb) in zip(bn_layers, bn_state):
+                    m.running_mean.copy_(rm)
+                    m.running_var.copy_(rv)
+                    m.num_batches_tracked.copy_(nb)
+                continue
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=0.1)
+            self.optimizer.step()
+            total_loss += loss_gt.item()
+            count += 1
+        self.scheduler.step()
+        return total_loss / max(count, 1)
