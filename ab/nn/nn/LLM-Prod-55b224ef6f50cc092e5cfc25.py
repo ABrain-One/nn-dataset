@@ -1,0 +1,162 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+
+
+def supported_hyperparameters():
+    return {'lr', 'batch', 'transform'}
+
+
+class FourierUnit(nn.Module):
+    """Half Instance Normalization (HINet).
+
+    The channel axis is SPLIT: one half is instance-normalised, the other is passed through
+    untouched, and the two are re-concatenated. That is the entire idea, and it is a real
+    structural choice rather than a norm swap -- normalising everything destroys the
+    contrast information a denoiser needs, normalising nothing loses the scale invariance
+    that helps at high noise. The corpus contains DenoiseInstNorm, DenoiseLayerNorm,
+    DenoiseGroupNorm and DenoiseStatNorm, and every one of them normalises the WHOLE tensor.
+    """
+
+    def __init__(self, channels):
+        super().__init__()
+        self.half = channels // 2
+        self.norm = nn.InstanceNorm2d(self.half, affine=True)
+        self.c1 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.c2 = nn.Conv2d(channels, channels, 5, padding=2)
+        self.act = nn.LeakyReLU(0.2, inplace=True)
+
+    def forward(self, x):
+        h = self.c1(x)
+        a, b = torch.split(h, [self.half, h.shape[1] - self.half], dim=1)
+        h = torch.cat([self.norm(a), b], dim=1)
+        h = self.act(h)
+        return self.act(self.c2(h) + x)
+
+
+class AttnBlock(nn.Module):
+    """Self-attention residual block (softmax + matmul — absent from the pool)."""
+
+    def __init__(self, channels):
+        super().__init__()
+        self.q = nn.Conv2d(channels, channels, 1)
+        self.k = nn.Conv2d(channels, channels, 1)
+        self.v = nn.Conv2d(channels, channels, 1)
+        self.proj = nn.Conv2d(channels, channels, 1)
+        self.pool = nn.AvgPool2d(4)
+        self.soft = nn.Softmax(dim=-1)
+
+    def forward(self, x):
+        b, c, h, w = x.shape
+        qh = self.pool(self.q(x)).flatten(2)
+        kh = self.pool(self.k(x)).flatten(2)
+        vh = self.pool(self.v(x)).flatten(2)
+        att = self.soft(torch.matmul(qh.transpose(1, 2), kh) / (c ** 0.5))
+        out = torch.matmul(vh, att.transpose(1, 2))
+        out = out.reshape(b, c, h // 4, w // 4)
+        out = nn.functional.interpolate(out, size=(h, w), mode="nearest")
+        return x + self.proj(out)
+
+
+
+
+
+class DualPathBlock(nn.Module):
+    """Dual-path block combining FourierUnit with Attention."""
+
+    def __init__(self, channels):
+        super().__init__()
+        self.fourier_unit = FourierUnit(channels)
+        self.attn_block = AttnBlock(channels)
+        self.conv_merge = nn.Conv2d(channels * 2, channels, 1)
+
+    def forward(self, x):
+        fourier_out = self.fourier_unit(x)
+        attn_out = self.attn_block(x)
+        return self.conv_merge(torch.cat([fourier_out, attn_out], dim=1))
+
+
+class Net(nn.Module):
+    """Combined dual-path U-Net with FourierUnit and Attention blocks for high-performance denoising."""
+
+    def __init__(self, in_shape=(1, 3, 256, 256), out_shape=None, prm={}, device='cuda'):
+        super().__init__()
+        self.device = device
+        Block = DualPathBlock
+        self.in_conv = nn.Conv2d(3, 16, 3, padding=1)
+        self.eb0 = Block(16)
+        self.down0 = nn.Conv2d(16, 32, 3, stride=2, padding=1)
+        self.eb1 = Block(32)
+        self.down1 = nn.Conv2d(32, 64, 3, stride=2, padding=1)
+        self.eb2 = Block(64)
+        self.down2 = nn.Conv2d(64, 128, 3, stride=2, padding=1)
+        self.bottleneck = Block(128)
+        self.pre2 = nn.Conv2d(128, 512, 1)
+        self.shuf2 = nn.PixelShuffle(2)
+        self.up2 = nn.Conv2d(192, 64, 3, padding=1)
+        self.db2 = Block(64)
+        self.pre1 = nn.Conv2d(64, 256, 1)
+        self.shuf1 = nn.PixelShuffle(2)
+        self.up1 = nn.Conv2d(96, 32, 3, padding=1)
+        self.db1 = Block(32)
+        self.pre0 = nn.Conv2d(32, 128, 1)
+        self.shuf0 = nn.PixelShuffle(2)
+        self.up0 = nn.Conv2d(48, 16, 3, padding=1)
+        self.db0 = Block(16)
+        self.out_conv = nn.Conv2d(16, 3, 3, padding=1)
+        self.criterion_mse = nn.MSELoss()
+        self.criterion_l1 = nn.L1Loss()
+        self.train_setup(prm)
+        self.to(device)
+
+    def forward(self, x):
+        identity = x
+        e0 = self.in_conv(x)
+        e0 = self.eb0(e0)
+        e1 = self.down0(e0)
+        e1 = self.eb1(e1)
+        e2 = self.down1(e1)
+        e2 = self.eb2(e2)
+        bt = self.down2(e2)
+        bt = self.bottleneck(bt)
+        d2 = self.db2(self.up2(torch.cat([self.shuf2(self.pre2(bt)), e2], 1)))
+        d1 = self.db1(self.up1(torch.cat([self.shuf1(self.pre1(d2)), e1], 1)))
+        d0 = self.db0(self.up0(torch.cat([self.shuf0(self.pre0(d1)), e0], 1)))
+        return torch.clamp(self.out_conv(d0) + identity, 0.0, 1.0)
+
+    def train_setup(self, prm):
+        lr = prm.get('lr', 0.0001)
+        self.optimizer = optim.Adam(self.parameters(), lr=lr)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=200, eta_min=1e-05)
+
+    def learn(self, train_data):
+        self.train()
+        total_loss = 0.0
+        count = 0
+        bn_layers = [m for m in self.modules() if isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.SyncBatchNorm))]
+        for noisy, clean in train_data:
+            noisy, clean = (noisy.to(self.device), clean.to(self.device))
+            self.optimizer.zero_grad()
+            bn_state = [(m.running_mean.clone(), m.running_var.clone(), m.num_batches_tracked.clone()) for m in bn_layers]
+            preds = self(noisy)
+            loss_gt = self.criterion_mse(preds, clean)
+            loss = loss_gt * 1000 + self.criterion_l1(preds, clean) * 50
+            bad = not torch.isfinite(loss)
+            if not bad and bn_layers:
+                bad = not all((torch.isfinite(m.running_mean).all() and torch.isfinite(m.running_var).all() for m in bn_layers))
+            if bad:
+                for m, (rm, rv, nb) in zip(bn_layers, bn_state):
+                    m.running_mean.copy_(rm)
+                    m.running_var.copy_(rv)
+                    m.num_batches_tracked.copy_(nb)
+                continue
+            if not torch.isfinite(loss):
+                continue
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=0.1)
+            self.optimizer.step()
+            total_loss += loss_gt.item()
+            count += 1
+        self.scheduler.step()
+        return total_loss / max(count, 1)

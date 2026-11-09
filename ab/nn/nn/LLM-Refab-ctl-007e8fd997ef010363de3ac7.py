@@ -1,0 +1,171 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+
+
+def supported_hyperparameters():
+    return {'lr'}
+
+
+class CrossAttentionBlock(nn.Module):
+    def __init__(self, dim, heads):
+        super().__init__()
+        self.heads = heads
+        self.temperature = nn.Parameter(torch.ones(heads, 1, 1))
+        self.qkv = nn.Conv2d(dim, dim * 3, 1)
+        self.qkv_dw = nn.Conv2d(dim * 3, dim * 3, 3, padding=1, groups=dim * 3)
+        self.proj = nn.Conv2d(dim, dim, 1)
+
+    def forward(self, x):
+        b, c, h, w = x.shape
+        qkv = self.qkv_dw(self.qkv(x))
+        q, k, v = qkv.chunk(3, dim=1)
+        hd = c // self.heads
+        q = q.reshape(b, self.heads, hd, h * w)
+        k = k.reshape(b, self.heads, hd, h * w)
+        v = v.reshape(b, self.heads, hd, h * w)
+        q = F.normalize(q, dim=-1)
+        k = F.normalize(k, dim=-1)
+        attn = q @ k.transpose(-2, -1) * self.temperature
+        attn = attn.softmax(dim=-1)
+        out = attn @ v
+        out = out.reshape(b, c, h, w)
+        return self.proj(out)
+
+
+class FFN(nn.Module):
+    def __init__(self, dim, expand=2.0):
+        super().__init__()
+        hidden = int(dim * expand)
+        self.project_in = nn.Conv2d(dim, hidden * 2, 1)
+        self.dw = nn.Conv2d(hidden * 2, hidden * 2, 3, padding=1, groups=hidden * 2)
+        self.project_out = nn.Conv2d(hidden, dim, 1)
+
+    def forward(self, x):
+        x = self.dw(self.project_in(x))
+        x1, x2 = x.chunk(2, dim=1)
+        x = F.gelu(x1) * x2
+        return self.project_out(x)
+
+
+class SEBlock(nn.Module):
+    def __init__(self, channels, reduction=16):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc1 = nn.Linear(channels, channels // reduction, bias=False)
+        self.relu = nn.ReLU(inplace=True)
+        self.fc2 = nn.Linear(channels // reduction, channels, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc1(y)
+        y = self.relu(y)
+        y = self.fc2(y)
+        return x * self.sigmoid(y).view(b, c, 1, 1)
+
+
+class ResidualBlock(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.attn_block = CrossAttentionBlock(dim, 2)
+        self.se_block = SEBlock(dim)
+        self.ffn_block = FFN(dim)
+
+    def forward(self, x):
+        identity = x
+        x = self.attn_block(x) + identity
+        x = self.se_block(x)
+        x = self.ffn_block(x) + x
+        return x
+
+
+class DownsampleStage(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.downconv = nn.Conv2d(in_channels, out_channels, 3, stride=2, padding=1)
+        self.residual = ResidualBlock(out_channels)
+
+    def forward(self, x):
+        return self.residual(self.downconv(x))
+
+
+class UpsampleStage(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.upconv = nn.Conv2d(in_channels, out_channels * 4, 3, padding=1)
+        self.deconv = nn.PixelShuffle(2)
+        self.residual = ResidualBlock(out_channels)
+
+    def forward(self, x):
+        return self.residual(self.deconv(self.upconv(x)))
+
+
+class Net(nn.Module):
+    def __init__(self, in_shape=(1, 3, 256, 256), out_shape=None, prm={}, device='cuda'):
+        super().__init__()
+        self.device = device
+        ch = in_shape[1]
+        dim = 32
+
+        self.intro = nn.Conv2d(ch, dim, 3, padding=1)
+        self.down0 = DownsampleStage(dim, 2 * dim)
+        self.down1 = DownsampleStage(2 * dim, 4 * dim)
+        self.latent = ResidualBlock(4 * dim)
+        self.up1 = UpsampleStage(4 * dim, 2 * dim)
+        self.up0 = UpsampleStage(2 * dim, dim)
+        self.ending = nn.Conv2d(dim, ch, 3, padding=1)
+
+        self.criterion_mse = nn.MSELoss()
+        self.criterion_l1 = nn.L1Loss()
+        self.train_setup(prm)
+        self.to(device)
+
+    def _pad(self, x):
+        _, _, h, w = x.shape
+        p = 4
+        ph = (p - h % p) % p
+        pw = (p - w % p) % p
+        if ph or pw:
+            x = F.pad(x, (0, pw, 0, ph))
+        return x, h, w
+
+    def forward(self, x):
+        identity = x
+        y, h, w = self._pad(x)
+        y = self.intro(y)
+        s0 = self.down0(y)
+        y = self.down1(s0)
+        y = self.latent(y)
+        y = self.up1(y)
+        y = self.up0(y)
+        y = self.ending(y)
+        y = y[:, :, :h, :w]
+        return torch.clamp(y + identity, 0.0, 1.0)
+
+    def train_setup(self, prm):
+        lr = prm.get('lr', 0.0001)
+        self.optimizer = optim.Adam(self.parameters(), lr=lr)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=200, eta_min=1e-5)
+
+    def learn(self, train_data):
+        self.train()
+        total_loss = 0.0
+        count = 0
+        for noisy, clean in train_data:
+            noisy, clean = noisy.to(self.device), clean.to(self.device)
+            self.optimizer.zero_grad()
+            preds = self(noisy)
+            loss_gt = self.criterion_mse(preds, clean)
+            loss = loss_gt * 1000 + self.criterion_l1(preds, clean) * 50
+            if not torch.isfinite(loss):
+                continue
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=0.1)
+            self.optimizer.step()
+            total_loss += loss_gt.item()
+            count += 1
+        self.scheduler.step()
+        return total_loss / max(count, 1)
