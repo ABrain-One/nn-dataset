@@ -1,0 +1,71 @@
+import torch
+import torch.nn as nn
+
+def supported_hyperparameters():
+    return {'lr', 'momentum'}
+
+class ResBlock(nn.Module):
+    def __init__(self, in_channels):
+        super().__init__()
+        self.layer = nn.Sequential(
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1, bias=False)
+        )
+
+    def forward(self, x):
+        return x + self.layer(x)
+
+class Net(nn.Module):
+    def __init__(self, in_shape, out_shape, prm, device):
+        super().__init__()
+        in_channels = in_shape[1]
+        self.in_channels = 32
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(in_channels, self.in_channels, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(self.in_channels),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
+        self.resblock = ResBlock(self.in_channels)
+        self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.avgpool = nn.AdaptiveAvgPool2d((6, 6))
+        self.classifier = nn.Linear(self.in_channels * 6 * 6, out_shape[0])
+        self.device = device
+        self.to(device)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.resblock(x)
+        x = self.maxpool(x)
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        return self.classifier(x)
+
+    def learn(self, train_data):
+        self.train()
+        for inputs, labels in train_data:
+            inputs, labels = inputs.to(self.device), labels.to(self.device)
+            self.optimizer.zero_grad()
+            outputs = self(inputs)
+            loss = nn.CrossEntropyLoss()(outputs, labels)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.parameters(), 3)
+            self.optimizer = torch.optim.SGD(
+                self.parameters(),
+                lr=0.05,
+                momentum=0.9
+            )
+            self.optimizer.step()
+
+    def train_setup(self, prm):
+        self.to(self.device)
+        self.optimizer = torch.optim.SGD(
+            self.parameters(),
+            lr=prm['lr'] if 'lr' in prm else 0.05,
+            momentum=prm['momentum'] if 'momentum' in prm else 0.9
+        )
+        self.criteria = (nn.CrossEntropyLoss().to(self.device),)
