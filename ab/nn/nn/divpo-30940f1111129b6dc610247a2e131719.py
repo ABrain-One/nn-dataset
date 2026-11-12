@@ -1,0 +1,115 @@
+import torch
+import torch.nn as nn
+
+def supported_hyperparameters():
+    return {'lr', 'momentum'}
+
+# Helper block for residual connections
+class BasicBlock(nn.Module):
+    expansion = 1
+    
+    def __init__(self, in_planes, planes, stride=1):
+        super(BasicBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(planes)
+        
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_planes != self.expansion*planes:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_planes, self.expansion*planes, kernel_size=1, stride=stride, padding=0, bias=False),
+                nn.BatchNorm2d(self.expansion*planes)
+            )
+    
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        
+        out += self.shortcut(x)
+        out = self.relu(out)
+        return out
+
+# Main Network class
+class Net(nn.Module):
+    def __init__(self, in_shape, out_shape, prm, device):
+        super(Net, self).__init__()
+        self.device = device
+        in_channels = in_shape[1] if len(in_shape) == 4 else in_shape[0]
+        
+        self.in_planes = 64
+        self.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
+        
+        self.layer1 = self._make_layer(64, 64, blocks=2)
+        self.layer2 = self._make_layer(64, 128, stride=2, blocks=2)
+        self.layer3 = self._make_layer(128, 256, stride=2, blocks=2)
+        self.layer4 = self._make_layer(256, 512, stride=2, blocks=2)
+        
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.classifier = nn.Linear(512 * BasicBlock.expansion, int(out_shape[0]))
+        
+        if 'dropout' in prm:
+            self.dropout = nn.Dropout(prm['dropout'])
+        else:
+            self.dropout = None
+        
+        # Initialize weights
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+    def _make_layer(self, in_planes, out_planes, stride=1, blocks=2):
+        stride_layer = [BasicBlock(in_planes, out_planes, stride)] if stride > 1 else []
+        stride_layer += [BasicBlock(out_planes, out_planes) for _ in range(blocks - 1)]
+        return nn.Sequential(*stride_layer)
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.maxpool(out)
+        
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = self.layer4(out)
+        
+        out = self.avgpool(out)
+        out = torch.flatten(out, 1)
+        
+        if hasattr(self, 'dropout'):
+            out = self.dropout(out)
+        
+        out = self.classifier(out)
+        return out
+
+    def train_setup(self, prm):
+        self.to(self.device)
+        self.criterion = nn.CrossEntropyLoss().to(self.device)
+        self.optimizer = torch.optim.SGD(
+            self.parameters(),
+            lr=prm.get('lr', 0.01),
+            momentum=prm.get('momentum', 0.9),
+            weight_decay=prm.get('weight_decay', 0.0)
+        )
+
+    def learn(self, train_data):
+        self.train()
+        for inputs, labels in train_data:
+            inputs = inputs.to(self.device)
+            labels = labels.to(self.device)
+            self.optimizer.zero_grad()
+            outputs = self(inputs)
+            loss = self.criterion(outputs, labels)
+            loss.backward()
+            self.optimizer.step()
