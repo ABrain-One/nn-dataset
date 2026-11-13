@@ -368,6 +368,9 @@ def args():
                         help=f'Enable saving of the best model weights in ONNX format; default {default_save_onnx_weights}')
     parser.add_argument('--layer_analysis', action='store_true', default=default_layer_analysis,
                         help='Enable per-layer analysis (every epoch for first 5, then every 5 epochs)')
+    parser.add_argument('--test_only', action='store_true', default=default_test_only,
+                        help='Disable the validation split: train on the full training split and select the best epoch '
+                             'on the test split, as before the split was introduced')
     a = parser.parse_args()
 
     if a.config is None:
