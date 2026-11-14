@@ -17,7 +17,8 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
          min_dropout: float = default_min_dropout, max_dropout: float = default_max_dropout,
          transform: str | tuple = None, nn_fail_attempts: int = default_nn_fail_attempts, random_config_order: bool = default_random_config_order,
          num_workers: int = default_num_workers, pretrained: int = default_pretrained, epoch_limit_minutes: int = default_epoch_limit_minutes,
-         train_missing_pipelines: bool = default_train_missing_pipelines, save_pth_weights: bool = default_save_pth_weights, save_onnx_weights: int = default_save_onnx_weights,layer_analysis: bool = default_layer_analysis):
+         train_missing_pipelines: bool = default_train_missing_pipelines, save_pth_weights: bool = default_save_pth_weights, save_onnx_weights: int = default_save_onnx_weights,layer_analysis: bool = default_layer_analysis,
+         test_only: bool = default_test_only):
     """
     Main function for training models using Optuna optimization.
 
@@ -51,6 +52,9 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
     :param train_missing_pipelines: Find and train all missing training pipelines for provided configuration.
     :param save_pth_weights: Enable saving of the best model weights in PyTorch checkpoints.
     :param save_onnx_weights: Save the best model in ONNX format: 1 (save), 0 (don't save).
+    :param test_only: Disable the validation split (train/test only). By default, datasets with a true test split
+        (ab.nn.util.Split.TRUE_TEST_LOADERS) carve a validation set out of the training split, and the best epoch and the
+        minimum-accuracy check use it; the reported accuracy stays the test accuracy.
     """
 
     validate_prm(min_batch_binary_power, max_batch_binary_power, min_learning_rate, max_learning_rate, min_momentum, max_momentum, min_dropout, max_dropout)
@@ -95,7 +99,8 @@ def main(config: str | tuple | list = default_config, nn_prm: dict = default_nn_
                             accuracy, accuracy_to_time, duration = optuna_objective(trial, sub_config, nn_prm, num_workers, min_learning_rate, max_learning_rate,
                                                                                     min_momentum, max_momentum, min_dropout, max_dropout,
                                                                                     min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, epoch_max,
-                                                                                    pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights,layer_analysis)
+                                                                                    pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights,layer_analysis,
+                                                                                    test_only=test_only)
                             log_nn_stat(nn)
                             if good(accuracy, min_accuracy(dataset), duration):
                                 fail_iterations = nn_fail_attempts
@@ -134,4 +139,4 @@ if __name__ == "__main__":
     main(a.config, a.nn_prm, a.epochs, a.trials, a.min_batch_binary_power, a.max_batch_binary_power,
          a.min_learning_rate, a.max_learning_rate, a.min_momentum, a.max_momentum, a.min_dropout, a.max_dropout, a.transform,
          a.nn_fail_attempts, a.random_config_order, a.workers, a.pretrained, a.epoch_limit_minutes, a.train_missing_pipelines,
-         a.save_pth_weights, a.save_onnx_weights,a.layer_analysis)
+         a.save_pth_weights, a.save_onnx_weights,a.layer_analysis, a.test_only)

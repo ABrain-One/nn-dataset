@@ -37,6 +37,9 @@ class EpochMetrics:
     gradient_norm: float = 0.0
     # Timing
     samples_per_second: float = 0.0
+    # Validation metrics (only with a validation set; dropped from the saved summary otherwise)
+    val_loss: Optional[float] = None
+    val_accuracy: Optional[float] = None
 
 
 def compute_gradient_norm(model) -> float:
@@ -108,10 +111,18 @@ def get_current_resource_usage() -> dict:
     return usage
 
 
+def _objective(trainer, test_accuracy):
+    """Optuna's objective value: the trainer's last validation accuracy if it has a validation set, else the test
+    accuracy."""
+    val_accuracy = getattr(trainer, 'last_val_accuracy', None)
+    return test_accuracy if val_accuracy is None else val_accuracy
+
+
 def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout,
                      max_dropout, min_batch_binary_power, max_batch_binary_power_local, transform, fail_iterations, epoch_max,
-                     pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights,layer_analysis=False):
+                     pretrained, epoch_limit_minutes, save_pth_weights, save_onnx_weights,layer_analysis=False, test_only=False):
     task, dataset_name, metric, nn = config
+    trainer = None
     try:
         # Load model
         s_prm: set = get_ab_nn_attr(f"nn.{nn}", "supported_hyperparameters")()
@@ -140,9 +151,14 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
             prm_str += f", {k}: {v}"
         print(f"Initialize training with {prm_str[2:]}")
         # Load dataset
-        out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset_name, transform_name)
-        return Train(config, out_shape, minimum_accuracy, batch, nn_mod('nn', nn), task, train_set, test_set, metric,
-                     num_workers, prms,layer_analysis=layer_analysis).train_n_eval(epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set)
+        loaded = load_dataset(task, dataset_name, transform_name, test_only=test_only)
+        out_shape, minimum_accuracy, train_set, test_set = loaded
+        trainer = Train(config, out_shape, minimum_accuracy, batch, nn_mod('nn', nn), task, train_set, test_set, metric,
+                        num_workers, prms,layer_analysis=layer_analysis, val_dataset=getattr(loaded, 'val_set', None))
+        accuracy, accuracy_to_time, duration = trainer.train_n_eval(epoch_max, epoch_limit_minutes, save_pth_weights, save_onnx_weights, train_set)
+        # Objective value for Optuna: the validation accuracy when there is a validation set (the test accuracy is still
+        # recorded in the statistics and the database); the test accuracy without one (test_only), as before.
+        return _objective(trainer, accuracy), accuracy_to_time, duration
 
     except Exception as e:
         accuracy_duration = 0.0, 0.0, 1
@@ -153,7 +169,7 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
                 raise CudaOutOfMemory(batch)
         elif isinstance(e, AccuracyException):
             print(e.message)
-            return e.accuracy, accuracy_to_time_metric(e.accuracy, minimum_accuracy, e.duration), e.duration
+            return _objective(trainer, e.accuracy), accuracy_to_time_metric(e.accuracy, minimum_accuracy, e.duration), e.duration
         elif isinstance(e, LearnTimeException):
             print(f"Estimated training time, minutes: {format_time(e.estimated_training_time)}, but limit {format_time(e.epoch_limit_minutes)}.")
             return (e.epoch_limit_minutes / e.estimated_training_time) / 1e5, 0, e.duration
@@ -167,9 +183,19 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
                 raise e
 
 
+def _epoch_dict(e):
+    """asdict(EpochMetrics) without the validation fields when there is no validation set (old summary format)."""
+    d = asdict(e)
+    if d.get('val_loss') is None and d.get('val_accuracy') is None:
+        d.pop('val_loss', None)
+        d.pop('val_accuracy', None)
+    return d
+
+
 class Train:
     def __init__(self, config: tuple[str, str, str, str], out_shape: tuple, minimum_accuracy: float, batch: int, nn_module, task,
-                 train_dataset, test_dataset, metric, num_workers, prm: dict, save_to_db=True, is_code=False,layer_analysis: bool = False):
+                 train_dataset, test_dataset, metric, num_workers, prm: dict, save_to_db=True, is_code=False,layer_analysis: bool = False,
+                 val_dataset=None):
         """
         Universal class for training CV, Text Generation and other models.
         :param config: Tuple of names (Task, Dataset, Metric, Model).
@@ -184,10 +210,15 @@ class Train:
         :param prm: Dictionary of hyperparameters and their values (e.g., {'lr': 0.11, 'momentum': 0.2})
         :param is_code: Whether `config.model` is `nn_code` or `nn`
         :param save_path: Path to save the statistics, set to `None` to use the default
+        :param val_dataset: Optional validation set (load_dataset(...).val_set). When given, the validation accuracy is
+            computed every epoch next to the test accuracy, and the best epoch and the minimum-accuracy check use it;
+            "accuracy" stays the test accuracy.
         """
         self.config = config
         self.train_dataset = train_dataset
         self.test_dataset = test_dataset
+        self.val_dataset = val_dataset
+        self.last_val_accuracy = None
         self.minimum_accuracy = minimum_accuracy
 
         self.out_shape = out_shape
@@ -208,6 +239,7 @@ class Train:
         self.num_workers = num_workers
         self.train_loader = train_loader_f(self.train_dataset, self.batch, num_workers)
         self.test_loader = test_loader_f(self.test_dataset, self.batch, num_workers)
+        self.val_loader = test_loader_f(self.val_dataset, self.batch, num_workers) if self.val_dataset is not None else None
 
         self.in_shape = get_in_shape(train_dataset, num_workers) # Model input tensor shape (e.g., (8, 3, 32, 32) for a batch size 8, RGB image 32x32 px).
         self.device = torch_device()
@@ -367,6 +399,16 @@ class Train:
             accuracy = all_metric_results.get(self.primary_metric, accuracy)
             accuracy = 0.0 if math.isnan(accuracy) or math.isinf(accuracy) else accuracy
 
+            # Validation set (optional): same metric, test transform; drives the best epoch and the minimum check
+            val_loss = val_accuracy = None
+            if self.val_loader is not None:
+                val_loss = self._compute_loss(self.val_loader)
+                val_accuracy, val_metric_results = self.eval(self.val_loader)
+                val_accuracy = val_metric_results.get(self.primary_metric, val_accuracy)
+                val_accuracy = 0.0 if math.isnan(val_accuracy) or math.isinf(val_accuracy) else val_accuracy
+                self.last_val_accuracy = val_accuracy
+            select_accuracy = accuracy if val_accuracy is None else val_accuracy
+
             duration = time.time_ns() - start_time
             duration_seconds = duration / 1e9
 
@@ -377,8 +419,8 @@ class Train:
             samples_per_second = total_samples / max(epoch_duration, 0.001)
 
             # Track best accuracy
-            if accuracy > self.best_accuracy:
-                self.best_accuracy = accuracy
+            if select_accuracy > self.best_accuracy:
+                self.best_accuracy = select_accuracy
                 self.best_epoch = epoch
 
             # Record epoch metrics
@@ -390,7 +432,9 @@ class Train:
                 test_accuracy=accuracy,
                 lr=lr_now,
                 gradient_norm=grad_norm,
-                samples_per_second=samples_per_second
+                samples_per_second=samples_per_second,
+                val_loss=val_loss,
+                val_accuracy=val_accuracy
             )
             self.epoch_history.append(epoch_metrics)
 
@@ -399,6 +443,9 @@ class Train:
             test_loss_text = "N/A" if test_loss is None else f"{test_loss:.4f}"
             print(f"  Train Loss: {train_loss_text}, Test Loss: {test_loss_text}")
             print(f"  Train Acc: {train_accuracy:.4f}, Test Acc: {accuracy:.4f}")
+            if val_accuracy is not None:
+                val_loss_text = "N/A" if val_loss is None else f"{val_loss:.4f}"
+                print(f"  Val Loss: {val_loss_text}, Val Acc: {val_accuracy:.4f}")
             if lr_now and grad_norm and samples_per_second:
                 print(f"  LR: {lr_now:.6f}, Grad Norm: {grad_norm:.4f}, Throughput: {samples_per_second:.1f} samples/s")
                 # Layer-wise analysis (epochs 1-5, then every 5)
@@ -436,18 +483,19 @@ class Train:
             # The accuracy-to-time metric is not stored in the database as it can change over time and can be quickly calculated from saved values.
             accuracy_to_time = accuracy_to_time_metric(accuracy, self.minimum_accuracy, duration)
 
-            if not good(accuracy, self.minimum_accuracy, duration):
+            if not good(select_accuracy, self.minimum_accuracy, duration):
+                which = '' if val_accuracy is None else ' (validation)'
                 if 'caption' in self.task:
-                    print(f"[WARN] Accuracy {accuracy} is below the minimum accepted accuracy {self.minimum_accuracy}. Continuing training...")
+                    print(f"[WARN] Accuracy {select_accuracy}{which} is below the minimum accepted accuracy {self.minimum_accuracy}. Continuing training...")
                 else:
                     raise AccuracyException(accuracy, duration,
-                                            f"Accuracy is too low: {accuracy}."
+                                            f"Accuracy is too low: {select_accuracy}{which}."
                                             f" The minimum accepted accuracy for the '{self.config[1]}"
                                             f"' dataset is {self.minimum_accuracy}.")
 
 
             if save_pth_weights or save_onnx_weights:
-                save_if_best(self.model, self.model_name, accuracy, save_pth_weights, save_onnx_weights, train_set, self.num_workers, save_path=save_path)
+                save_if_best(self.model, self.model_name, select_accuracy, save_pth_weights, save_onnx_weights, train_set, self.num_workers, save_path=save_path)
 
             # Build extended parameters with new metrics
             only_prm = {k: v for k, v in self.prm.items() if k not in {'uid', 'duration', 'accuracy', 'epoch'}}
@@ -477,6 +525,9 @@ class Train:
                 'occupied_gpu_memory_kb': resource_usage.get('occupied_gpu_memory_kb'),
                 'gpu_memory_usage_percent': resource_usage.get('gpu_memory_usage_percent'),
             }
+            if val_accuracy is not None:
+                train_stat_group['val_loss'] = val_loss
+                train_stat_group['val_accuracy'] = val_accuracy
 
             layer_stat_group = None
             if layer_summary or layer_result or layer_table:
@@ -499,6 +550,7 @@ class Train:
                 'accuracy': accuracy,
                 'epoch_max': epoch_max,
                 'train_stat': train_stat_group,
+                **({'val_accuracy': val_accuracy} if val_accuracy is not None else {}),
                 **(
                     {'layer_stat': layer_stat_group}
                     if layer_stat_group is not None
@@ -611,7 +663,7 @@ class Train:
                 'lr': [e.lr for e in self.epoch_history],
                 'gradient_norm': [e.gradient_norm for e in self.epoch_history],
             },
-            'epoch_details': [asdict(e) for e in self.epoch_history]
+            'epoch_details': [_epoch_dict(e) for e in self.epoch_history]
         }
 
         summary_path = out_dir / 'training_summary.json'
@@ -658,7 +710,8 @@ class Train:
 
 
 def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Union[str, None] = None, save_path: Union[str, None] = None, export_onnx=False,
-              epoch_limit_minutes=default_epoch_limit_minutes, layer_analysis=False, transform_dir=None):
+              epoch_limit_minutes=default_epoch_limit_minutes, layer_analysis=False, transform_dir=None, test_only=False,
+              return_val=False):
     """
     train the model with the given code and hyperparameters and evaluate it.
 
@@ -671,8 +724,13 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
         prefix (str|None): Prefix of the model, set to None if is unknown.
         save_path (str|None): Path to save the statistics, or None to not save.
         export_onnx (bool): Export model and its weights into ONNX file.
+        test_only (bool): Disable the validation split (train/test only). By default, datasets with a true test split
+            carve a validation set out of the training split (load_dataset), and the best epoch, the minimum-accuracy
+            check and the save decision use it. The returned accuracy stays the test accuracy.
+        return_val (bool): Append the last epoch's validation accuracy (None without a validation set) to the result.
     return:
         (str, float, float): Name of the model, its accuracy and the accuracy to time metric
+            (and the last epoch's validation accuracy as a 4th value with return_val=True)
     """
     model_name = uuid4(nn_code)
     if prefix:
@@ -688,7 +746,10 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
         with open(temp_file_path, 'w') as f:
             f.write(nn_code)  # write the code to the temp file
         # load dataset
-        out_shape, minimum_accuracy, train_set, test_set = load_dataset(task, dataset, prm['transform'], transform_dir)
+        loaded = load_dataset(task, dataset, prm['transform'], transform_dir, test_only=test_only)
+        out_shape, minimum_accuracy, train_set, test_set = loaded
+        val_set = getattr(loaded, 'val_set', None)
+        del loaded
         num_workers = prm.get('num_workers', 1)
         # initialize model and trainer
         trainer = Train(
@@ -705,13 +766,16 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             prm=prm,
             save_to_db=save_to_db,
             layer_analysis=layer_analysis,
-            is_code=True)
+            is_code=True,
+            val_dataset=val_set)
         trainer.nn_code = nn_code
         epoch = prm['epoch']
         accuracy, accuracy_to_time, duration = trainer.train_n_eval(epoch, epoch_limit_minutes, False, export_onnx, train_set, save_path=save_path)
         if save_to_db:
-            # If the result meets the requirements, save the model to the database.
-            if good(accuracy, minimum_accuracy, duration):
+            # If the result meets the requirements, save the model to the database (validation accuracy when a
+            # validation set is used, as in train_n_eval's minimum-accuracy check).
+            select_accuracy = accuracy if trainer.last_val_accuracy is None else trainer.last_val_accuracy
+            if good(select_accuracy, minimum_accuracy, duration):
                 model_name = DB_Write.save_nn(nn_code, task, dataset, metric, epoch, prm, force_name=model_name)
                 print(f"Model saved to database with accuracy: {accuracy}")
             else:
@@ -735,9 +799,16 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
             pass
 
         try:
+            del val_set
+        except NameError:
+            pass
+
+        try:
             if trainer: del trainer.model
         except NameError:
             pass
         release_memory()
 
+    if return_val:
+        return model_name, accuracy, accuracy_to_time, trainer.last_val_accuracy if trainer else None
     return model_name, accuracy, accuracy_to_time
