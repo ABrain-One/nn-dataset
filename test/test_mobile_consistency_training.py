@@ -37,10 +37,10 @@ class MobileTrainingTest(unittest.TestCase):
         # Production split wrappers need __len__; reuse real Subset instead.
         from torch.utils.data import Subset
         train = Subset(dataset, train.indices)
-        validation = Subset(dataset, val.indices)
-        validation.held_out_test = Subset(dataset, val.held_out_test.indices)
+        test = Subset(dataset, val.held_out_test.indices)
+        test.val_set = Subset(dataset, val.indices)
         def fake_loader(*_):
-            return (1,), .01, train, validation
+            return (1,), .01, train, test
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             checkpoint = root / 'baseline.pth'

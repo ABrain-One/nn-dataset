@@ -139,7 +139,8 @@ def main():
         'normalization': {'mean': MEAN, 'std': STD},
         'resize': 'RGB PIL bilinear 224x224', 'selection': 'validation only; MAE within 0.25 years of baseline and improved mean/p95 crop range',
         'batchnorm_and_dropout': 'eval mode for stable paired-view targets; gradients remain enabled'})
-    _, _, train, val = loader(lambda _: tensor, 'age-regression')
+    _, _, train, test = loader(lambda _: tensor, 'age-regression')
+    val = test.val_set
     def batches(split, training=False):
         return DataLoader(PairedCrops(split, training), batch_size=args.batch_size,
                           shuffle=training, num_workers=args.workers, worker_init_fn=seed_worker,
@@ -182,9 +183,9 @@ def main():
         print(json.dumps(history[-1]), flush=True)
     if best_epoch is not None:
         model.load_state_dict(torch.load(args.output / 'best_candidate.pth', map_location='cpu', weights_only=True), strict=True)
-        candidate_test = evaluate(model, batches(val.held_out_test), device)
+        candidate_test = evaluate(model, batches(test), device)
         model.load_state_dict(state, strict=True)
-        baseline_test = evaluate(model, batches(val.held_out_test), device)
+        baseline_test = evaluate(model, batches(test), device)
     else:
         candidate_test = baseline_test = None
     save_json(args.output / 'result.json', {'state': 'complete', 'best_epoch': best_epoch,
