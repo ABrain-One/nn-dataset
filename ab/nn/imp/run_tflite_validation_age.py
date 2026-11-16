@@ -257,8 +257,7 @@ def main():
 
     # Prepare validation dataset
     try:
-        _, _, train_ds, test_ds = utk_loader(create_transform, 'age-regression')
-        val_ds = test_ds.val_set
+        _, _, train_ds, val_ds = utk_loader(create_transform, 'age-regression')
         calib_batch = get_calibration_batch(val_ds, batch_size=32)
         print(f"✅ Dataset loaded: {len(val_ds)} validation samples")
     except Exception as e:
