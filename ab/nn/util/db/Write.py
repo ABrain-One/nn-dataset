@@ -179,18 +179,6 @@ TRAIN_STAT_DB_FIELDS = (
 )
 
 
-# Validation statistics (validation split, the default for true-test loaders); stored only when present. The columns are added to an
-# existing train_stat table on first use, so databases without a validation run keep their schema.
-TRAIN_STAT_VAL_FIELDS = ('val_loss', 'val_accuracy')
-
-
-def _ensure_val_columns(cursor):
-    existing = {row[1] for row in cursor.execute(f"PRAGMA table_info({train_stat_table})").fetchall()}
-    for field in TRAIN_STAT_VAL_FIELDS:
-        if field not in existing:
-            cursor.execute(f"ALTER TABLE {train_stat_table} ADD COLUMN {field} REAL")
-
-
 def save_train_stat(cursor, stat_id: str, train_stat: dict):
     """
     Save grouped per-epoch training statistics into train_stat table.
@@ -201,14 +189,10 @@ def save_train_stat(cursor, stat_id: str, train_stat: dict):
     if not train_stat:
         return
 
-    fields = TRAIN_STAT_DB_FIELDS
-    if any(train_stat.get(field) is not None for field in TRAIN_STAT_VAL_FIELDS):
-        _ensure_val_columns(cursor)
-        fields = TRAIN_STAT_DB_FIELDS + TRAIN_STAT_VAL_FIELDS
-    columns = ('stat_id',) + fields
+    columns = ('stat_id',) + TRAIN_STAT_DB_FIELDS
     placeholders = ', '.join(['?'] * len(columns))
 
-    values = [stat_id] + [train_stat.get(field) for field in fields]
+    values = [stat_id] + [train_stat.get(field) for field in TRAIN_STAT_DB_FIELDS]
 
     cursor.execute(
         f"""
@@ -349,8 +333,6 @@ def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
         if epoch_max is not None:
             train_stat['epoch_max'] = epoch_max
     prm.pop('layer_stat', None)
-    # The validation accuracy (validation split) is a statistic, kept in train_stat, never a prm row.
-    prm.pop('val_accuracy', None)
 
     transform = prm['transform']
     uid = prm.pop('uid')
