@@ -68,6 +68,7 @@ default_random_config_order = False
 default_save_pth_weights = False
 default_save_onnx_weights = False
 default_layer_analysis = False
+default_test_only = False  # True: no validation split (train/test only, as before the split)
 
 default_epoch_limit_minutes = 30  # minutes
 
