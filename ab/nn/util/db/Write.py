@@ -181,7 +181,7 @@ TRAIN_STAT_DB_FIELDS = (
 
 # Validation statistics (validation split, the default for true-test loaders); stored only when present. The columns are added to an
 # existing train_stat table on first use, so databases without a validation run keep their schema.
-TRAIN_STAT_VAL_FIELDS = ('val_loss', 'val_accuracy')
+TRAIN_STAT_VAL_FIELDS = ('loss_val', 'accuracy_val')
 
 
 def _ensure_val_columns(cursor):
@@ -350,7 +350,7 @@ def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
             train_stat['epoch_max'] = epoch_max
     prm.pop('layer_stat', None)
     # The validation accuracy (validation split) is a statistic, kept in train_stat, never a prm row.
-    prm.pop('val_accuracy', None)
+    prm.pop('accuracy_val', None)
 
     transform = prm['transform']
     uid = prm.pop('uid')

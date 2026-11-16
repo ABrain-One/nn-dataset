@@ -232,7 +232,7 @@ def test_optuna_objective_maximises_val_by_default(workdir, monkeypatch):
 
     class FakeTrain:
         def __init__(self, *a, **k):
-            self.last_val_accuracy = 0.8 if k.get("val_dataset") is not None else None
+            self.last_accuracy_val = 0.8 if k.get("val_dataset") is not None else None
 
         def train_n_eval(self, *a, **k):
             if mode["raise"]:
@@ -287,19 +287,19 @@ def test_train_val_stats_json_db(workdir, monkeypatch):
     assert sorted(stats) == [1, 2, 3]
     for ep, t, v in ((1, 0.9, 0.3), (2, 0.2, 0.8), (3, 0.5, 0.6)):
         rec = stats[ep][0] if isinstance(stats[ep], list) else stats[ep]
-        assert rec["accuracy"] == t and rec["val_accuracy"] == v
-        assert rec["train_stat"]["val_accuracy"] == v and "val_loss" in rec["train_stat"]
+        assert rec["accuracy"] == t and rec["accuracy_val"] == v
+        assert rec["train_stat"]["accuracy_val"] == v and "loss_val" in rec["train_stat"]
     last = stats[3][0] if isinstance(stats[3], list) else stats[3]
     assert last["train_stat"]["best_epoch"] == 2 and last["train_stat"]["best_accuracy"] == 0.8   # best by val
     con = sqlite3.connect(workdir / "db" / "ab.nn.db")
-    assert con.execute("select count(*) from prm where name in ('val_accuracy', 'val_loss')").fetchone()[0] == 0
+    assert con.execute("select count(*) from prm where name in ('accuracy_val', 'loss_val')").fetchone()[0] == 0
     cols = [r[1] for r in con.execute("PRAGMA table_info(train_stat)")]
-    assert "val_accuracy" in cols and "val_loss" in cols
-    vals = sorted(r[0] for r in con.execute("select val_accuracy from train_stat"))
+    assert "accuracy_val" in cols and "loss_val" in cols
+    vals = sorted(r[0] for r in con.execute("select accuracy_val from train_stat"))
     assert vals == [0.3, 0.6, 0.8]
     assert sorted(r[0] for r in con.execute("select accuracy from stat")) == [0.2, 0.5, 0.9]
     summary = json.loads((workdir / "out" / "training_summary.json").read_text())
-    assert [e["val_accuracy"] for e in summary["epoch_details"]] == [0.3, 0.8, 0.6]
+    assert [e["accuracy_val"] for e in summary["epoch_details"]] == [0.3, 0.8, 0.6]
 
 
 def test_minimum_accuracy_check_uses_val(workdir, monkeypatch):
@@ -326,11 +326,11 @@ def test_no_val_keeps_old_records(workdir, monkeypatch):
     for f in (workdir / "stat").glob("*.json"):
         rec = json.loads(f.read_text())
         rec = rec[0] if isinstance(rec, list) else rec
-        assert "val_accuracy" not in rec and "val_accuracy" not in rec["train_stat"]
+        assert "accuracy_val" not in rec and "accuracy_val" not in rec["train_stat"]
         assert rec["train_stat"]["best_epoch"] == 1
     con = sqlite3.connect(workdir / "db" / "ab.nn.db")
     cols = [r[1] for r in con.execute("PRAGMA table_info(train_stat)")]
-    assert "val_accuracy" not in cols
+    assert "accuracy_val" not in cols
 
 
 def test_check_nn_default_signature_unchanged(workdir, monkeypatch):

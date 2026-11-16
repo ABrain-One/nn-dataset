@@ -70,11 +70,11 @@ class EarlyStopper:
         self.early_stop = False
         self.val_loss_min = float('inf')
 
-    def __call__(self, val_loss, model):
-        score = val_loss
+    def __call__(self, loss_val, model):
+        score = loss_val
         if self.best_score is None:
             self.best_score = score
-            self.save_checkpoint(val_loss, model)
+            self.save_checkpoint(loss_val, model)
         elif score < self.best_score:
             self.counter += 1
             if self.verbose:
@@ -83,14 +83,14 @@ class EarlyStopper:
                 self.early_stop = True
         else:
             self.best_score = score
-            self.save_checkpoint(val_loss, model)
+            self.save_checkpoint(loss_val, model)
             self.counter = 0
 
-    def save_checkpoint(self, val_loss, model):
+    def save_checkpoint(self, loss_val, model):
         if self.verbose:
-            print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
+            print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {loss_val:.6f}).  Saving model ...')
         torch.save(model.state_dict(), 'checkpoint.pth')
-        self.val_loss_min = val_loss
+        self.val_loss_min = loss_val
 
 def train_and_validate(model, train_loader, valid_loader, criterion, optimizer, device):
     best_valid_loss = float('inf')

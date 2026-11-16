@@ -38,8 +38,8 @@ class EpochMetrics:
     # Timing
     samples_per_second: float = 0.0
     # Validation metrics (only with a validation set; dropped from the saved summary otherwise)
-    val_loss: Optional[float] = None
-    val_accuracy: Optional[float] = None
+    loss_val: Optional[float] = None
+    accuracy_val: Optional[float] = None
 
 
 def compute_gradient_norm(model) -> float:
@@ -114,8 +114,8 @@ def get_current_resource_usage() -> dict:
 def _objective(trainer, test_accuracy):
     """Optuna's objective value: the trainer's last validation accuracy if it has a validation set, else the test
     accuracy."""
-    val_accuracy = getattr(trainer, 'last_val_accuracy', None)
-    return test_accuracy if val_accuracy is None else val_accuracy
+    accuracy_val = getattr(trainer, 'last_accuracy_val', None)
+    return test_accuracy if accuracy_val is None else accuracy_val
 
 
 def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_momentum, max_momentum, min_dropout,
@@ -186,9 +186,9 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
 def _epoch_dict(e):
     """asdict(EpochMetrics) without the validation fields when there is no validation set (old summary format)."""
     d = asdict(e)
-    if d.get('val_loss') is None and d.get('val_accuracy') is None:
-        d.pop('val_loss', None)
-        d.pop('val_accuracy', None)
+    if d.get('loss_val') is None and d.get('accuracy_val') is None:
+        d.pop('loss_val', None)
+        d.pop('accuracy_val', None)
     return d
 
 
@@ -218,7 +218,7 @@ class Train:
         self.train_dataset = train_dataset
         self.test_dataset = test_dataset
         self.val_dataset = val_dataset
-        self.last_val_accuracy = None
+        self.last_accuracy_val = None
         self.minimum_accuracy = minimum_accuracy
 
         self.out_shape = out_shape
@@ -400,14 +400,14 @@ class Train:
             accuracy = 0.0 if math.isnan(accuracy) or math.isinf(accuracy) else accuracy
 
             # Validation set (optional): same metric, test transform; drives the best epoch and the minimum check
-            val_loss = val_accuracy = None
+            loss_val = accuracy_val = None
             if self.val_loader is not None:
-                val_loss = self._compute_loss(self.val_loader)
-                val_accuracy, val_metric_results = self.eval(self.val_loader)
-                val_accuracy = val_metric_results.get(self.primary_metric, val_accuracy)
-                val_accuracy = 0.0 if math.isnan(val_accuracy) or math.isinf(val_accuracy) else val_accuracy
-                self.last_val_accuracy = val_accuracy
-            select_accuracy = accuracy if val_accuracy is None else val_accuracy
+                loss_val = self._compute_loss(self.val_loader)
+                accuracy_val, val_metric_results = self.eval(self.val_loader)
+                accuracy_val = val_metric_results.get(self.primary_metric, accuracy_val)
+                accuracy_val = 0.0 if math.isnan(accuracy_val) or math.isinf(accuracy_val) else accuracy_val
+                self.last_accuracy_val = accuracy_val
+            select_accuracy = accuracy if accuracy_val is None else accuracy_val
 
             duration = time.time_ns() - start_time
             duration_seconds = duration / 1e9
@@ -433,8 +433,8 @@ class Train:
                 lr=lr_now,
                 gradient_norm=grad_norm,
                 samples_per_second=samples_per_second,
-                val_loss=val_loss,
-                val_accuracy=val_accuracy
+                loss_val=loss_val,
+                accuracy_val=accuracy_val
             )
             self.epoch_history.append(epoch_metrics)
 
@@ -443,9 +443,9 @@ class Train:
             test_loss_text = "N/A" if test_loss is None else f"{test_loss:.4f}"
             print(f"  Train Loss: {train_loss_text}, Test Loss: {test_loss_text}")
             print(f"  Train Acc: {train_accuracy:.4f}, Test Acc: {accuracy:.4f}")
-            if val_accuracy is not None:
-                val_loss_text = "N/A" if val_loss is None else f"{val_loss:.4f}"
-                print(f"  Val Loss: {val_loss_text}, Val Acc: {val_accuracy:.4f}")
+            if accuracy_val is not None:
+                val_loss_text = "N/A" if loss_val is None else f"{loss_val:.4f}"
+                print(f"  Val Loss: {val_loss_text}, Val Acc: {accuracy_val:.4f}")
             if lr_now and grad_norm and samples_per_second:
                 print(f"  LR: {lr_now:.6f}, Grad Norm: {grad_norm:.4f}, Throughput: {samples_per_second:.1f} samples/s")
                 # Layer-wise analysis (epochs 1-5, then every 5)
@@ -484,7 +484,7 @@ class Train:
             accuracy_to_time = accuracy_to_time_metric(accuracy, self.minimum_accuracy, duration)
 
             if not good(select_accuracy, self.minimum_accuracy, duration):
-                which = '' if val_accuracy is None else ' (validation)'
+                which = '' if accuracy_val is None else ' (validation)'
                 if 'caption' in self.task:
                     print(f"[WARN] Accuracy {select_accuracy}{which} is below the minimum accepted accuracy {self.minimum_accuracy}. Continuing training...")
                 else:
@@ -525,9 +525,9 @@ class Train:
                 'occupied_gpu_memory_kb': resource_usage.get('occupied_gpu_memory_kb'),
                 'gpu_memory_usage_percent': resource_usage.get('gpu_memory_usage_percent'),
             }
-            if val_accuracy is not None:
-                train_stat_group['val_loss'] = val_loss
-                train_stat_group['val_accuracy'] = val_accuracy
+            if accuracy_val is not None:
+                train_stat_group['loss_val'] = loss_val
+                train_stat_group['accuracy_val'] = accuracy_val
 
             layer_stat_group = None
             if layer_summary or layer_result or layer_table:
@@ -550,7 +550,7 @@ class Train:
                 'accuracy': accuracy,
                 'epoch_max': epoch_max,
                 'train_stat': train_stat_group,
-                **({'val_accuracy': val_accuracy} if val_accuracy is not None else {}),
+                **({'accuracy_val': accuracy_val} if accuracy_val is not None else {}),
                 **(
                     {'layer_stat': layer_stat_group}
                     if layer_stat_group is not None
@@ -774,7 +774,7 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
         if save_to_db:
             # If the result meets the requirements, save the model to the database (validation accuracy when a
             # validation set is used, as in train_n_eval's minimum-accuracy check).
-            select_accuracy = accuracy if trainer.last_val_accuracy is None else trainer.last_val_accuracy
+            select_accuracy = accuracy if trainer.last_accuracy_val is None else trainer.last_accuracy_val
             if good(select_accuracy, minimum_accuracy, duration):
                 model_name = DB_Write.save_nn(nn_code, task, dataset, metric, epoch, prm, force_name=model_name)
                 print(f"Model saved to database with accuracy: {accuracy}")
@@ -810,5 +810,5 @@ def train_new(nn_code, task, dataset, metric, prm, save_to_db=True, prefix: Unio
         release_memory()
 
     if return_val:
-        return model_name, accuracy, accuracy_to_time, trainer.last_val_accuracy if trainer else None
+        return model_name, accuracy, accuracy_to_time, trainer.last_accuracy_val if trainer else None
     return model_name, accuracy, accuracy_to_time
