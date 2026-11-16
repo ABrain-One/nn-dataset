@@ -29,9 +29,9 @@ suffixed name, so the dataset holds a single consistent number per device.
 
 Nothing is written unless `--apply` is given. The default is a report.
 
-    python -m ab.nn.util.ArchUIDMerge                     # this checkout, plan only
-    python -m ab.nn.util.ArchUIDMerge --root /path/to/ab/nn --show 2
-    python -m ab.nn.util.ArchUIDMerge --root /path/to/ab/nn --apply
+    python -m util.py.ArchUIDMerge                     # this checkout, plan only
+    python -m util.py.ArchUIDMerge --show 2
+    python -m util.py.ArchUIDMerge --apply
 
 A JSON log of every decision is written (`--log`, default
 `arch_uid_merge_log.json` in the working directory): each group's survivor and
@@ -51,7 +51,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ab.nn.util.ArchUID import arch_uid
-from ab.nn.util.Const import nn_dir as _nn_dir
+from ab.nn.util.Const import nn_dir
 
 
 # ---------------------------------------------------------------- loading
@@ -359,8 +359,9 @@ def relocate_model_files(stat_nn: Path, rename: dict, apply: bool, log=None):
 
 
 def main():
+    from ab.nn.util.Const import nn_dir, stat_train_dir, stat_run_dir, stat_nn_dir
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", type=Path, default=_nn_dir.parent,
+    ap.add_argument("--root", type=Path, default=nn_dir,
                     help="the ab/nn directory (default: this checkout)")
     ap.add_argument("--show", type=int, default=1, help="groups to detail")
     ap.add_argument("--apply", action="store_true", help="write changes")
@@ -368,21 +369,17 @@ def main():
                     help="where to write the JSON record of every decision")
     a = ap.parse_args()
 
-    nn_dir = a.root / "nn"
-    stat_train = a.root / "stat" / "train"
-    stat_run = a.root / "stat" / "run"
-    stat_nn = a.root / "stat" / "nn"
-    for p in (nn_dir, stat_train):
+    for p in (nn_dir, stat_train_dir):
         if not p.is_dir():
             raise SystemExit(f"not found: {p}")
 
     print(f"reading {nn_dir} ...", flush=True)
     models, skipped = load_models(nn_dir)
-    train = load_dirs(stat_train)
+    train = load_dirs(stat_train_dir)
     print(f"  {len(models)} models parsed, {len(skipped)} skipped, "
           f"{sum(len(v) for v in train.values())} stat/train directories", flush=True)
 
-    runs_before = count_runs(stat_train)
+    runs_before = count_runs(stat_train_dir)
     groups = plan(models, train)
 
     bad = preflight(groups, nn_dir, models)
@@ -412,7 +409,7 @@ def main():
     tot = defaultdict(int)
     for uid, keep, drop in groups:
         r, m, added, droppedruns = relocate_config_dirs(
-            train, stat_train, keep, drop, a.apply, "runs", log)
+            train, stat_train_dir, keep, drop, a.apply, "runs", log)
         tot["train_renamed"] += r
         tot["train_merged"] += m
         tot["runs_moved"] += added
@@ -433,8 +430,8 @@ def main():
 
     # stat/run: one config tree per backend and precision
     run_renamed = run_merged = dev_moved = dev_kept = 0
-    if stat_run.is_dir():
-        for backend in sorted(p for p in stat_run.iterdir() if p.is_dir()):
+    if stat_run_dir.is_dir():
+        for backend in sorted(p for p in stat_run_dir.iterdir() if p.is_dir()):
             for prec in sorted(p for p in backend.iterdir() if p.is_dir()):
                 per = load_dirs(prec)
                 if not per:
@@ -447,8 +444,8 @@ def main():
                     run_merged += m
                     dev_moved += x
                     dev_kept += y
-        map_files, map_moved, map_collided = remap_name_maps(stat_run, rename, a.apply, log)
-        embedded = remap_embedded_names(stat_run, rename, a.apply)
+        map_files, map_moved, map_collided = remap_name_maps(stat_run_dir, rename, a.apply, log)
+        embedded = remap_embedded_names(stat_run_dir, rename, a.apply)
     else:
         map_files = map_moved = map_collided = embedded = 0
 
@@ -463,8 +460,8 @@ def main():
     print(f"{'  name keys lost, schema holds one per model':<52}{map_collided:>10}")
     print(f"{'  embedded model_name fields rewritten':<52}{embedded:>10}")
 
-    nn_moved, nn_removed = (relocate_model_files(stat_nn, rename, a.apply, log)
-                            if stat_nn.is_dir() else (0, 0))
+    nn_moved, nn_removed = (relocate_model_files(stat_nn_dir, rename, a.apply, log)
+                            if stat_nn_dir.is_dir() else (0, 0))
     print(f"\n{'stat/nn':<52}")
     print(f"{'  metric files renamed onto the survivor':<52}{nn_moved:>10}")
     print(f"{'  metric files removed (survivor already had one)':<52}{nn_removed:>10}")
@@ -475,7 +472,7 @@ def main():
     print("=" * 74)
     print(f"{'runs on disk before':<52}{runs_before:>10}")
     if a.apply:
-        after = count_runs(stat_train)
+        after = count_runs(stat_train_dir)
         print(f"{'runs on disk after':<52}{after:>10}")
         print(f"{'difference':<52}{after - runs_before:>10}")
         print(f"{'accounted for by exact repeats':<52}{-tot['runs_dropped']:>10}")
@@ -514,7 +511,7 @@ def main():
                          "embedded_model_name_rewritten": embedded},
             "stat_nn": {"renamed": nn_moved, "removed": nn_removed},
             "runs_on_disk_before": runs_before,
-            "runs_on_disk_after": count_runs(stat_train) if a.apply else None,
+            "runs_on_disk_after": count_runs(stat_train_dir) if a.apply else None,
         },
         "skipped": [{"model": n, "why": w} for n, w in skipped],
         "renames": rename,
