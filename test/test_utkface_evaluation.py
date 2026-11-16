@@ -18,9 +18,9 @@ class EvaluationPreprocessingTest(unittest.TestCase):
         records = [{"image": image, "age": 25} for _ in range(30)]
         with patch.object(utkface, "load_dataset", return_value=records), \
                 patch.object(utkface.os, "makedirs"):
-            _, _, train, validation = utkface.loader(transform, "age-regression")
+            _, _, train, test = utkface.loader(transform, "age-regression")
 
-        test = validation.held_out_test
+        validation = test.val_set
         self.assertIsNot(train.dataset, validation.dataset)
         self.assertEqual(len(train) + len(validation) + len(test), len(records))
         self.assertFalse(set(train.indices) & set(validation.indices))

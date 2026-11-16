@@ -46,7 +46,8 @@ def main():
     def preprocess(image):
         return TF.normalize(TF.to_tensor(image.resize((224, 224), Image.Resampling.BILINEAR)),
                             (.485, .456, .406), (.229, .224, .225))
-    _, _, _, validation = loader(lambda _: preprocess, 'age-regression')
+    _, _, _, test = loader(lambda _: preprocess, 'age-regression')
+    validation = test.val_set
     rows = []
     for index in range(min(32, len(validation))):
         item = validation.dataset.dataset[validation.indices[index]]

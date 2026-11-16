@@ -87,8 +87,8 @@ def loader(transform_fn, task):
     val_ds = Subset(evaluation_dataset, val_idx)
     test_ds = Subset(evaluation_dataset, test_idx)
 
-    # Attach held-out test set for final evaluation in your Train.py
-    val_ds.held_out_test = test_ds
+    # The held-out test subset is returned in the test slot; the validation subset stays available as test_ds.val_set.
+    test_ds.val_set = val_ds
 
     # Expose per-sample weights so the trainer can optionally use them later if extended.
     train_ages = [ages[i] for i in train_idx]
@@ -98,7 +98,7 @@ def loader(transform_fn, task):
         dtype=torch.float32
     )
 
-    return (1,), MINIMUM_ACCURACY, train_ds, val_ds
+    return (1,), MINIMUM_ACCURACY, train_ds, test_ds
 
 
 class _UTKFace(Dataset):
