@@ -51,7 +51,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ab.nn.util.ArchUID import arch_uid
-from ab.nn.util.Const import nn_dir
+from ab.nn.util.Const import nn_dir, out_dir
 
 
 # ---------------------------------------------------------------- loading
@@ -365,7 +365,7 @@ def main():
                     help="the ab/nn directory (default: this checkout)")
     ap.add_argument("--show", type=int, default=1, help="groups to detail")
     ap.add_argument("--not-apply", action="store_false", help="don't write changes")
-    ap.add_argument("--log", type=Path, default=Path("arch_uid_merge_log.json"),
+    ap.add_argument("--log", type=Path, default= out_dir / "arch_uid_merge_log.json",
                     help="where to write the JSON record of every decision")
     a = ap.parse_args()
 
