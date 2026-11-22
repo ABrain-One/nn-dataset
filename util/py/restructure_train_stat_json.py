@@ -116,9 +116,9 @@ def main():
         description="Restructure old training JSON files by moving training statistics into nested train_stat."
     )
     parser.add_argument(
-        "--write",
+        "--not-write",
         action="store_true",
-        help="Rewrite JSON files. Without this flag, only a dry run is performed.",
+        help="Not rewrite JSON files. Without this flag, only a dry run is performed.",
     )
     parser.add_argument(
         "--backup",
@@ -133,7 +133,7 @@ def main():
     moved_values_total = 0
 
     print(f"Scanning: {stat_train_dir}")
-    print("Mode:", "WRITE" if args.write else "DRY RUN")
+    print("Mode:", "DRY RUN" if args.not_write else "WRITE")
     print()
 
     for p in stat_train_dir.iterdir():
@@ -152,7 +152,7 @@ def main():
             try:
                 changed, changed_records, moved_values = process_file(
                     epoch_file,
-                    write=args.write,
+                    write=not args.not_write,
                     backup=args.backup,
                 )
             except Exception as e:
@@ -176,7 +176,7 @@ def main():
     print(f"Changed records: {changed_records_total}")
     print(f"Moved values: {moved_values_total}")
 
-    if not args.write:
+    if args.not_write:
         print()
         print("Dry run only. Re-run with --write to update files.")
 
