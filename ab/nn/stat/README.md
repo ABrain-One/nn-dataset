@@ -8,8 +8,9 @@ Installation:
 sudo snap install ripgrep --classic
 ```
 
-Example:
+Examples:
 
 ```bash
 rg -F "\"accuracy\": 0.7655"  -g '1.json'
+rg -F '"accuracy": 0.77' -g '**cifar-10**nnweb**/1.json'
 ```
