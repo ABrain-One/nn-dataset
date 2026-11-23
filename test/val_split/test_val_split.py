@@ -288,7 +288,9 @@ def test_train_val_stats_json_db(workdir, monkeypatch):
     for ep, t, v in ((1, 0.9, 0.3), (2, 0.2, 0.8), (3, 0.5, 0.6)):
         rec = stats[ep][0] if isinstance(stats[ep], list) else stats[ep]
         assert rec["accuracy"] == t and rec["accuracy_val"] == v
-        assert rec["train_stat"]["accuracy_val"] == v and "loss_val" in rec["train_stat"]
+        keys = list(rec)
+        assert keys.index("accuracy_val") == keys.index("accuracy") + 1      # top level, directly after accuracy
+        assert "accuracy_val" not in rec["train_stat"] and "loss_val" in rec["train_stat"]
     last = stats[3][0] if isinstance(stats[3], list) else stats[3]
     assert last["train_stat"]["best_epoch"] == 2 and last["train_stat"]["best_accuracy"] == 0.8   # best by val
     con = sqlite3.connect(workdir / "db" / "ab.nn.db")

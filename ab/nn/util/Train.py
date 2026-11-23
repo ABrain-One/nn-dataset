@@ -168,7 +168,7 @@ def optuna_objective(trial, config, nn_prm, num_workers, min_lr, max_lr, min_mom
             else:
                 raise CudaOutOfMemory(batch)
         elif isinstance(e, AccuracyException):
-            print(e.message)
+            print(f"{e.message} The trial is not saved (no statistics written).")
             return _objective(trainer, e.accuracy), accuracy_to_time_metric(e.accuracy, minimum_accuracy, e.duration), e.duration
         elif isinstance(e, LearnTimeException):
             print(f"Estimated training time, minutes: {format_time(e.estimated_training_time)}, but limit {format_time(e.epoch_limit_minutes)}.")
@@ -525,9 +525,9 @@ class Train:
                 'occupied_gpu_memory_kb': resource_usage.get('occupied_gpu_memory_kb'),
                 'gpu_memory_usage_percent': resource_usage.get('gpu_memory_usage_percent'),
             }
+            # accuracy_val is a top-level field (next to accuracy), not repeated here; the DB keeps it in train_stat.
             if accuracy_val is not None:
                 train_stat_group['loss_val'] = loss_val
-                train_stat_group['accuracy_val'] = accuracy_val
 
             layer_stat_group = None
             if layer_summary or layer_result or layer_table:
@@ -570,6 +570,16 @@ class Train:
             layer_stat_json = prm_json.pop('layer_stat', None)
             if layer_stat_json is not None:
                 prm_json['layer_stat'] = layer_stat_json
+
+            # accuracy_val directly after accuracy, whatever the sort puts between them.
+            if 'accuracy_val' in prm_json:
+                accuracy_val_json = prm_json.pop('accuracy_val')
+                ordered = {}
+                for k, v in prm_json.items():
+                    ordered[k] = v
+                    if k == 'accuracy':
+                        ordered['accuracy_val'] = accuracy_val_json
+                prm_json = ordered
 
             if self.save_to_db:
                 if self.is_code:

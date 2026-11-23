@@ -349,8 +349,11 @@ def save_stat(config_ext: tuple[str, str, str, str, int], prm, cursor):
         if epoch_max is not None:
             train_stat['epoch_max'] = epoch_max
     prm.pop('layer_stat', None)
-    # The validation accuracy (validation split) is a statistic, kept in train_stat, never a prm row.
-    prm.pop('accuracy_val', None)
+    # The validation accuracy (validation split) is a statistic, never a prm row. The JSON keeps it at top level
+    # (next to accuracy); the DB stores it in the train_stat column. Older records carry it in train_stat already.
+    accuracy_val = prm.pop('accuracy_val', None)
+    if accuracy_val is not None:
+        train_stat.setdefault('accuracy_val', accuracy_val)
 
     transform = prm['transform']
     uid = prm.pop('uid')
