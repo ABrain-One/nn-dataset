@@ -198,12 +198,22 @@ def export_model_to_onnx(model, dummy_input, path):
 
 
 def train_loader_f(train_dataset, batch, num_workers):
+    from ab.nn.util.GpuCache import make_loader
+    return make_loader(train_dataset, batch, True, lambda: _train_loader_std(train_dataset, batch, num_workers), "train")
+
+
+def _train_loader_std(train_dataset, batch, num_workers):
     return torch.utils.data.DataLoader(train_dataset, batch_size=batch, shuffle=True,
                                        num_workers=get_obj_attr(train_dataset, 'num_workers', default=num_workers),
                                        collate_fn=get_obj_attr(train_dataset, 'collate_fn'))
 
 
 def test_loader_f(test_dataset, batch, num_workers):
+    from ab.nn.util.GpuCache import make_loader
+    return make_loader(test_dataset, batch, False, lambda: _test_loader_std(test_dataset, batch, num_workers), "test")
+
+
+def _test_loader_std(test_dataset, batch, num_workers):
     return torch.utils.data.DataLoader(test_dataset, batch_size=batch, shuffle=False,
                                        num_workers=get_obj_attr(test_dataset, 'num_workers', default=num_workers),
                                        collate_fn=get_obj_attr(test_dataset, 'collate_fn'))
